@@ -3,9 +3,11 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
 from app.db import get_session
+from app.engines.registry import get_engine
 from app.models.cache import CachedMovie
 from app.models.run import Run, RunParticipant, RunStep
 from app.models.user import User
+from app.schemas.engine import RunStats, Suggestion, SuggestionFilters
 from app.schemas.runs import (
     ParticipantAdd,
     ParticipantPublic,
@@ -19,6 +21,7 @@ from app.schemas.runs import (
 )
 from app.services import cache_repo
 from app.services.tmdb import TMDBClient
+from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -26,33 +29,36 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 VALID_STATUSES = {"active", "completed", "abandoned"}
 
 
-def _parse_release_year(release_date: str | None) -> int | None:
-    if not release_date or len(release_date) < 4:
-        return None
-    try:
-        return int(release_date[:4])
-    except ValueError:
-        return None
-
-
 def _step_fields_from_movie(movie: CachedMovie) -> dict:
     return {
         "movie_id": movie.tmdb_id,
         "movie_title": movie.title,
         "movie_poster_path": movie.poster_path,
-        "movie_release_year": _parse_release_year(movie.release_date),
+        "movie_release_year": parse_release_year(movie.release_date),
         "movie_origin_country": movie.origin_country,
     }
 
 
-def _check_chain_link(session: Session, run: Run, movie: CachedMovie, force: bool) -> None:
-    """Placeholder for `CineChainEngine.validate_next_step` (Phase 5).
+def _last_step(session: Session, run_id: str) -> RunStep | None:
+    return session.exec(
+        select(RunStep).where(RunStep.run_id == run_id).order_by(
+            RunStep.logged_at.desc())
+    ).first()
 
-    Once the engine layer lands, this should look up the run's last step (if
-    any) and raise 409 with the shared-actor validation result unless `force`
-    is set. For now it's a no-op so step logging works end-to-end.
-    """
-    return
+
+async def _check_chain_link(
+    session: Session, tmdb: TMDBClient, run: Run, movie: CachedMovie, force: bool
+) -> None:
+    if force:
+        return
+    previous = _last_step(session, run.id)
+    if previous is None:
+        return  # first step in the run - nothing to validate against
+    engine = get_engine(run.game_type, session, tmdb)
+    result = await engine.validate_next_step(previous.movie_id, movie.tmdb_id)
+    if not result.valid:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
 
 
 def _to_run_detail(session: Session, run: Run) -> RunDetail:
@@ -219,7 +225,7 @@ async def create_step(
     tmdb: TMDBClient = Depends(get_tmdb_client),
 ):
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id)
-    _check_chain_link(session, run, movie, payload.force)
+    await _check_chain_link(session, tmdb, run, movie, payload.force)
 
     step = RunStep(
         run_id=run.id,
@@ -266,10 +272,7 @@ def delete_step(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
 
-    last_step = session.exec(
-        select(RunStep).where(RunStep.run_id == run.id).order_by(
-            RunStep.logged_at.desc())
-    ).first()
+    last_step = _last_step(session, run.id)
     if last_step is None or last_step.id != step.id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -278,3 +281,40 @@ def delete_step(
 
     session.delete(step)
     session.commit()
+
+
+@router.get("/{run_id}/suggestions", response_model=list[Suggestion])
+async def get_run_suggestions(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    country: str | None = Query(default=None),
+    decade: int | None = Query(default=None),
+    genre_id: int | None = Query(default=None),
+) -> list[Suggestion]:
+    current = _last_step(session, run.id)
+    if current is None:
+        return []
+    logged_movie_ids = [
+        step.movie_id for step in session.exec(select(RunStep).where(RunStep.run_id == run.id)).all()
+    ]
+    engine = get_engine(run.game_type, session, tmdb)
+    filters = SuggestionFilters(
+        country=country, decade=decade, genre_id=genre_id)
+    return await engine.get_suggestions(current.movie_id, logged_movie_ids, filters)
+
+
+@router.get("/{run_id}/stats", response_model=RunStats)
+async def get_run_stats(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> RunStats:
+    steps = list(
+        session.exec(
+            select(RunStep).where(RunStep.run_id ==
+                                  run.id).order_by(RunStep.logged_at)
+        ).all()
+    )
+    engine = get_engine(run.game_type, session, tmdb)
+    return await engine.compute_stats(steps)

@@ -158,8 +158,10 @@ def test_only_last_step_can_be_deleted(client):
         _mock_movie(604, "Matrix Reloaded", "2003-05-15")
         step1 = client.post(
             f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
+        # force=True: this test is about delete ordering, not chain validity.
         step2 = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 604}).json()
+            f"/api/runs/{run_id}/steps", json={"movie_id": 604, "force": True}
+        ).json()
 
     resp = client.delete(f"/api/runs/{run_id}/steps/{step1['id']}")
     assert resp.status_code == 409

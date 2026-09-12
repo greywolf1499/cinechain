@@ -11,8 +11,12 @@ class Settings(BaseSettings):
 
     # --- Core ---
     config_dir: Path = Path("/config")
-    secret_key_path: Path = Path("/config/secret.key")
     port: int = 8787
+    # Optional explicit override; falls back to the persisted secret_key_file.
+    secret_key: str = ""
+    # Set true when served over TLS (e.g. behind a reverse proxy) so session
+    # cookies get the `Secure` flag.
+    cookie_secure: bool = False
 
     # --- TMDB ---
     tmdb_api_key: str = ""
@@ -40,6 +44,10 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path}"
+
+    @property
+    def secret_key_file(self) -> Path:
+        return self.config_dir / "secret.key"
 
 
 @lru_cache

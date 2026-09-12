@@ -6,7 +6,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.routes_auth import router as auth_router
 from app.api.routes_system import router as system_router
+from app.api.routes_users import router as users_router
 from app.config import get_settings
 from app.services.tmdb import TMDBClient
 
@@ -27,6 +29,8 @@ app = FastAPI(title="CineChain",
 
 api_router_prefix = "/api"
 app.include_router(system_router, prefix=api_router_prefix)
+app.include_router(auth_router, prefix=api_router_prefix)
+app.include_router(users_router, prefix=api_router_prefix)
 
 # Serve built frontend assets (JS/CSS/images) under /assets.
 assets_dir = STATIC_DIR / "assets"

@@ -7,7 +7,6 @@ from collections import Counter
 from typing import ClassVar
 
 from app.engines.base import BaseChallengeEngine
-from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.engine import (
     KeystoneActor,
@@ -18,23 +17,8 @@ from app.schemas.engine import (
     ValidationResult,
 )
 from app.services import cache_repo, pathfinder
+from app.services.movie_filters import passes_filters
 from app.utils.dates import parse_release_year
-
-
-def _passes_filters(movie: CachedMovie, filters: SuggestionFilters) -> bool:
-    if filters.country is not None:
-        countries = json.loads(
-            movie.origin_country) if movie.origin_country else []
-        if filters.country not in countries:
-            return False
-    if filters.decade is not None:
-        year = parse_release_year(movie.release_date)
-        if year is None or (year // 10) * 10 != filters.decade:
-            return False
-    if filters.genre_id is not None:
-        return bool(movie.genre_ids and filters.genre_id in movie.genre_ids)
-    # `on_server` is reserved for the Phase 7 Jellyfin integration - no-op for now.
-    return True
 
 
 class CineChainEngine(BaseChallengeEngine):
@@ -88,7 +72,7 @@ class CineChainEngine(BaseChallengeEngine):
             for movie in credits_:
                 if movie.tmdb_id in exclude or movie.tmdb_id in suggestions:
                     continue
-                if not _passes_filters(movie, filters):
+                if not passes_filters(movie, filters):
                     continue
                 suggestions[movie.tmdb_id] = Suggestion(
                     movie_id=movie.tmdb_id,

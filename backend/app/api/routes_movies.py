@@ -1,0 +1,114 @@
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query
+from sqlmodel import Session
+
+from app.api.deps import get_current_user, get_tmdb_client
+from app.db import get_session
+from app.models.cache import CachedMovie
+from app.models.user import User
+from app.schemas.engine import SuggestionFilters
+from app.schemas.movies import CastMember, MovieDetail, MovieSearchResponse, MovieSummary
+from app.services import cache_repo
+from app.services.cache_repo import CastEntry
+from app.services.movie_filters import passes_filters
+from app.services.tmdb import TMDBClient
+from app.utils.dates import parse_release_year
+
+router = APIRouter(tags=["movies"])
+
+
+def _movie_to_summary(movie: CachedMovie) -> MovieSummary:
+    return MovieSummary(
+        tmdb_id=movie.tmdb_id,
+        title=movie.title,
+        poster_path=movie.poster_path,
+        release_year=parse_release_year(movie.release_date),
+        origin_country=movie.origin_country,
+    )
+
+
+def _movie_to_detail(movie: CachedMovie) -> MovieDetail:
+    return MovieDetail(
+        **_movie_to_summary(movie).model_dump(),
+        overview=movie.overview,
+        runtime=movie.runtime,
+        original_language=movie.original_language,
+        genre_ids=movie.genre_ids or [],
+    )
+
+
+def _search_result_to_summary(raw: dict[str, Any]) -> MovieSummary:
+    # TMDB search results carry no origin_country - only the detail endpoint does.
+    return MovieSummary(
+        tmdb_id=raw["id"],
+        title=raw.get("title") or raw.get("original_title") or "",
+        poster_path=raw.get("poster_path"),
+        release_year=parse_release_year(raw.get("release_date")),
+        origin_country=None,
+    )
+
+
+def _cast_entry_to_member(entry: CastEntry) -> CastMember:
+    return CastMember(
+        actor_id=entry["actor_id"],
+        name=entry["name"],
+        profile_path=entry["profile_path"],
+        character_name=entry["character_name"],
+        cast_order=entry["cast_order"],
+    )
+
+
+@router.get("/movies/search", response_model=MovieSearchResponse)
+async def search_movies(
+    q: str = Query(..., min_length=1),
+    page: int = Query(default=1, ge=1),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> MovieSearchResponse:
+    """No popularity/vote/year restrictions - raw TMDB search, world cinema included."""
+    raw = await tmdb.search_movies(q, page)
+    return MovieSearchResponse(
+        results=[_search_result_to_summary(r) for r in raw.get("results", [])],
+        page=raw.get("page", page),
+        total_pages=raw.get("total_pages", 1),
+    )
+
+
+@router.get("/movies/{tmdb_id}", response_model=MovieDetail)
+async def get_movie(
+    tmdb_id: int,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> MovieDetail:
+    movie = await cache_repo.get_movie(session, tmdb, tmdb_id)
+    return _movie_to_detail(movie)
+
+
+@router.get("/movies/{tmdb_id}/cast", response_model=list[CastMember])
+async def get_movie_cast(
+    tmdb_id: int,
+    limit: int = Query(default=15, ge=1, le=50),
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> list[CastMember]:
+    cast = await cache_repo.get_movie_cast(session, tmdb, tmdb_id, limit)
+    return [_cast_entry_to_member(member) for member in cast]
+
+
+@router.get("/people/{person_id}/credits", response_model=list[MovieSummary])
+async def get_person_credits(
+    person_id: int,
+    country: str | None = Query(default=None),
+    decade: int | None = Query(default=None),
+    genre_id: int | None = Query(default=None),
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> list[MovieSummary]:
+    movies = await cache_repo.get_actor_credits(session, tmdb, person_id)
+    filters = SuggestionFilters(
+        country=country, decade=decade, genre_id=genre_id)
+    return [_movie_to_summary(movie) for movie in movies if passes_filters(movie, filters)]

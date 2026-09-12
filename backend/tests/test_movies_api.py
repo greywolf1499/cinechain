@@ -1,0 +1,192 @@
+"""Movie/people API tests.
+
+Reuses the dependency_overrides pattern from test_runs_api.py.
+"""
+
+import httpx
+import pytest
+import respx
+from fastapi.testclient import TestClient
+from sqlmodel import Session, SQLModel, create_engine
+
+from app.db import get_session
+from app.main import app
+
+TMDB_BASE = "https://api.themoviedb.org/3"
+
+
+@pytest.fixture()
+def client(config_dir):
+    engine = create_engine(
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def override_get_session():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+def _register_and_login(client, username="alice"):
+    client.post(
+        "/api/auth/register",
+        json={"username": username, "password": "password123",
+              "display_name": username.title()},
+    )
+    client.post("/api/auth/login",
+                json={"username": username, "password": "password123"})
+
+
+def test_search_movies(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/search/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "page": 1,
+                    "total_pages": 3,
+                    "total_results": 50,
+                    "results": [
+                        {
+                            "id": 603,
+                            "title": "The Matrix",
+                            "release_date": "1999-03-30",
+                            "poster_path": "/poster.jpg",
+                            "genre_ids": [28],
+                            "original_language": "en",
+                        }
+                    ],
+                },
+            )
+        )
+        resp = client.get("/api/movies/search", params={"q": "matrix"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["page"] == 1
+    assert body["total_pages"] == 3
+    assert body["results"][0]["tmdb_id"] == 603
+    assert body["results"][0]["release_year"] == 1999
+    assert body["results"][0]["origin_country"] is None
+
+
+def test_get_movie_detail(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "poster_path": "/poster.jpg",
+                    "overview": "A hacker learns the truth.",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 136,
+                    "genres": [{"id": 28, "name": "Action"}],
+                },
+            )
+        )
+        resp = client.get("/api/movies/603")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["title"] == "The Matrix"
+    assert body["runtime"] == 136
+    assert body["genre_ids"] == [28]
+
+
+def test_get_movie_cast(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 136,
+                    "genres": [],
+                },
+            )
+        )
+        respx.get(f"{TMDB_BASE}/movie/603/credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603,
+                    "cast": [
+                        {
+                            "id": 6384,
+                            "name": "Keanu Reeves",
+                            "profile_path": "/kr.jpg",
+                            "character": "Neo",
+                            "order": 0,
+                        }
+                    ],
+                },
+            )
+        )
+        resp = client.get("/api/movies/603/cast", params={"limit": 15})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body[0]["actor_id"] == 6384
+    assert body[0]["character_name"] == "Neo"
+
+
+def test_get_person_credits_with_filters(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/person/6384/movie_credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 6384,
+                    "cast": [
+                        {
+                            "id": 603,
+                            "title": "The Matrix",
+                            "release_date": "1999-03-30",
+                            "poster_path": None,
+                            "character": "Neo",
+                            "genre_ids": [28],
+                            "original_language": "en",
+                        },
+                        {
+                            "id": 700,
+                            "title": "Some 2010s Film",
+                            "release_date": "2015-06-01",
+                            "poster_path": None,
+                            "character": "Other",
+                            "genre_ids": [18],
+                            "original_language": "en",
+                        },
+                    ],
+                },
+            )
+        )
+        resp = client.get("/api/people/6384/credits", params={"decade": 1990})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["tmdb_id"] == 603
+
+
+def test_movies_routes_require_auth(client):
+    resp = client.get("/api/movies/search", params={"q": "matrix"})
+    assert resp.status_code == 401

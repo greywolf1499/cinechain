@@ -1,16 +1,23 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, HelpCircle, Loader2, XCircle } from "lucide-react";
 import PageHeading from "../components/PageHeading";
+import Toast, { type ToastState } from "../components/Toast";
 import { ApiError, api } from "../lib/api";
 import { queryKeys, useCacheStats, useUsers } from "../lib/queries";
 import { useAuthStore } from "../store/authStore";
-import type { IntegrationStatus, User } from "../types/api";
+import type {
+  ConnectivityTestResult,
+  IntegrationConfig,
+  IntegrationStatus,
+  User,
+} from "../types/api";
 
 const inputClass =
   "rounded-md border border-app-border bg-app-bg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent focus:outline-none";
 
 export default function SettingsPage() {
+  const currentUser = useAuthStore((s) => s.user);
   const { data, isLoading } = useQuery({
     queryKey: ["integrations", "status"],
     queryFn: () => api.get<IntegrationStatus>("/integrations/status"),
@@ -52,6 +59,7 @@ export default function SettingsPage() {
               />
             </div>
           )}
+          {currentUser?.is_admin && <IntegrationSettingsEditor />}
         </SettingsCard>
 
         <SettingsCard title="Cache Stats">
@@ -82,6 +90,211 @@ function SettingsCard({ title, children }: { title: string; children: ReactNode 
         {title}
       </div>
       {children}
+    </div>
+  );
+}
+
+function IntegrationSettingsEditor() {
+  const queryClient = useQueryClient();
+  const { data: config } = useQuery({
+    queryKey: ["settings", "integrations"],
+    queryFn: () => api.get<IntegrationConfig>("/settings/integrations"),
+  });
+
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [tmdbToken, setTmdbToken] = useState("");
+  const [tmdbResult, setTmdbResult] = useState<ConnectivityTestResult | null>(null);
+  const [jellyfinUrl, setJellyfinUrl] = useState("");
+  const [jellyfinKey, setJellyfinKey] = useState("");
+  const [jellyfinResult, setJellyfinResult] = useState<ConnectivityTestResult | null>(null);
+
+  useEffect(() => {
+    if (config) setJellyfinUrl(config.jellyfin_url);
+  }, [config?.jellyfin_url]);
+
+  const testTmdb = useMutation({
+    mutationFn: (tmdb_api_key: string) =>
+      api.post<ConnectivityTestResult>("/settings/integrations/test-tmdb", { tmdb_api_key }),
+  });
+  const testJellyfin = useMutation({
+    mutationFn: (payload: { jellyfin_url: string; jellyfin_api_key?: string }) =>
+      api.post<ConnectivityTestResult>("/settings/integrations/test-jellyfin", payload),
+  });
+  const saveIntegrations = useMutation({
+    mutationFn: (payload: Partial<Record<"tmdb_api_key" | "jellyfin_url" | "jellyfin_api_key", string>>) =>
+      api.patch<IntegrationConfig>("/settings/integrations", payload),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["settings", "integrations"], updated);
+    },
+  });
+
+  async function handleTmdbTestAndSave() {
+    const token = tmdbToken.trim();
+    if (!token) {
+      setToast({ type: "error", message: "Enter a TMDB token first." });
+      return;
+    }
+    try {
+      const result = await testTmdb.mutateAsync(token);
+      setTmdbResult(result);
+      if (!result.reachable) {
+        setToast({ type: "error", message: result.detail ?? "TMDB connection failed." });
+        return;
+      }
+      await saveIntegrations.mutateAsync({ tmdb_api_key: token });
+      setTmdbToken("");
+      setToast({ type: "success", message: "TMDB connected and saved." });
+    } catch (err) {
+      setToast({
+        type: "error",
+        message: err instanceof ApiError ? err.message : "TMDB test failed.",
+      });
+    }
+  }
+
+  async function handleJellyfinTest() {
+    const url = jellyfinUrl.trim();
+    if (!url) {
+      setToast({ type: "error", message: "Enter a Jellyfin URL first." });
+      return;
+    }
+    try {
+      const result = await testJellyfin.mutateAsync({
+        jellyfin_url: url,
+        jellyfin_api_key: jellyfinKey.trim() || undefined,
+      });
+      setJellyfinResult(result);
+      setToast(
+        result.reachable
+          ? { type: "success", message: `Connected${result.version ? ` (v${result.version})` : ""}.` }
+          : { type: "error", message: result.detail ?? "Jellyfin connection failed." },
+      );
+    } catch (err) {
+      setToast({
+        type: "error",
+        message: err instanceof ApiError ? err.message : "Jellyfin test failed.",
+      });
+    }
+  }
+
+  async function handleJellyfinSave() {
+    try {
+      await saveIntegrations.mutateAsync({
+        jellyfin_url: jellyfinUrl.trim(),
+        ...(jellyfinKey.trim() ? { jellyfin_api_key: jellyfinKey.trim() } : {}),
+      });
+      setJellyfinKey("");
+      setToast({ type: "success", message: "Jellyfin settings saved." });
+    } catch (err) {
+      setToast({
+        type: "error",
+        message: err instanceof ApiError ? err.message : "Failed to save Jellyfin settings.",
+      });
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5 border-t border-app-border px-5 py-4">
+      <div>
+        <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+          TMDB API Token
+        </p>
+        <p className="mb-2 text-xs text-zinc-500">
+          {config?.tmdb_configured
+            ? `Currently set: ${config.tmdb_api_key_masked}`
+            : "Not configured"}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="password"
+            value={tmdbToken}
+            onChange={(e) => setTmdbToken(e.target.value)}
+            placeholder="Enter a new v4 read access token..."
+            className={`${inputClass} min-w-[240px] flex-1`}
+          />
+          <button
+            type="button"
+            onClick={handleTmdbTestAndSave}
+            disabled={testTmdb.isPending || saveIntegrations.isPending}
+            className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {(testTmdb.isPending || saveIntegrations.isPending) && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            )}
+            Test &amp; Save
+          </button>
+        </div>
+        {tmdbResult && (
+          <p
+            className={`mt-1.5 flex items-center gap-1.5 text-xs ${tmdbResult.reachable ? "text-emerald-400" : "text-red-400"}`}
+          >
+            {tmdbResult.reachable ? (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            ) : (
+              <XCircle className="h-3.5 w-3.5" />
+            )}
+            {tmdbResult.reachable ? "Connected" : tmdbResult.detail ?? "Failed"}
+          </p>
+        )}
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">Jellyfin</p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            value={jellyfinUrl}
+            onChange={(e) => setJellyfinUrl(e.target.value)}
+            placeholder="http://jellyfin:8096"
+            className={`${inputClass} flex-1`}
+          />
+          <input
+            type="password"
+            value={jellyfinKey}
+            onChange={(e) => setJellyfinKey(e.target.value)}
+            placeholder={
+              config?.jellyfin_configured
+                ? `Currently set: ${config.jellyfin_api_key_masked}`
+                : "API key"
+            }
+            className={`${inputClass} flex-1`}
+          />
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleJellyfinTest}
+            disabled={testJellyfin.isPending}
+            className="flex items-center gap-1.5 rounded-md border border-app-border px-3.5 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {testJellyfin.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Test Connection
+          </button>
+          <button
+            type="button"
+            onClick={handleJellyfinSave}
+            disabled={saveIntegrations.isPending}
+            className="rounded-md bg-accent px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Save
+          </button>
+          {jellyfinResult && (
+            <span
+              className={`flex items-center gap-1.5 text-xs ${jellyfinResult.reachable ? "text-emerald-400" : "text-red-400"}`}
+            >
+              {jellyfinResult.reachable ? (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              ) : (
+                <XCircle className="h-3.5 w-3.5" />
+              )}
+              {jellyfinResult.reachable
+                ? `Connected${jellyfinResult.version ? ` (v${jellyfinResult.version})` : ""}`
+                : jellyfinResult.detail ?? "Failed"}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

@@ -29,34 +29,35 @@ class JellyfinClient:
     def __init__(self, client: httpx.AsyncClient, settings: Settings | None = None) -> None:
         self._client = client
         self._settings = settings or get_settings()
+        self._overrides: dict[str, str] = {}
+
+    def set_overrides(self, overrides: dict[str, str]) -> None:
+        """Admin-configured DB overrides (Phase 10.1) take precedence over .env."""
+        self._overrides = overrides
+
+    @property
+    def _url(self) -> str:
+        return self._overrides.get("jellyfin_url") or self._settings.jellyfin_url
+
+    @property
+    def _api_key(self) -> str:
+        return self._overrides.get("jellyfin_api_key") or self._settings.jellyfin_api_key
 
     @property
     def _enabled(self) -> bool:
-        return bool(self._settings.jellyfin_url)
+        return bool(self._url)
 
     def _headers(self) -> dict[str, str]:
-        if not self._settings.jellyfin_api_key:
+        api_key = self._api_key
+        if not api_key:
             return {}
-        return {"X-Emby-Token": self._settings.jellyfin_api_key}
+        return {"X-Emby-Token": api_key}
 
     async def check_health(self) -> dict:
         if not self._enabled:
             return {"enabled": False, "reachable": False, "version": None}
-        try:
-            response = await self._client.get(
-                f"{self._settings.jellyfin_url}/System/Info/Public",
-                headers=self._headers(),
-                timeout=5.0,
-            )
-            response.raise_for_status()
-            return {
-                "enabled": True,
-                "reachable": True,
-                "version": response.json().get("Version"),
-            }
-        except httpx.HTTPError as exc:
-            logger.warning("Jellyfin health check failed: %s", exc)
-            return {"enabled": True, "reachable": False, "version": None}
+        result = await check_jellyfin_connectivity(self._client, self._url, self._api_key)
+        return {"enabled": True, "reachable": result["reachable"], "version": result["version"]}
 
     async def lookup_movies(self, tmdb_ids: list[int]) -> dict[int, JellyfinItemSummary]:
         if not tmdb_ids:
@@ -81,7 +82,7 @@ class JellyfinClient:
 
         try:
             response = await self._client.get(
-                f"{self._settings.jellyfin_url}/Items",
+                f"{self._url}/Items",
                 headers=self._headers(),
                 params={
                     "IncludeItemTypes": "Movie",
@@ -111,7 +112,7 @@ class JellyfinClient:
             found[tmdb_id] = JellyfinItemSummary(
                 on_server=True,
                 item_id=item_id,
-                play_url=f"{self._settings.jellyfin_url}/web/index.html#!/details?id={item_id}",
+                play_url=f"{self._url}/web/index.html#!/details?id={item_id}",
             )
 
         for tmdb_id in to_query:
@@ -131,3 +132,18 @@ def _extract_tmdb_id(provider_ids: dict) -> int | None:
             except (TypeError, ValueError):
                 return None
     return None
+
+
+async def check_jellyfin_connectivity(client: httpx.AsyncClient, url: str, api_key: str) -> dict:
+    """Tests a candidate URL/token directly - independent of any configured JellyfinClient."""
+    if not url:
+        return {"reachable": False, "version": None, "detail": "Jellyfin URL is required"}
+    headers = {"X-Emby-Token": api_key} if api_key else {}
+    try:
+        response = await client.get(
+            f"{url.rstrip('/')}/System/Info/Public", headers=headers, timeout=5.0
+        )
+        response.raise_for_status()
+        return {"reachable": True, "version": response.json().get("Version"), "detail": None}
+    except httpx.HTTPError as exc:
+        return {"reachable": False, "version": None, "detail": str(exc)}

@@ -11,6 +11,7 @@ from app.api.routes_engine import router as engine_router
 from app.api.routes_integrations import router as integrations_router
 from app.api.routes_movies import router as movies_router
 from app.api.routes_runs import router as runs_router
+from app.api.routes_settings import router as settings_router
 from app.api.routes_system import router as system_router
 from app.api.routes_users import router as users_router
 from app.config import get_settings
@@ -39,6 +40,7 @@ app.include_router(runs_router, prefix=api_router_prefix)
 app.include_router(engine_router, prefix=api_router_prefix)
 app.include_router(integrations_router, prefix=api_router_prefix)
 app.include_router(movies_router, prefix=api_router_prefix)
+app.include_router(settings_router, prefix=api_router_prefix)
 
 # Serve built frontend assets (JS/CSS/images) under /assets.
 assets_dir = STATIC_DIR / "assets"

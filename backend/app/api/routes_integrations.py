@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, Request
+from sqlmodel import Session
 
 from app.api.deps import get_current_user
 from app.config import get_settings
+from app.db import get_session
 from app.integrations.jellyfin import JellyfinClient
 from app.integrations.radarr import RadarrClient
 from app.models.user import User
@@ -13,12 +15,17 @@ from app.schemas.integrations import (
     RadarrRequestBody,
     RequestClientStatus,
 )
+from app.services import settings_repo
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
 
-def get_jellyfin_client(request: Request) -> JellyfinClient:
-    return JellyfinClient(request.app.state.http_client)
+def get_jellyfin_client(
+    request: Request, session: Session = Depends(get_session)
+) -> JellyfinClient:
+    client = JellyfinClient(request.app.state.http_client)
+    client.set_overrides(settings_repo.get_overrides(session))
+    return client
 
 
 @router.get("/status", response_model=IntegrationsStatus)

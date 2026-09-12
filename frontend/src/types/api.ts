@@ -185,3 +185,19 @@ export interface CacheStats {
 	cached_cast_edges: number;
 	db_size_bytes: number | null;
 }
+
+// --- settings (routes_settings.py, Phase 10.1) ---
+
+export interface IntegrationConfig {
+	tmdb_configured: boolean;
+	tmdb_api_key_masked: string | null;
+	jellyfin_url: string;
+	jellyfin_configured: boolean;
+	jellyfin_api_key_masked: string | null;
+}
+
+export interface ConnectivityTestResult {
+	reachable: boolean;
+	version: string | null;
+	detail: string | null;
+}

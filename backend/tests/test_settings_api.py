@@ -1,0 +1,176 @@
+"""Phase 10.1: dynamic in-app settings & integration management.
+
+Covers admin-only gating, GET/PATCH masking + override/clear semantics, the
+test-tmdb/test-jellyfin connectivity probes, and (end-to-end) that a saved
+override is actually picked up by the shared TMDBClient on the very next
+request - not just persisted to the DB.
+"""
+
+import httpx
+import pytest
+import respx
+from fastapi.testclient import TestClient
+from sqlmodel import Session, SQLModel, create_engine
+
+from app.db import get_session
+from app.main import app
+
+TMDB_BASE = "https://api.themoviedb.org/3"
+JELLYFIN_BASE = "http://jellyfin.test"
+
+
+@pytest.fixture()
+def client(config_dir):
+    engine = create_engine(
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def override_get_session():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+def _register_and_login(client, username="alice"):
+    client.post(
+        "/api/auth/register",
+        json={"username": username, "password": "password123",
+              "display_name": username.title()},
+    )
+    client.post("/api/auth/login",
+                json={"username": username, "password": "password123"})
+
+
+def test_non_admin_is_forbidden_from_all_settings_routes(client):
+    _register_and_login(client)  # first user - is_admin True
+    client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "display_name": "Bob"},
+    )
+    client.post("/api/auth/login",
+                json={"username": "bob", "password": "password123"})
+
+    assert client.get("/api/settings/integrations").status_code == 403
+    assert client.patch("/api/settings/integrations",
+                        json={"tmdb_api_key": "x"}).status_code == 403
+    assert client.post("/api/settings/integrations/test-tmdb",
+                       json={"tmdb_api_key": "x"}).status_code == 403
+
+
+def test_admin_get_reflects_no_overrides_by_default(client):
+    _register_and_login(client)
+    body = client.get("/api/settings/integrations").json()
+    assert body["tmdb_configured"] is False
+    assert body["tmdb_api_key_masked"] is None
+    assert body["jellyfin_configured"] is False
+    assert body["jellyfin_api_key_masked"] is None
+
+
+def test_admin_patch_sets_and_masks_override(client):
+    _register_and_login(client)
+    resp = client.patch(
+        "/api/settings/integrations",
+        json={"tmdb_api_key": "abcdefgh1234", "jellyfin_url": "http://jf.local",
+              "jellyfin_api_key": "supersecretwxyz"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tmdb_configured"] is True
+    assert body["tmdb_api_key_masked"] == "****1234"
+    assert body["jellyfin_url"] == "http://jf.local"
+    assert body["jellyfin_configured"] is True
+    assert body["jellyfin_api_key_masked"] == "****wxyz"
+
+    # Persisted - a fresh GET reflects the same masked values.
+    get_body = client.get("/api/settings/integrations").json()
+    assert get_body == body
+
+
+def test_admin_patch_empty_string_clears_override(client):
+    _register_and_login(client)
+    client.patch("/api/settings/integrations",
+                 json={"tmdb_api_key": "abcdefgh1234"})
+    resp = client.patch("/api/settings/integrations",
+                        json={"tmdb_api_key": ""})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tmdb_configured"] is False
+    assert body["tmdb_api_key_masked"] is None
+
+
+async def test_test_tmdb_endpoint_success(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/authentication").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+        resp = client.post("/api/settings/integrations/test-tmdb",
+                           json={"tmdb_api_key": "good-token"})
+    assert resp.status_code == 200
+    assert resp.json() == {"reachable": True, "version": None, "detail": None}
+
+
+async def test_test_tmdb_endpoint_failure(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/authentication").mock(
+            return_value=httpx.Response(
+                401, json={"success": False, "status_message": "Invalid API key"})
+        )
+        resp = client.post("/api/settings/integrations/test-tmdb",
+                           json={"tmdb_api_key": "bad-token"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reachable"] is False
+    assert body["detail"] == "Invalid API key"
+
+
+async def test_test_jellyfin_endpoint_success(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{JELLYFIN_BASE}/System/Info/Public").mock(
+            return_value=httpx.Response(200, json={"Version": "10.9.0"})
+        )
+        resp = client.post(
+            "/api/settings/integrations/test-jellyfin",
+            json={"jellyfin_url": JELLYFIN_BASE, "jellyfin_api_key": "token"},
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"reachable": True,
+                           "version": "10.9.0", "detail": None}
+
+
+async def test_test_jellyfin_endpoint_unreachable(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{JELLYFIN_BASE}/System/Info/Public").mock(
+            return_value=httpx.Response(500, json={})
+        )
+        resp = client.post(
+            "/api/settings/integrations/test-jellyfin",
+            json={"jellyfin_url": JELLYFIN_BASE},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["reachable"] is False
+
+
+async def test_saved_tmdb_override_is_used_on_the_next_request(client):
+    """End-to-end proof of the deps.py wiring: PATCH now, next request uses it."""
+    _register_and_login(client)
+    client.patch("/api/settings/integrations",
+                 json={"tmdb_api_key": "brand-new-token"})
+
+    with respx.mock:
+        route = respx.get(f"{TMDB_BASE}/search/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [], "total_results": 0})
+        )
+        resp = client.get("/api/movies/search?q=matrix")
+
+    assert resp.status_code == 200
+    assert route.calls.last.request.headers["Authorization"] == "Bearer brand-new-token"

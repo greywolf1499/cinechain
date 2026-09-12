@@ -4,6 +4,7 @@ from sqlmodel import Session
 from app.db import get_session
 from app.models.run import Run, RunParticipant
 from app.models.user import User
+from app.services import settings_repo
 from app.services.security import COOKIE_NAME, read_session_token
 from app.services.tmdb import TMDBClient
 
@@ -52,5 +53,7 @@ def run_participant_guard(
     return run
 
 
-def get_tmdb_client(request: Request) -> TMDBClient:
-    return request.app.state.tmdb
+def get_tmdb_client(request: Request, session: Session = Depends(get_session)) -> TMDBClient:
+    tmdb: TMDBClient = request.app.state.tmdb
+    tmdb.set_overrides(settings_repo.get_overrides(session))
+    return tmdb

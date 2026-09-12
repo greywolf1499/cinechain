@@ -71,10 +71,17 @@ class TMDBClient:
         self._settings = settings or get_settings()
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._max_retries = max_retries
+        self._overrides: dict[str, str] = {}
+
+    def set_overrides(self, overrides: dict[str, str]) -> None:
+        """Admin-configured DB overrides (Phase 10.1) take precedence over .env."""
+        self._overrides = overrides
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{self._settings.tmdb_api_base}{path}"
-        headers = {"Authorization": f"Bearer {self._settings.tmdb_api_key}"}
+        api_key = self._overrides.get(
+            "tmdb_api_key") or self._settings.tmdb_api_key
+        headers = {"Authorization": f"Bearer {api_key}"}
         backoff = 0.5
 
         async with self._semaphore:
@@ -158,3 +165,26 @@ def _normalize_person_credit(entry: dict[str, Any]) -> TMDBPersonCredit:
         genre_ids=entry.get("genre_ids", []),
         original_language=entry.get("original_language", ""),
     )
+
+
+async def check_tmdb_connectivity(
+    client: httpx.AsyncClient, api_key: str, api_base: str
+) -> dict[str, Any]:
+    """Tests a candidate token directly - independent of any configured TMDBClient."""
+    if not api_key:
+        return {"reachable": False, "version": None, "detail": "API key is required"}
+    try:
+        response = await client.get(
+            f"{api_base}/authentication",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        return {"reachable": False, "version": None, "detail": str(exc)}
+
+    if response.status_code == 200 and response.json().get("success"):
+        return {"reachable": True, "version": None, "detail": None}
+    detail = None
+    if response.headers.get("content-type", "").startswith("application/json"):
+        detail = response.json().get("status_message")
+    return {"reachable": False, "version": None, "detail": detail or f"HTTP {response.status_code}"}

@@ -12,7 +12,8 @@ async def test_retries_on_429_then_succeeds():
         route = respx.get(f"{TMDB_BASE}/movie/1").mock(
             side_effect=[
                 httpx.Response(429, headers={"Retry-After": "0"}, json={}),
-                httpx.Response(200, json={"id": 1, "title": "Retried Movie", "genres": []}),
+                httpx.Response(
+                    200, json={"id": 1, "title": "Retried Movie", "genres": []}),
             ]
         )
         async with httpx.AsyncClient() as client:
@@ -26,7 +27,8 @@ async def test_retries_on_429_then_succeeds():
 async def test_gives_up_after_exhausting_retries():
     with respx.mock:
         route = respx.get(f"{TMDB_BASE}/movie/2").mock(
-            return_value=httpx.Response(500, headers={"Retry-After": "0"}, json={})
+            return_value=httpx.Response(
+                500, headers={"Retry-After": "0"}, json={})
         )
         async with httpx.AsyncClient() as client:
             tmdb = TMDBClient(client, max_retries=3)

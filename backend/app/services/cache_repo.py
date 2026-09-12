@@ -123,9 +123,11 @@ class CacheRepo:
             actor.profile_path = member.get("profile_path")
             self.session.add(actor)
 
-            cast_row = self.session.get(CachedMovieCast, (movie_id, member["id"]))
+            cast_row = self.session.get(
+                CachedMovieCast, (movie_id, member["id"]))
             if cast_row is None:
-                cast_row = CachedMovieCast(movie_id=movie_id, actor_id=member["id"])
+                cast_row = CachedMovieCast(
+                    movie_id=movie_id, actor_id=member["id"])
             cast_row.cast_order = member["order"]
             cast_row.character_name = member.get("character")
             self.session.add(cast_row)
@@ -168,7 +170,8 @@ class CacheRepo:
         if actor is None:
             # We only ever look up credits for actors already seen via a
             # movie's cast, but fall back to a placeholder name just in case.
-            actor = CachedActor(tmdb_id=actor_id, name=f"Unknown actor {actor_id}")
+            actor = CachedActor(
+                tmdb_id=actor_id, name=f"Unknown actor {actor_id}")
         actor.credits_fetched_at = utcnow()
         self.session.add(actor)
 
@@ -177,7 +180,8 @@ class CacheRepo:
             movie = self.upsert_movie_stub(credit)
             movies.append(movie)
 
-            cast_row = self.session.get(CachedMovieCast, (credit["id"], actor_id))
+            cast_row = self.session.get(
+                CachedMovieCast, (credit["id"], actor_id))
             if cast_row is None:
                 cast_row = CachedMovieCast(
                     movie_id=credit["id"],
@@ -226,7 +230,8 @@ async def get_movie_cast(
     limit = limit or get_settings().pathfinder_cast_limit
     repo = CacheRepo(session)
 
-    await get_movie(session, tmdb, tmdb_id)  # cast rows FK to a cached movie row
+    # cast rows FK to a cached movie row
+    await get_movie(session, tmdb, tmdb_id)
 
     cached = await anyio.to_thread.run_sync(repo.get_cached_cast, tmdb_id, limit)
     if cached is not None:

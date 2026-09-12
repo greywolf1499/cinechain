@@ -1,12 +1,14 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes_system import router as system_router
 from app.config import get_settings
+from app.services.tmdb import TMDBClient
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -14,7 +16,10 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_settings().config_dir.mkdir(parents=True, exist_ok=True)
-    yield
+    async with httpx.AsyncClient(timeout=15.0) as http_client:
+        app.state.http_client = http_client
+        app.state.tmdb = TMDBClient(http_client)
+        yield
 
 
 app = FastAPI(title="CineChain",

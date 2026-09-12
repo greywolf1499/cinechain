@@ -1,0 +1,255 @@
+"""JIT SQLite cache for TMDB movies/actors/cast.
+
+Two layers, deliberately kept separate:
+  - `CacheRepo`: synchronous SQLModel `Session` CRUD only. Never touches the network.
+  - module-level `get_*()` functions: async read-through orchestration. On a
+    cache miss they await the async `TMDBClient`, then bridge back into
+    `CacheRepo` via `anyio.to_thread.run_sync` to persist the result.
+
+Async callers (API routes, the pathfinder) should only ever call the
+module-level functions, never construct/await `CacheRepo` directly.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TypedDict
+
+import anyio
+from sqlmodel import Session, select
+
+from app.config import get_settings
+from app.models.cache import CachedActor, CachedGenre, CachedMovie, CachedMovieCast
+from app.services.tmdb import TMDBCastMember, TMDBClient, TMDBGenre, TMDBMovie, TMDBPersonCredit
+from app.utils.ids import utcnow
+
+
+class CastEntry(TypedDict):
+    actor_id: int
+    name: str
+    profile_path: str | None
+    character_name: str | None
+    cast_order: int | None
+
+
+class CacheRepo:
+    """Synchronous SQLite read/write layer over the JIT cache tables."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    # --- movies ---
+
+    def get_cached_movie(self, tmdb_id: int) -> CachedMovie | None:
+        return self.session.get(CachedMovie, tmdb_id)
+
+    def upsert_movie(self, movie: TMDBMovie) -> CachedMovie:
+        """Full upsert from a `/movie/{id}` detail fetch."""
+        row = self.session.get(CachedMovie, movie["id"])
+        if row is None:
+            row = CachedMovie(tmdb_id=movie["id"])
+        row.title = movie["title"]
+        row.release_date = movie.get("release_date")
+        row.poster_path = movie.get("poster_path")
+        row.overview = movie.get("overview")
+        row.origin_country = json.dumps(movie.get("origin_country") or [])
+        row.original_language = movie.get("original_language")
+        row.runtime = movie.get("runtime")
+        row.genre_ids = movie.get("genre_ids") or []
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
+    def upsert_movie_stub(self, credit: TMDBPersonCredit) -> CachedMovie:
+        """Partial upsert discovered via search/person-credits.
+
+        Never overwrites an existing row (a full `get_movie` fetch always
+        wins) and never touches `cast_fetched_at` - the movie's cast stays
+        un-fetched until `get_movie_cast` runs for it.
+        """
+        row = self.session.get(CachedMovie, credit["id"])
+        if row is not None:
+            return row
+        row = CachedMovie(
+            tmdb_id=credit["id"],
+            title=credit.get("title") or "",
+            release_date=credit.get("release_date"),
+            poster_path=credit.get("poster_path"),
+            original_language=credit.get("original_language"),
+            genre_ids=credit.get("genre_ids") or [],
+        )
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
+    # --- cast (top-N billing for a given movie) ---
+
+    def get_cached_cast(self, movie_id: int, limit: int) -> list[CastEntry] | None:
+        movie = self.session.get(CachedMovie, movie_id)
+        if movie is None or movie.cast_fetched_at is None:
+            return None
+        statement = (
+            select(CachedMovieCast, CachedActor)
+            .join(CachedActor, CachedMovieCast.actor_id == CachedActor.tmdb_id)
+            .where(CachedMovieCast.movie_id == movie_id)
+            .order_by(CachedMovieCast.cast_order)
+            .limit(limit)
+        )
+        rows = self.session.exec(statement).all()
+        return [
+            CastEntry(
+                actor_id=actor.tmdb_id,
+                name=actor.name,
+                profile_path=actor.profile_path,
+                character_name=cast.character_name,
+                cast_order=cast.cast_order,
+            )
+            for cast, actor in rows
+        ]
+
+    def upsert_cast(
+        self, movie_id: int, cast_members: list[TMDBCastMember], limit: int
+    ) -> list[CastEntry]:
+        top = sorted(cast_members, key=lambda m: m["order"])[:limit]
+        entries: list[CastEntry] = []
+        for member in top:
+            actor = self.session.get(CachedActor, member["id"])
+            if actor is None:
+                actor = CachedActor(tmdb_id=member["id"], name=member["name"])
+            else:
+                actor.name = member["name"]
+            actor.profile_path = member.get("profile_path")
+            self.session.add(actor)
+
+            cast_row = self.session.get(CachedMovieCast, (movie_id, member["id"]))
+            if cast_row is None:
+                cast_row = CachedMovieCast(movie_id=movie_id, actor_id=member["id"])
+            cast_row.cast_order = member["order"]
+            cast_row.character_name = member.get("character")
+            self.session.add(cast_row)
+
+            entries.append(
+                CastEntry(
+                    actor_id=member["id"],
+                    name=member["name"],
+                    profile_path=member.get("profile_path"),
+                    character_name=member.get("character"),
+                    cast_order=member["order"],
+                )
+            )
+
+        movie = self.session.get(CachedMovie, movie_id)
+        if movie is not None:
+            movie.cast_fetched_at = utcnow()
+            self.session.add(movie)
+
+        self.session.commit()
+        return entries
+
+    # --- actor filmography (full, uncapped - a single API call regardless of size) ---
+
+    def get_cached_actor_credits(self, actor_id: int) -> list[CachedMovie] | None:
+        actor = self.session.get(CachedActor, actor_id)
+        if actor is None or actor.credits_fetched_at is None:
+            return None
+        statement = (
+            select(CachedMovie)
+            .join(CachedMovieCast, CachedMovieCast.movie_id == CachedMovie.tmdb_id)
+            .where(CachedMovieCast.actor_id == actor_id)
+        )
+        return list(self.session.exec(statement).all())
+
+    def upsert_actor_credits(
+        self, actor_id: int, credits: list[TMDBPersonCredit]
+    ) -> list[CachedMovie]:
+        actor = self.session.get(CachedActor, actor_id)
+        if actor is None:
+            # We only ever look up credits for actors already seen via a
+            # movie's cast, but fall back to a placeholder name just in case.
+            actor = CachedActor(tmdb_id=actor_id, name=f"Unknown actor {actor_id}")
+        actor.credits_fetched_at = utcnow()
+        self.session.add(actor)
+
+        movies: list[CachedMovie] = []
+        for credit in credits:
+            movie = self.upsert_movie_stub(credit)
+            movies.append(movie)
+
+            cast_row = self.session.get(CachedMovieCast, (credit["id"], actor_id))
+            if cast_row is None:
+                cast_row = CachedMovieCast(
+                    movie_id=credit["id"],
+                    actor_id=actor_id,
+                    character_name=credit.get("character"),
+                )
+                self.session.add(cast_row)
+
+        self.session.commit()
+        return movies
+
+    # --- genres ---
+
+    def get_cached_genres(self) -> list[CachedGenre]:
+        return list(self.session.exec(select(CachedGenre)).all())
+
+    def upsert_genres(self, genres: list[TMDBGenre]) -> list[CachedGenre]:
+        rows = []
+        for genre in genres:
+            row = self.session.get(CachedGenre, genre["id"])
+            if row is None:
+                row = CachedGenre(id=genre["id"], name=genre["name"])
+            else:
+                row.name = genre["name"]
+            self.session.add(row)
+            rows.append(row)
+        self.session.commit()
+        return rows
+
+
+# --- async read-through orchestration ---
+
+
+async def get_movie(session: Session, tmdb: TMDBClient, tmdb_id: int) -> CachedMovie:
+    repo = CacheRepo(session)
+    cached = await anyio.to_thread.run_sync(repo.get_cached_movie, tmdb_id)
+    if cached is not None:
+        return cached
+    movie = await tmdb.get_movie(tmdb_id)
+    return await anyio.to_thread.run_sync(repo.upsert_movie, movie)
+
+
+async def get_movie_cast(
+    session: Session, tmdb: TMDBClient, tmdb_id: int, limit: int | None = None
+) -> list[CastEntry]:
+    limit = limit or get_settings().pathfinder_cast_limit
+    repo = CacheRepo(session)
+
+    await get_movie(session, tmdb, tmdb_id)  # cast rows FK to a cached movie row
+
+    cached = await anyio.to_thread.run_sync(repo.get_cached_cast, tmdb_id, limit)
+    if cached is not None:
+        return cached
+    cast = await tmdb.get_movie_credits(tmdb_id)
+    return await anyio.to_thread.run_sync(repo.upsert_cast, tmdb_id, cast, limit)
+
+
+async def get_actor_credits(
+    session: Session, tmdb: TMDBClient, actor_id: int
+) -> list[CachedMovie]:
+    repo = CacheRepo(session)
+    cached = await anyio.to_thread.run_sync(repo.get_cached_actor_credits, actor_id)
+    if cached is not None:
+        return cached
+    credits_ = await tmdb.get_person_movie_credits(actor_id)
+    return await anyio.to_thread.run_sync(repo.upsert_actor_credits, actor_id, credits_)
+
+
+async def get_genres(session: Session, tmdb: TMDBClient) -> list[CachedGenre]:
+    repo = CacheRepo(session)
+    cached = await anyio.to_thread.run_sync(repo.get_cached_genres)
+    if cached:
+        return cached
+    genres = await tmdb.get_genres()
+    return await anyio.to_thread.run_sync(repo.upsert_genres, genres)

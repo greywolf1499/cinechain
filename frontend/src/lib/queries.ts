@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type {
+	CacheStats,
 	Run,
 	RunDetail,
+	RunStats,
 	RunStatus,
 	RulesConfig,
 	StepStatus,
@@ -13,6 +15,8 @@ export const queryKeys = {
 	users: ["users"] as const,
 	runs: (status?: RunStatus) => ["runs", status ?? "all"] as const,
 	run: (id: string) => ["runs", id] as const,
+	runStats: (id: string) => ["runs", id, "stats"] as const,
+	cacheStats: ["system", "cache-stats"] as const,
 };
 
 export function useUsers() {
@@ -37,6 +41,21 @@ export function useRun(runId: string | undefined) {
 		queryKey: queryKeys.run(runId ?? ""),
 		queryFn: () => api.get<RunDetail>(`/runs/${runId}`),
 		enabled: !!runId,
+	});
+}
+
+export function useRunStats(runId: string | undefined) {
+	return useQuery({
+		queryKey: queryKeys.runStats(runId ?? ""),
+		queryFn: () => api.get<RunStats>(`/runs/${runId}/stats`),
+		enabled: !!runId,
+	});
+}
+
+export function useCacheStats() {
+	return useQuery({
+		queryKey: queryKeys.cacheStats,
+		queryFn: () => api.get<CacheStats>("/system/cache/stats"),
 	});
 }
 

@@ -1,0 +1,54 @@
+import { ArrowRight } from "lucide-react";
+import MoviePoster from "./MoviePoster";
+import OnServerBadge from "./OnServerBadge";
+import { profileUrl } from "../lib/tmdbImage";
+import type { BridgeNode, JellyfinItemSummary, SharedActorConnection } from "../types/api";
+
+export default function BridgePathView({
+  path,
+  connections,
+  onServerMap,
+}: {
+  path: BridgeNode[];
+  connections: SharedActorConnection[];
+  onServerMap?: Record<number, JellyfinItemSummary>;
+}) {
+  return (
+    <div className="flex flex-wrap items-start gap-1">
+      {path.map((node, index) => (
+        <div key={`${node.movie_id}-${index}`} className="flex items-start gap-1">
+          <div className="w-24 text-center">
+            <MoviePoster path={node.poster_path} title={node.title} className="w-24" />
+            <p className="mt-1.5 truncate text-xs font-medium text-zinc-200">{node.title}</p>
+            {node.release_year && <p className="text-[11px] text-zinc-500">{node.release_year}</p>}
+            <div className="mt-1 flex justify-center">
+              <OnServerBadge onServer={onServerMap?.[node.movie_id]?.on_server} />
+            </div>
+          </div>
+
+          {index < path.length - 1 && (
+            <div className="flex flex-col items-center gap-1 px-1 pt-6">
+              <ArrowRight className="h-4 w-4 shrink-0 text-zinc-600" />
+              {connections[index] && (
+                <div className="flex w-16 flex-col items-center text-center">
+                  {connections[index].profile_path ? (
+                    <img
+                      src={profileUrl(connections[index].profile_path) ?? undefined}
+                      alt={connections[index].actor_name}
+                      className="h-8 w-8 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-8 w-8 rounded-full bg-app-surface-hover" />
+                  )}
+                  <p className="mt-1 line-clamp-2 text-[10px] leading-tight text-zinc-500">
+                    {connections[index].actor_name}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}

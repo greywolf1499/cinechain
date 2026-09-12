@@ -176,3 +176,12 @@ export interface IntegrationStatus {
 	radarr: RequestClientStatus;
 	seerr: RequestClientStatus;
 }
+
+// --- system (routes_system.py) ---
+
+export interface CacheStats {
+	cached_movies: number;
+	cached_actors: number;
+	cached_cast_edges: number;
+	db_size_bytes: number | null;
+}

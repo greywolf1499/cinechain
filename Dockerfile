@@ -45,6 +45,10 @@ COPY backend/app /app/app
 COPY backend/migrations /app/migrations
 COPY backend/alembic.ini /app/alembic.ini
 COPY --from=frontend-build /src/frontend/dist/ /app/app/static/
+# Precompile to .pyc at build time (as root, while the tree is still
+# writable) so the non-root runtime user never needs write access to
+# __pycache__ and the first request doesn't pay a compile-on-import tax.
+RUN /app/.venv/bin/python -m compileall -q /app/app
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/healthcheck.py /healthcheck.py
 RUN chmod +x /entrypoint.sh

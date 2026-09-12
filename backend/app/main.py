@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import anyio
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -23,6 +24,10 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_settings().config_dir.mkdir(parents=True, exist_ok=True)
+    # Cap the anyio worker-thread pool (used by anyio.to_thread.run_sync, e.g.
+    # the pathfinder's DB reads) so a burst of concurrent sync work can't
+    # spawn unbounded OS threads on the host laptop.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = 12
     async with httpx.AsyncClient(timeout=15.0) as http_client:
         app.state.http_client = http_client
         app.state.tmdb = TMDBClient(http_client)

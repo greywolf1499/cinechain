@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { Run, RunDetail, RunStatus, UserSummary } from "../types/api";
+import type {
+	Run,
+	RunDetail,
+	RunStatus,
+	RulesConfig,
+	StepStatus,
+	UserSummary,
+} from "../types/api";
 
 export const queryKeys = {
 	users: ["users"] as const,
@@ -41,6 +48,7 @@ export function useCreateRun() {
 			game_type: string;
 			participant_user_ids: string[];
 			seed_movie_id?: number | null;
+			rules_config?: RulesConfig;
 		}) => api.post<RunDetail>("/runs", payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -78,7 +86,26 @@ export function useCreateStep(runId: string) {
 			transition_metadata?: Record<string, unknown> | null;
 			user_notes?: string | null;
 			force?: boolean;
+			status?: StepStatus;
+			watched_at?: string | null;
 		}) => api.post(`/runs/${runId}/steps`, payload),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+		},
+	});
+}
+
+export function useMarkStepWatched(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			stepId,
+			...payload
+		}: {
+			stepId: string;
+			watched_at?: string | null;
+			user_notes?: string | null;
+		}) => api.patch(`/runs/${runId}/steps/${stepId}/mark-watched`, payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 		},

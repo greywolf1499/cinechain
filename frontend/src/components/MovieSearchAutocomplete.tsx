@@ -28,6 +28,8 @@ export default function MovieSearchAutocomplete({
   const [picked, setPicked] = useState<MovieSummary | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
+  const [watchStatus, setWatchStatus] = useState<"watched" | "planned">("watched");
+  const [watchedDate, setWatchedDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const createStep = useCreateStep(runId ?? "");
 
@@ -74,6 +76,8 @@ export default function MovieSearchAutocomplete({
     await createStep.mutateAsync({
       movie_id: picked.tmdb_id,
       force,
+      status: watchStatus,
+      watched_at: watchStatus === "watched" ? new Date(watchedDate).toISOString() : null,
       transition_metadata: connection
         ? {
             actor_id: connection.actor_id,
@@ -90,6 +94,8 @@ export default function MovieSearchAutocomplete({
     setPicked(null);
     setValidation(null);
     setQuery("");
+    setWatchStatus("watched");
+    setWatchedDate(new Date().toISOString().slice(0, 10));
   }
 
   if (picked) {
@@ -132,6 +138,36 @@ export default function MovieSearchAutocomplete({
                   <div className="text-xs text-amber-400">
                     {validation.reason ?? "No shared cast found"}
                   </div>
+                )}
+
+                <div className="mt-3 flex items-center gap-4 text-xs text-zinc-400">
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      checked={watchStatus === "watched"}
+                      onChange={() => setWatchStatus("watched")}
+                      className="accent-accent"
+                    />
+                    I've watched this
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      checked={watchStatus === "planned"}
+                      onChange={() => setWatchStatus("planned")}
+                      className="accent-accent"
+                    />
+                    Plan for later / Up next
+                  </label>
+                </div>
+                {watchStatus === "watched" && (
+                  <input
+                    type="date"
+                    value={watchedDate}
+                    max={new Date().toISOString().slice(0, 10)}
+                    onChange={(e) => setWatchedDate(e.target.value)}
+                    className="mt-2 rounded-md border border-app-border bg-app-bg px-2 py-1 text-xs text-zinc-200 focus:border-accent focus:outline-none"
+                  />
                 )}
 
                 <div className="mt-2 flex gap-2">

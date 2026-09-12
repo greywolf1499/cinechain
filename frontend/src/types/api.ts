@@ -20,6 +20,18 @@ export interface UserSummary {
 // --- runs (schemas/runs.py) ---
 
 export type RunStatus = "active" | "completed" | "abandoned";
+export type StepStatus = "watched" | "planned";
+export type RepeatPolicy = "strict" | "penalty" | "allowed";
+export type RulesPreset = "standard" | "purist" | "casual" | "custom";
+
+export interface RulesConfig {
+	preset: RulesPreset;
+	allow_repeats: RepeatPolicy;
+	no_consecutive_actor: boolean;
+	max_cast_order: number;
+	min_runtime: number;
+	wildcards_budget: number; // -1 = unlimited
+}
 
 export interface RunParticipant {
 	user_id: string;
@@ -37,6 +49,8 @@ export interface RunStep {
 	movie_origin_country: string | null;
 	transition_metadata: Record<string, unknown> | null;
 	user_notes: string | null;
+	status: StepStatus;
+	watched_at: string | null;
 	logged_by_user_id: string | null;
 	logged_at: string;
 }
@@ -46,6 +60,7 @@ export interface Run {
 	name: string;
 	game_type: string;
 	status: RunStatus;
+	rules_config: RulesConfig;
 	created_at: string;
 	completed_at: string | null;
 }

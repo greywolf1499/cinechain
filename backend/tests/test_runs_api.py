@@ -156,6 +156,14 @@ def test_only_last_step_can_be_deleted(client):
     with respx.mock:
         _mock_movie(603, "The Matrix", "1999-03-30")
         _mock_movie(604, "Matrix Reloaded", "2003-05-15")
+        # force=True still runs validation (to decide wildcard spend), so both
+        # movies' credits need a mock even with no shared cast expected.
+        respx.get(f"{TMDB_BASE}/movie/603/credits").mock(
+            return_value=httpx.Response(200, json={"id": 603, "cast": []})
+        )
+        respx.get(f"{TMDB_BASE}/movie/604/credits").mock(
+            return_value=httpx.Response(200, json={"id": 604, "cast": []})
+        )
         step1 = client.post(
             f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
         # force=True: this test is about delete ordering, not chain validity.

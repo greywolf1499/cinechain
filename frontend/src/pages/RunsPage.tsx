@@ -7,9 +7,10 @@ import EmptyState from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import Modal from "../components/Modal";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
+import RulesetFields, { RULE_PRESETS } from "../components/RulesetFields";
 import { api } from "../lib/api";
 import { useCreateRun, useRuns, useUsers } from "../lib/queries";
-import type { EngineMeta, MovieSummary } from "../types/api";
+import type { EngineMeta, MovieSummary, RulesConfig } from "../types/api";
 
 export default function RunsPage() {
   const navigate = useNavigate();
@@ -94,6 +95,7 @@ function NewRunModal({
   const [gameType, setGameType] = useState("cinechain");
   const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [seedMovie, setSeedMovie] = useState<MovieSummary | null>(null);
+  const [rules, setRules] = useState<RulesConfig>(RULE_PRESETS.standard);
 
   function toggleParticipant(userId: string) {
     setParticipantIds((prev) =>
@@ -106,6 +108,7 @@ function NewRunModal({
     setGameType("cinechain");
     setParticipantIds([]);
     setSeedMovie(null);
+    setRules(RULE_PRESETS.standard);
   }
 
   async function handleSubmit() {
@@ -115,6 +118,7 @@ function NewRunModal({
       game_type: gameType,
       participant_user_ids: participantIds,
       seed_movie_id: seedMovie?.tmdb_id ?? null,
+      rules_config: rules,
     });
     reset();
     onClose();
@@ -176,6 +180,8 @@ function NewRunModal({
         <Field label="Seed movie (optional)">
           <MovieSearchAutocomplete onSelect={setSeedMovie} placeholder="Search for a starting film..." />
         </Field>
+
+        <RulesetFields value={rules} onChange={setRules} />
 
         <button
           type="button"

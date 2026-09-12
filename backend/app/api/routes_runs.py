@@ -5,10 +5,11 @@ from app.api.deps import get_current_user, get_tmdb_client, run_participant_guar
 from app.db import get_session
 from app.engines.registry import get_engine
 from app.models.cache import CachedMovie
-from app.models.run import Run, RunParticipant, RunStep
+from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
 from app.models.user import User
 from app.schemas.engine import RunStats, Suggestion, SuggestionFilters
 from app.schemas.runs import (
+    MarkWatchedRequest,
     ParticipantAdd,
     ParticipantPublic,
     RunCreate,
@@ -46,19 +47,105 @@ def _last_step(session: Session, run_id: str) -> RunStep | None:
     ).first()
 
 
-async def _check_chain_link(
-    session: Session, tmdb: TMDBClient, run: Run, movie: CachedMovie, force: bool
-) -> None:
-    if force:
-        return
+def _run_rules(run: Run) -> dict:
+    return run.rules_config or dict(DEFAULT_RULES_CONFIG)
+
+
+async def _enforce_run_rules(
+    session: Session, tmdb: TMDBClient, run: Run, movie: CachedMovie, payload: RunStepCreate
+) -> dict:
+    """Validates a candidate step against the run's rules_config.
+
+    Returns extra transition_metadata fields to merge in (repeat_penalty,
+    runtime_flagged, wildcard_used). Raises 409 on any violation not covered
+    by `payload.force`.
+    """
+    rules = _run_rules(run)
+    force = payload.force
+    extra_metadata: dict = {}
+    broke_a_rule = False
+
+    already_watched = session.exec(
+        select(RunStep).where(RunStep.run_id == run.id,
+                              RunStep.movie_id == movie.tmdb_id)
+    ).first()
+    if already_watched is not None:
+        allow_repeats = rules.get("allow_repeats", "strict")
+        if allow_repeats == "strict":
+            if not force:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "valid": False,
+                        "reason": "Movie already watched in this run",
+                        "connections": [],
+                    },
+                )
+            broke_a_rule = True
+        elif allow_repeats == "penalty":
+            extra_metadata["repeat_penalty"] = True
+
+    min_runtime = rules.get("min_runtime", 0)
+    if min_runtime and movie.runtime is not None and movie.runtime < min_runtime:
+        if not force:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "valid": False,
+                    "reason": f"Runtime is under this run's {min_runtime}-minute minimum",
+                    "connections": [],
+                },
+            )
+        broke_a_rule = True
+        extra_metadata["runtime_flagged"] = True
+
     previous = _last_step(session, run.id)
-    if previous is None:
-        return  # first step in the run - nothing to validate against
-    engine = get_engine(run.game_type, session, tmdb)
-    result = await engine.validate_next_step(previous.movie_id, movie.tmdb_id)
-    if not result.valid:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
+    if previous is not None:
+        engine = get_engine(run.game_type, session, tmdb)
+        result = await engine.validate_next_step(
+            previous.movie_id, movie.tmdb_id, cast_limit=rules.get(
+                "max_cast_order")
+        )
+        if not result.valid:
+            if not force:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
+            broke_a_rule = True
+        elif rules.get("no_consecutive_actor", True):
+            chosen_actor_id = (
+                payload.transition_metadata or {}).get("actor_id")
+            previous_actor_id = (
+                previous.transition_metadata or {}).get("actor_id")
+            if (
+                chosen_actor_id is not None
+                and previous_actor_id is not None
+                and chosen_actor_id == previous_actor_id
+            ):
+                if not force:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "valid": False,
+                            "reason": "Consecutive jumps using the same actor are disabled",
+                            "connections": [],
+                        },
+                    )
+                broke_a_rule = True
+
+    if force and broke_a_rule:
+        budget = rules.get("wildcards_budget", 2)
+        if budget != -1:
+            if budget <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "valid": False, "reason": "No wildcards remaining", "connections": []},
+                )
+            run.rules_config = {**rules, "wildcards_budget": budget - 1}
+            session.add(run)
+        extra_metadata["wildcard_used"] = True
+
+    return extra_metadata
 
 
 def _to_run_detail(session: Session, run: Run) -> RunDetail:
@@ -110,7 +197,13 @@ async def create_run(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found"
             )
 
-    run = Run(name=payload.name, game_type=payload.game_type)
+    run = Run(
+        name=payload.name,
+        game_type=payload.game_type,
+        rules_config=payload.rules_config if payload.rules_config is not None else dict(
+            DEFAULT_RULES_CONFIG
+        ),
+    )
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -125,6 +218,8 @@ async def create_run(
         step = RunStep(
             run_id=run.id,
             logged_by_user_id=current_user.id,
+            status="watched",
+            watched_at=utcnow(),
             **_step_fields_from_movie(movie),
         )
         session.add(step)
@@ -225,15 +320,50 @@ async def create_step(
     tmdb: TMDBClient = Depends(get_tmdb_client),
 ):
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id)
-    await _check_chain_link(session, tmdb, run, movie, payload.force)
+    extra_metadata = await _enforce_run_rules(session, tmdb, run, movie, payload)
+
+    transition_metadata = payload.transition_metadata
+    if extra_metadata:
+        transition_metadata = {**(transition_metadata or {}), **extra_metadata}
+
+    watched_at = payload.watched_at if payload.status == "watched" else None
+    if payload.status == "watched" and watched_at is None:
+        watched_at = utcnow()
 
     step = RunStep(
         run_id=run.id,
-        transition_metadata=payload.transition_metadata,
+        transition_metadata=transition_metadata,
         user_notes=payload.user_notes,
+        status=payload.status,
+        watched_at=watched_at,
         logged_by_user_id=current_user.id,
         **_step_fields_from_movie(movie),
     )
+    session.add(step)
+    session.commit()
+    session.refresh(step)
+    return step
+
+
+@router.patch("/{run_id}/steps/{step_id}/mark-watched", response_model=RunStepPublic)
+def mark_step_watched(
+    step_id: str,
+    payload: MarkWatchedRequest,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+):
+    step = session.get(RunStep, step_id)
+    if step is None or step.run_id != run.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
+    if step.status == "watched":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Step is already marked as watched"
+        )
+    step.status = "watched"
+    step.watched_at = payload.watched_at or utcnow()
+    if payload.user_notes is not None:
+        step.user_notes = payload.user_notes
     session.add(step)
     session.commit()
     session.refresh(step)

@@ -34,11 +34,20 @@ class CineChainEngine(BaseChallengeEngine):
         "solve_bridge",
     ]
 
-    async def validate_next_step(self, from_movie_id: int, to_movie_id: int) -> ValidationResult:
-        from_cast = await cache_repo.get_movie_cast(self.session, self.tmdb, from_movie_id)
+    async def validate_next_step(
+        self, from_movie_id: int, to_movie_id: int, cast_limit: int | None = None
+    ) -> ValidationResult:
+        # Note: if a movie's cast was already cached at a lower limit (e.g. the
+        # global default of 15), a run requesting a deeper cast_limit (e.g. a
+        # Casual preset's 25) won't retroactively discover more billed actors
+        # without a fresh TMDB fetch - this only affects the *effective* depth
+        # considered, never causes an error.
+        from_cast = await cache_repo.get_movie_cast(self.session, self.tmdb, from_movie_id, cast_limit)
         to_cast_by_actor = {
             member["actor_id"]: member
-            for member in await cache_repo.get_movie_cast(self.session, self.tmdb, to_movie_id)
+            for member in await cache_repo.get_movie_cast(
+                self.session, self.tmdb, to_movie_id, cast_limit
+            )
         }
 
         connections = [
@@ -86,12 +95,16 @@ class CineChainEngine(BaseChallengeEngine):
         return list(suggestions.values())
 
     async def compute_stats(self, steps: list[RunStep]) -> RunStats:
+        # Planned-but-not-yet-watched steps haven't actually been experienced,
+        # so they shouldn't count toward cultural-breadth passport stats.
+        watched_steps = [s for s in steps if s.status == "watched"]
+
         countries: set[str] = set()
         decades: set[int] = set()
         actor_counts: Counter[int] = Counter()
         actor_names: dict[int, str] = {}
 
-        for step in steps:
+        for step in watched_steps:
             if step.movie_origin_country:
                 countries.update(json.loads(step.movie_origin_country))
             if step.movie_release_year:
@@ -112,7 +125,7 @@ class CineChainEngine(BaseChallengeEngine):
         ]
 
         return RunStats(
-            total_hops=max(len(steps) - 1, 0),
+            total_hops=max(len(watched_steps) - 1, 0),
             countries=sorted(countries),
             decades=sorted(decades),
             keystone_actors=keystone_actors,

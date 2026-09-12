@@ -5,6 +5,17 @@ from sqlmodel import JSON, Column, Field, SQLModel
 
 from app.utils.ids import new_id, utcnow
 
+# Baked into new runs via Run.rules_config's default_factory; also used as a
+# fallback wherever a legacy/null rules_config is read.
+DEFAULT_RULES_CONFIG: dict[str, Any] = {
+    "preset": "standard",
+    "allow_repeats": "strict",  # strict | penalty | allowed
+    "no_consecutive_actor": True,
+    "max_cast_order": 15,
+    "min_runtime": 40,
+    "wildcards_budget": 2,  # -1 = unlimited
+}
+
 
 class Run(SQLModel, table=True):
     __tablename__ = "runs"
@@ -14,6 +25,9 @@ class Run(SQLModel, table=True):
     game_type: str = Field(default="cinechain", index=True)
     # active | completed | abandoned
     status: str = Field(default="active", index=True)
+    rules_config: dict[str, Any] = Field(
+        default_factory=lambda: dict(DEFAULT_RULES_CONFIG), sa_column=Column(JSON)
+    )
     created_at: datetime = Field(default_factory=utcnow)
     completed_at: datetime | None = None
 
@@ -40,5 +54,7 @@ class RunStep(SQLModel, table=True):
     transition_metadata: dict[str, Any] | None = Field(
         default=None, sa_column=Column(JSON))
     user_notes: str | None = None
+    status: str = Field(default="watched", index=True)  # watched | planned
+    watched_at: datetime | None = None  # null while planned
     logged_by_user_id: str | None = Field(default=None, foreign_key="users.id")
     logged_at: datetime = Field(default_factory=utcnow)

@@ -98,7 +98,7 @@ export default function RunDetailPage() {
         />
       ) : (
         <>
-          <ChainTimeline steps={run.steps} onActorClick={setActiveActor} />
+          <ChainTimeline runId={run.id} steps={run.steps} onActorClick={setActiveActor} />
           {lastStep && (
             <div className="mt-2 flex justify-end">
               <button

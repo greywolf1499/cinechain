@@ -17,7 +17,7 @@ from app.schemas.engine import (
     SuggestionFilters,
     ValidationResult,
 )
-from app.services import cache_repo
+from app.services import cache_repo, pathfinder
 from app.utils.dates import parse_release_year
 
 
@@ -134,5 +134,18 @@ class CineChainEngine(BaseChallengeEngine):
             keystone_actors=keystone_actors,
         )
 
-    def solve_bridge(self, from_movie_id: int, to_movie_id: int, max_depth: int):
-        raise NotImplementedError("Bridge solving lands in Phase 6")
+    def solve_bridge(
+        self,
+        from_movie_id: int,
+        to_movie_id: int,
+        max_depth: int | None = None,
+        call_budget: int | None = None,
+    ):
+        return pathfinder.solve_bridge_bipartite(
+            self.session,
+            self.tmdb,
+            from_movie_id,
+            to_movie_id,
+            max_depth=max_depth,
+            call_budget=call_budget,
+        )

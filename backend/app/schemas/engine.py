@@ -38,6 +38,19 @@ class KeystoneActor(BaseModel):
     appearances: int
 
 
+class BridgeNode(BaseModel):
+    movie_id: int
+    title: str
+    poster_path: str | None = None
+    release_year: int | None = None
+
+
+class BridgeResult(BaseModel):
+    path: list[BridgeNode]
+    hops: int
+    connections: list[SharedActorConnection]
+
+
 class RunStats(BaseModel):
     total_hops: int
     countries: list[str]

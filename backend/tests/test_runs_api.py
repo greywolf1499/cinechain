@@ -1,0 +1,184 @@
+"""Runs/participants/steps API tests.
+
+Reuses the dependency_overrides pattern from test_auth_api.py (module-level
+`get_session` imported once, overridden with a fresh per-test SQLite engine)
+plus respx to mock TMDB for step logging - see test_auth_api.py's module
+docstring for why the config_dir module-reload trick doesn't work here.
+"""
+
+import httpx
+import pytest
+import respx
+from fastapi.testclient import TestClient
+from sqlmodel import Session, SQLModel, create_engine
+
+from app.db import get_session
+from app.main import app
+
+TMDB_BASE = "https://api.themoviedb.org/3"
+
+
+@pytest.fixture()
+def client(config_dir):
+    engine = create_engine(
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def override_get_session():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+def _register_and_login(client, username, password="password123", display_name=None):
+    client.post(
+        "/api/auth/register",
+        json={
+            "username": username,
+            "password": password,
+            "display_name": display_name or username.title(),
+        },
+    )
+    client.post("/api/auth/login",
+                json={"username": username, "password": password})
+
+
+def _new_client_for(client, username):
+    """Same app/engine, independent cookie jar - simulates a second logged-in user."""
+    other = TestClient(app)
+    other.post("/api/auth/login",
+               json={"username": username, "password": "password123"})
+    return other
+
+
+def _mock_movie(tmdb_id: int, title: str, release_date: str = "1999-03-30"):
+    return respx.get(f"{TMDB_BASE}/movie/{tmdb_id}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": tmdb_id,
+                "title": title,
+                "release_date": release_date,
+                "poster_path": "/poster.jpg",
+                "overview": "",
+                "origin_country": ["US"],
+                "original_language": "en",
+                "runtime": 100,
+                "genres": [],
+            },
+        )
+    )
+
+
+def test_create_run_with_participants(client):
+    # bootstrap admin (alice), then bob as a regular user (admin-gated register)
+    _register_and_login(client, "alice")
+    alice_id = client.get("/api/auth/me").json()["id"]
+    client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "display_name": "Bob"},
+    )
+    bob_id = client.get("/api/users").json()[-1]["id"]
+
+    resp = client.post(
+        "/api/runs",
+        json={"name": "Bacon Run", "game_type": "cinechain",
+              "participant_user_ids": [bob_id]},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "Bacon Run"
+    roles = {p["user_id"]: p["role"] for p in body["participants"]}
+    assert roles[alice_id] == "owner"
+    assert roles[bob_id] == "member"
+    assert body["steps"] == []
+
+
+def test_non_participant_gets_404(client):
+    _register_and_login(client, "alice")
+    client.post(
+        "/api/auth/register",
+        json={"username": "carol", "password": "password123",
+              "display_name": "Carol"},
+    )
+    run_id = client.post(
+        "/api/runs", json={"name": "Alice Only", "participant_user_ids": []}
+    ).json()["id"]
+
+    carol_client = _new_client_for(client, "carol")
+    resp = carol_client.get(f"/api/runs/{run_id}")
+    assert resp.status_code == 404
+
+
+def test_adding_step_denormalizes_metadata_and_sets_logger(client):
+    _register_and_login(client, "alice")
+    alice_id = client.get("/api/auth/me").json()["id"]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+
+    with respx.mock:
+        _mock_movie(603, "The Matrix", "1999-03-30")
+        resp = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
+
+    assert resp.status_code == 201
+    step = resp.json()
+    assert step["movie_title"] == "The Matrix"
+    assert step["movie_release_year"] == 1999
+    assert step["movie_poster_path"] == "/poster.jpg"
+    assert step["logged_by_user_id"] == alice_id
+
+
+def test_deleting_run_cascades(client):
+    _register_and_login(client, "alice")
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+    with respx.mock:
+        _mock_movie(603, "The Matrix")
+        client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
+
+    resp = client.delete(f"/api/runs/{run_id}")
+    assert resp.status_code == 204
+    assert client.get(f"/api/runs/{run_id}").status_code == 404
+
+
+def test_only_last_step_can_be_deleted(client):
+    _register_and_login(client, "alice")
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+    with respx.mock:
+        _mock_movie(603, "The Matrix", "1999-03-30")
+        _mock_movie(604, "Matrix Reloaded", "2003-05-15")
+        step1 = client.post(
+            f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
+        step2 = client.post(
+            f"/api/runs/{run_id}/steps", json={"movie_id": 604}).json()
+
+    resp = client.delete(f"/api/runs/{run_id}/steps/{step1['id']}")
+    assert resp.status_code == 409
+
+    resp = client.delete(f"/api/runs/{run_id}/steps/{step2['id']}")
+    assert resp.status_code == 204
+
+
+def test_fetching_run_timeline_makes_zero_http_calls(client):
+    _register_and_login(client, "alice")
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+    with respx.mock:
+        movie_route = _mock_movie(603, "The Matrix")
+        client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
+        assert movie_route.call_count == 1
+
+    with respx.mock:
+        resp = client.get(f"/api/runs/{run_id}")
+        assert resp.status_code == 200
+        assert len(resp.json()["steps"]) == 1

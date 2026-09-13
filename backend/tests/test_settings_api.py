@@ -17,6 +17,7 @@ from app.main import app
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 JELLYFIN_BASE = "http://jellyfin.test"
+OMDB_BASE = "https://www.omdbapi.com/"
 
 
 @pytest.fixture()
@@ -69,6 +70,8 @@ def test_admin_get_reflects_no_overrides_by_default(client):
     assert body["tmdb_api_key_masked"] is None
     assert body["jellyfin_configured"] is False
     assert body["jellyfin_api_key_masked"] is None
+    assert body["omdb_configured"] is False
+    assert body["omdb_api_key_masked"] is None
 
 
 def test_admin_patch_sets_and_masks_override(client):
@@ -174,3 +177,70 @@ async def test_saved_tmdb_override_is_used_on_the_next_request(client):
 
     assert resp.status_code == 200
     assert route.calls.last.request.headers["Authorization"] == "Bearer brand-new-token"
+
+
+def test_admin_patch_sets_and_masks_omdb_override(client):
+    _register_and_login(client)
+    resp = client.patch("/api/settings/integrations",
+                        json={"omdb_api_key": "abcdefgh1234"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["omdb_configured"] is True
+    assert body["omdb_api_key_masked"] == "****1234"
+
+
+async def test_test_omdb_endpoint_success(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(
+                200, json={"Response": "True", "imdbRating": "8.8"})
+        )
+        resp = client.post("/api/settings/integrations/test-omdb",
+                           json={"omdb_api_key": "good-key"})
+    assert resp.status_code == 200
+    assert resp.json() == {"reachable": True, "version": None, "detail": None}
+
+
+async def test_test_omdb_endpoint_failure(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(
+                200, json={"Response": "False", "Error": "Invalid API key!"})
+        )
+        resp = client.post("/api/settings/integrations/test-omdb",
+                           json={"omdb_api_key": "bad-key"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reachable"] is False
+    assert body["detail"] == "Invalid API key!"
+
+
+async def test_saved_omdb_override_is_used_by_ratings_lookup(client):
+    """End-to-end proof the OMDb override flows through get_omdb_client into
+    an actual movie-detail ratings fetch, not just persisted to the DB."""
+    _register_and_login(client)
+    client.patch("/api/settings/integrations",
+                 json={"omdb_api_key": "brand-new-omdb-key"})
+
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603, "title": "The Matrix", "release_date": "1999-03-30",
+                    "poster_path": None, "overview": "", "origin_country": ["US"],
+                    "original_language": "en", "runtime": 136, "genres": [],
+                },
+            )
+        )
+        omdb_route = respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(
+                200, json={"Response": "True", "imdbRating": "8.7"})
+        )
+        resp = client.get("/api/movies/603")
+
+    assert resp.status_code == 200
+    assert resp.json()["ratings"]["imdb_rating"] == "8.7"
+    assert omdb_route.calls.last.request.url.params["apikey"] == "brand-new-omdb-key"

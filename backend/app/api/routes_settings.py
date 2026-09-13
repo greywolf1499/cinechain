@@ -6,6 +6,7 @@ from app.api.deps import get_current_admin
 from app.config import get_settings
 from app.db import get_session
 from app.integrations.jellyfin import check_jellyfin_connectivity
+from app.integrations.omdb import check_omdb_connectivity
 from app.models.user import User
 from app.services import settings_repo
 from app.services.tmdb import check_tmdb_connectivity
@@ -19,12 +20,15 @@ class IntegrationConfigOut(BaseModel):
     jellyfin_url: str
     jellyfin_configured: bool
     jellyfin_api_key_masked: str | None = None
+    omdb_configured: bool
+    omdb_api_key_masked: str | None = None
 
 
 class IntegrationConfigUpdate(BaseModel):
     tmdb_api_key: str | None = None
     jellyfin_url: str | None = None
     jellyfin_api_key: str | None = None
+    omdb_api_key: str | None = None
 
 
 class ConnectivityTestResult(BaseModel):
@@ -42,6 +46,10 @@ class TestJellyfinRequest(BaseModel):
     jellyfin_api_key: str | None = None
 
 
+class TestOmdbRequest(BaseModel):
+    omdb_api_key: str
+
+
 def _mask(value: str) -> str | None:
     if not value:
         return None
@@ -56,12 +64,15 @@ def _build_config(session: Session) -> IntegrationConfigOut:
     tmdb_key = overrides.get("tmdb_api_key") or base.tmdb_api_key
     jellyfin_url = overrides.get("jellyfin_url") or base.jellyfin_url
     jellyfin_key = overrides.get("jellyfin_api_key") or base.jellyfin_api_key
+    omdb_key = overrides.get("omdb_api_key") or base.omdb_api_key
     return IntegrationConfigOut(
         tmdb_configured=bool(tmdb_key),
         tmdb_api_key_masked=_mask(tmdb_key),
         jellyfin_url=jellyfin_url,
         jellyfin_configured=bool(jellyfin_url),
         jellyfin_api_key_masked=_mask(jellyfin_key),
+        omdb_configured=bool(omdb_key),
+        omdb_api_key_masked=_mask(omdb_key),
     )
 
 
@@ -104,5 +115,17 @@ async def test_jellyfin_connection(
 ) -> ConnectivityTestResult:
     result = await check_jellyfin_connectivity(
         request.app.state.http_client, payload.jellyfin_url, payload.jellyfin_api_key or ""
+    )
+    return ConnectivityTestResult(**result)
+
+
+@router.post("/integrations/test-omdb", response_model=ConnectivityTestResult)
+async def test_omdb_connection(
+    payload: TestOmdbRequest,
+    request: Request,
+    _admin: User = Depends(get_current_admin),
+) -> ConnectivityTestResult:
+    result = await check_omdb_connectivity(
+        request.app.state.http_client, payload.omdb_api_key, get_settings().omdb_api_base
     )
     return ConnectivityTestResult(**result)

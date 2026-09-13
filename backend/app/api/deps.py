@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlmodel import Session
 
 from app.db import get_session
+from app.integrations.omdb import OMDbClient
 from app.models.run import Run, RunParticipant
 from app.models.user import User
 from app.services import settings_repo
@@ -57,3 +58,9 @@ def get_tmdb_client(request: Request, session: Session = Depends(get_session)) -
     tmdb: TMDBClient = request.app.state.tmdb
     tmdb.set_overrides(settings_repo.get_overrides(session))
     return tmdb
+
+
+def get_omdb_client(request: Request, session: Session = Depends(get_session)) -> OMDbClient:
+    omdb: OMDbClient = request.app.state.omdb
+    omdb.set_overrides(settings_repo.get_overrides(session))
+    return omdb

@@ -104,6 +104,8 @@ function IntegrationSettingsEditor() {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [tmdbToken, setTmdbToken] = useState("");
   const [tmdbResult, setTmdbResult] = useState<ConnectivityTestResult | null>(null);
+  const [omdbKey, setOmdbKey] = useState("");
+  const [omdbResult, setOmdbResult] = useState<ConnectivityTestResult | null>(null);
   const [jellyfinUrl, setJellyfinUrl] = useState("");
   const [jellyfinKey, setJellyfinKey] = useState("");
   const [jellyfinResult, setJellyfinResult] = useState<ConnectivityTestResult | null>(null);
@@ -116,13 +118,20 @@ function IntegrationSettingsEditor() {
     mutationFn: (tmdb_api_key: string) =>
       api.post<ConnectivityTestResult>("/settings/integrations/test-tmdb", { tmdb_api_key }),
   });
+  const testOmdb = useMutation({
+    mutationFn: (omdb_api_key: string) =>
+      api.post<ConnectivityTestResult>("/settings/integrations/test-omdb", { omdb_api_key }),
+  });
   const testJellyfin = useMutation({
     mutationFn: (payload: { jellyfin_url: string; jellyfin_api_key?: string }) =>
       api.post<ConnectivityTestResult>("/settings/integrations/test-jellyfin", payload),
   });
   const saveIntegrations = useMutation({
-    mutationFn: (payload: Partial<Record<"tmdb_api_key" | "jellyfin_url" | "jellyfin_api_key", string>>) =>
-      api.patch<IntegrationConfig>("/settings/integrations", payload),
+    mutationFn: (
+      payload: Partial<
+        Record<"tmdb_api_key" | "jellyfin_url" | "jellyfin_api_key" | "omdb_api_key", string>
+      >,
+    ) => api.patch<IntegrationConfig>("/settings/integrations", payload),
     onSuccess: (updated) => {
       queryClient.setQueryData(["settings", "integrations"], updated);
     },
@@ -193,6 +202,30 @@ function IntegrationSettingsEditor() {
     }
   }
 
+  async function handleOmdbTestAndSave() {
+    const key = omdbKey.trim();
+    if (!key) {
+      setToast({ type: "error", message: "Enter an OMDb API key first." });
+      return;
+    }
+    try {
+      const result = await testOmdb.mutateAsync(key);
+      setOmdbResult(result);
+      if (!result.reachable) {
+        setToast({ type: "error", message: result.detail ?? "OMDb connection failed." });
+        return;
+      }
+      await saveIntegrations.mutateAsync({ omdb_api_key: key });
+      setOmdbKey("");
+      setToast({ type: "success", message: "OMDb connected and saved." });
+    } catch (err) {
+      setToast({
+        type: "error",
+        message: err instanceof ApiError ? err.message : "OMDb test failed.",
+      });
+    }
+  }
+
   return (
     <div className="flex flex-col gap-5 border-t border-app-border px-5 py-4">
       <div>
@@ -234,6 +267,47 @@ function IntegrationSettingsEditor() {
               <XCircle className="h-3.5 w-3.5" />
             )}
             {tmdbResult.reachable ? "Connected" : tmdbResult.detail ?? "Failed"}
+          </p>
+        )}
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+          OMDb API Key <span className="normal-case text-zinc-600">(IMDb / Rotten Tomatoes ratings)</span>
+        </p>
+        <p className="mb-2 text-xs text-zinc-500">
+          {config?.omdb_configured ? `Currently set: ${config.omdb_api_key_masked}` : "Not configured"}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="password"
+            value={omdbKey}
+            onChange={(e) => setOmdbKey(e.target.value)}
+            placeholder="Enter an OMDb API key..."
+            className={`${inputClass} min-w-[240px] flex-1`}
+          />
+          <button
+            type="button"
+            onClick={handleOmdbTestAndSave}
+            disabled={testOmdb.isPending || saveIntegrations.isPending}
+            className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {(testOmdb.isPending || saveIntegrations.isPending) && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            )}
+            Test &amp; Save
+          </button>
+        </div>
+        {omdbResult && (
+          <p
+            className={`mt-1.5 flex items-center gap-1.5 text-xs ${omdbResult.reachable ? "text-emerald-400" : "text-red-400"}`}
+          >
+            {omdbResult.reachable ? (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            ) : (
+              <XCircle className="h-3.5 w-3.5" />
+            )}
+            {omdbResult.reachable ? "Connected" : omdbResult.detail ?? "Failed"}
           </p>
         )}
       </div>

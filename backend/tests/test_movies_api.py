@@ -214,3 +214,62 @@ def test_list_genres(client):
         resp = client.get("/api/movies/genres")
     assert resp.status_code == 200
     assert len(resp.json()) == 2
+
+
+def test_movie_ratings_null_when_omdb_not_configured(client):
+    """No OMDb key -> ratings is null, and no OMDb call is even attempted."""
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603, "title": "The Matrix", "release_date": "1999-03-30",
+                    "poster_path": None, "overview": "", "origin_country": ["US"],
+                    "original_language": "en", "runtime": 136, "genres": [],
+                },
+            )
+        )
+        resp = client.get("/api/movies/603")
+
+    assert resp.status_code == 200
+    assert resp.json()["ratings"] is None
+
+
+def test_movie_ratings_bulk_endpoint(client):
+    _register_and_login(client)
+    client.patch("/api/settings/integrations",
+                 json={"omdb_api_key": "test-key"})
+
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603, "title": "The Matrix", "release_date": "1999-03-30",
+                    "poster_path": None, "overview": "", "origin_country": ["US"],
+                    "original_language": "en", "runtime": 136, "genres": [],
+                },
+            )
+        )
+        respx.get(f"{TMDB_BASE}/movie/604").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 604, "title": "Some Other Film", "release_date": "2001-01-01",
+                    "poster_path": None, "overview": "", "origin_country": ["US"],
+                    "original_language": "en", "runtime": 100, "genres": [],
+                },
+            )
+        )
+        respx.get("https://www.omdbapi.com/").mock(
+            return_value=httpx.Response(
+                200, json={"Response": "True", "imdbRating": "8.7"})
+        )
+        resp = client.post("/api/movies/ratings/bulk",
+                           json={"tmdb_ids": [603, 604]})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["603"]["imdb_rating"] == "8.7"
+    assert body["604"]["imdb_rating"] == "8.7"

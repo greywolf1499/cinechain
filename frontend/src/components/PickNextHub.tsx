@@ -4,9 +4,11 @@ import { Loader2, Search, User } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import OnServerBadge from "./OnServerBadge";
+import RatingBadges from "./RatingBadges";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { profileUrl } from "../lib/tmdbImage";
+import { allowsMovieRepeats } from "../lib/rules";
 import { useCreateStep, useDiscoverCandidates } from "../lib/queries";
 import type {
   CastMember,
@@ -14,11 +16,13 @@ import type {
   DiscoveryConnection,
   GenreOut,
   JellyfinItemSummary,
+  MovieRatings,
+  RulesConfig,
   RunStep,
 } from "../types/api";
 
 type CoStarMode = "or" | "and";
-type SortBy = "year" | "popularity";
+type SortBy = "year" | "popularity" | "imdb" | "rt";
 
 const DECADE_PILLS: { key: string; label: string }[] = [
   { key: "all", label: "All" },
@@ -43,11 +47,13 @@ export default function PickNextHub({
   onClose,
   runId,
   frontierStep,
+  rulesConfig,
 }: {
   open: boolean;
   onClose: () => void;
   runId: string;
   frontierStep: RunStep;
+  rulesConfig: RulesConfig;
 }) {
   const [mode, setMode] = useState<CoStarMode>("or");
   const [selectedActorIds, setSelectedActorIds] = useState<Set<number>>(new Set());
@@ -82,8 +88,26 @@ export default function PickNextHub({
       }),
     enabled: tmdbIds.length > 0,
   });
+  const { data: ratingsMap } = useQuery({
+    queryKey: ["movies", "ratings", "bulk", tmdbIds],
+    queryFn: () =>
+      api.post<Record<string, MovieRatings | null>>("/movies/ratings/bulk", {
+        tmdb_ids: tmdbIds,
+      }),
+    enabled: tmdbIds.length > 0,
+  });
 
   const createStep = useCreateStep(runId);
+  const allowRepeats = allowsMovieRepeats(rulesConfig);
+
+  function ratingSortValue(candidate: DiscoveryCandidate, key: "imdb" | "rt"): number {
+    const ratings = ratingsMap?.[String(candidate.movie_id)];
+    if (!ratings) return -1;
+    const raw = key === "imdb" ? ratings.imdb_rating : ratings.rotten_tomatoes;
+    if (!raw) return -1;
+    const parsed = Number.parseFloat(raw.replace("%", ""));
+    return Number.isNaN(parsed) ? -1 : parsed;
+  }
 
   const filtered = useMemo(() => {
     let list = candidates ?? [];
@@ -115,12 +139,13 @@ export default function PickNextHub({
       );
     }
 
-    return [...list].sort((a, b) =>
-      sortBy === "year"
-        ? (b.release_year ?? 0) - (a.release_year ?? 0)
-        : (b.popularity ?? 0) - (a.popularity ?? 0),
-    );
-  }, [candidates, selectedActorIds, mode, genreId, decadeKey, search, sortBy]);
+    return [...list].sort((a, b) => {
+      if (sortBy === "year") return (b.release_year ?? 0) - (a.release_year ?? 0);
+      if (sortBy === "popularity") return (b.popularity ?? 0) - (a.popularity ?? 0);
+      return ratingSortValue(b, sortBy === "imdb" ? "imdb" : "rt") - ratingSortValue(a, sortBy === "imdb" ? "imdb" : "rt");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidates, selectedActorIds, mode, genreId, decadeKey, search, sortBy, ratingsMap]);
 
   function toggleActor(actorId: number) {
     setSelectedActorIds((prev) => {
@@ -247,6 +272,8 @@ export default function PickNextHub({
           >
             <option value="year">Sort: Newest First</option>
             <option value="popularity">Sort: Popularity</option>
+            <option value="imdb">Sort: IMDb Rating (Highest First)</option>
+            <option value="rt">Sort: Rotten Tomatoes (Highest First)</option>
           </select>
         </div>
 
@@ -287,6 +314,8 @@ export default function PickNextHub({
                 key={candidate.movie_id}
                 candidate={candidate}
                 genres={genres}
+                ratings={ratingsMap?.[String(candidate.movie_id)]}
+                allowRepeats={allowRepeats}
                 onServer={jellyfinStatus?.[String(candidate.movie_id)]?.on_server}
                 pending={pendingMovieId === candidate.movie_id && createStep.isPending}
                 onQueue={() => handleAdd(candidate, false)}
@@ -303,6 +332,8 @@ export default function PickNextHub({
 function CandidateCard({
   candidate,
   genres,
+  ratings,
+  allowRepeats,
   onServer,
   pending,
   onQueue,
@@ -310,6 +341,8 @@ function CandidateCard({
 }: {
   candidate: DiscoveryCandidate;
   genres: GenreOut[] | undefined;
+  ratings: MovieRatings | null | undefined;
+  allowRepeats: boolean;
   onServer: boolean | null | undefined;
   pending: boolean;
   onQueue: () => void;
@@ -318,6 +351,7 @@ function CandidateCard({
   const genreNames = candidate.genre_ids
     .map((id) => genres?.find((g) => g.id === id)?.name)
     .filter((name): name is string => !!name);
+  const isLockedDuplicate = candidate.already_in_run && !allowRepeats;
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-app-border bg-app-surface p-2.5">
@@ -331,6 +365,7 @@ function CandidateCard({
       <div>
         <p className="line-clamp-2 text-xs font-medium text-zinc-100">{candidate.title}</p>
         <p className="text-[10px] text-zinc-500">{candidate.release_year ?? "—"}</p>
+        <RatingBadges ratings={ratings} />
         {genreNames.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {genreNames.slice(0, 2).map((name) => (
@@ -347,11 +382,18 @@ function CandidateCard({
 
       <ConnectionBadge connections={candidate.connections} />
 
-      {candidate.already_in_run ? (
-        <span className="rounded-md bg-app-surface-hover px-2 py-1.5 text-center text-[10px] font-medium text-zinc-500">
-          Already in Chain
+      {candidate.already_in_run && (
+        <span
+          className={cn(
+            "rounded-md px-2 py-1 text-center text-[10px] font-medium",
+            isLockedDuplicate ? "bg-red-950 text-red-300" : "bg-app-surface-hover text-zinc-500",
+          )}
+        >
+          {isLockedDuplicate ? "Locked: " : ""}Already in Run (Step {candidate.existing_step_number})
         </span>
-      ) : (
+      )}
+
+      {isLockedDuplicate ? null : (
         <div className="flex gap-1.5">
           <button
             type="button"

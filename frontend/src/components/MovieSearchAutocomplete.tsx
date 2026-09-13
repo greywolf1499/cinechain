@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Search, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { AlertTriangle, GitBranch, Loader2, Lock, Search, X } from "lucide-react";
 import { api } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
+import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
 import { useCreateStep } from "../lib/queries";
 import MoviePoster from "./MoviePoster";
-import type { MovieSummary, ValidationResult } from "../types/api";
+import type { MovieSummary, RulesConfig, RunStep, ValidationResult } from "../types/api";
 
 interface MovieSearchAutocompleteProps {
   onSelect?: (movie: MovieSummary) => void;
@@ -13,6 +15,8 @@ interface MovieSearchAutocompleteProps {
   /** When provided, picking a movie validates against the run's tail step and logs it. */
   runId?: string;
   tailMovieId?: number;
+  rulesConfig?: RulesConfig;
+  steps?: RunStep[];
   onLogged?: () => void;
 }
 
@@ -21,8 +25,11 @@ export default function MovieSearchAutocomplete({
   placeholder = "Search for a film...",
   runId,
   tailMovieId,
+  rulesConfig,
+  steps = [],
   onLogged,
 }: MovieSearchAutocompleteProps) {
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebouncedValue(query, 300);
   const [picked, setPicked] = useState<MovieSummary | null>(null);
@@ -101,6 +108,12 @@ export default function MovieSearchAutocomplete({
   }
 
   if (picked) {
+    const existingStepNumber = findExistingStepNumber(steps, picked.tmdb_id);
+    const allowRepeats = rulesConfig ? allowsMovieRepeats(rulesConfig) : true;
+    const isLockedDuplicate = existingStepNumber !== null && !allowRepeats;
+    const wildcardsRemaining = rulesConfig?.wildcards_budget ?? -1;
+    const wildcardsExhausted = wildcardsRemaining !== -1 && wildcardsRemaining <= 0;
+
     return (
       <div className="rounded-lg border border-app-border bg-app-bg p-3">
         <div className="flex items-start gap-3">
@@ -128,17 +141,29 @@ export default function MovieSearchAutocomplete({
               </p>
             )}
 
-            {runId && !validating && validation && (
+            {isLockedDuplicate && (
+              <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-red-400">
+                <Lock className="h-3 w-3" /> Already in Run (Step {existingStepNumber})
+              </p>
+            )}
+
+            {runId && !validating && !isLockedDuplicate && validation && (
               <div className="mt-2">
                 {validation.valid ? (
                   <div className="text-xs text-emerald-400">
                     {validation.connections.length > 0
-                      ? `Connected via ${validation.connections.map((c) => c.actor_name).join(", ")}`
+                      ? `Connects to Frontier via ${validation.connections.map((c) => c.actor_name).join(", ")}`
                       : "First step - nothing to validate yet."}
                   </div>
+                ) : wildcardsExhausted ? (
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-red-400">
+                    <Lock className="h-3 w-3" /> No link to frontier & 0 wildcards remaining
+                  </div>
                 ) : (
-                  <div className="text-xs text-amber-400">
-                    {validation.reason ?? "No shared cast found"}
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-amber-400">
+                    <AlertTriangle className="h-3 w-3" />
+                    {validation.reason ?? "No shared cast found"} - using this will consume 1 of{" "}
+                    {wildcardsRemaining === -1 ? "unlimited" : wildcardsRemaining} remaining wildcards.
                   </div>
                 )}
 
@@ -172,15 +197,26 @@ export default function MovieSearchAutocomplete({
                   />
                 )}
 
-                <div className="mt-2 flex gap-2">
+                <div className="mt-2 flex flex-wrap gap-2">
                   {validation.valid ? (
                     <LogButton pending={createStep.isPending} onClick={() => handleLog(false)}>
                       Log this movie
                     </LogButton>
                   ) : (
-                    <LogButton pending={createStep.isPending} onClick={() => handleLog(true)}>
-                      Log anyway (break chain)
-                    </LogButton>
+                    !wildcardsExhausted && (
+                      <LogButton pending={createStep.isPending} onClick={() => handleLog(true)}>
+                        Confirm Wildcard Jump
+                      </LogButton>
+                    )
+                  )}
+                  {!validation.valid && tailMovieId !== undefined && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/bridge?from=${tailMovieId}&to=${picked.tmdb_id}`)}
+                      className="flex items-center gap-1 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover"
+                    >
+                      <GitBranch className="h-3 w-3" /> Build Bridge to Here
+                    </button>
                   )}
                 </div>
               </div>

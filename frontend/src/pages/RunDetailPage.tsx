@@ -81,7 +81,7 @@ export default function RunDetailPage() {
           {/* Right rail: renders first (top) on mobile via source order; pinned
               to the right column on desktop via explicit grid placement. */}
           <div className="order-1 flex flex-col gap-5 lg:order-2 lg:col-span-5 lg:col-start-8 lg:sticky lg:top-20 lg:self-start xl:col-span-4 xl:col-start-9">
-            <ActiveFrontierCard runId={run.id} tailStep={lastStep} />
+            <ActiveFrontierCard runId={run.id} tailStep={lastStep} rulesConfig={run.rules_config} steps={run.steps} />
             <MiniPassportWidget stats={stats} rules={run.rules_config} />
             <RulesSummaryCard rules={run.rules_config} />
           </div>
@@ -107,6 +107,11 @@ export default function RunDetailPage() {
           actorProfilePath={activeActor.profilePath}
           actorCharacterName={activeActor.characterName}
           runId={run.id}
+          frontierMovieId={lastStep?.movie_id}
+          frontierMovieTitle={lastStep?.movie_title}
+          isBrowsingFrontier={activeActor.sourceMovieId === lastStep?.movie_id}
+          rulesConfig={run.rules_config}
+          steps={run.steps}
         />
       )}
 
@@ -142,7 +147,17 @@ export default function RunDetailPage() {
   );
 }
 
-function ActiveFrontierCard({ runId, tailStep }: { runId: string; tailStep: RunStep | undefined }) {
+function ActiveFrontierCard({
+  runId,
+  tailStep,
+  rulesConfig,
+  steps,
+}: {
+  runId: string;
+  tailStep: RunStep | undefined;
+  rulesConfig: RulesConfig;
+  steps: RunStep[];
+}) {
   const navigate = useNavigate();
   const [showHub, setShowHub] = useState(false);
   const [showDirectSearch, setShowDirectSearch] = useState(false);
@@ -197,6 +212,8 @@ function ActiveFrontierCard({ runId, tailStep }: { runId: string; tailStep: RunS
           <MovieSearchAutocomplete
             runId={runId}
             tailMovieId={tailStep?.movie_id}
+            rulesConfig={rulesConfig}
+            steps={steps}
             onLogged={() => setShowDirectSearch(false)}
           />
         </div>
@@ -208,6 +225,7 @@ function ActiveFrontierCard({ runId, tailStep }: { runId: string; tailStep: RunS
           onClose={() => setShowHub(false)}
           runId={runId}
           frontierStep={tailStep}
+          rulesConfig={rulesConfig}
         />
       )}
     </div>

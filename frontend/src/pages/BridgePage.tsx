@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Flag,
@@ -41,6 +41,7 @@ const DEFAULT_DEPTH = 4;
 
 export default function BridgePage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { data: activeRuns } = useRuns("active");
   const [selectedRunId, setSelectedRunId] = useState("");
   const { data: selectedRun } = useRun(selectedRunId || undefined);
@@ -71,8 +72,27 @@ export default function BridgePage() {
 
   const tailStep = selectedRun?.steps[selectedRun.steps.length - 1];
 
-  // Default the starting movie to the selected run's last logged film.
+  // "Build Bridge to Here" shortcut (from Fork-in-the-Road / search guards)
+  // deep-links here with ?from=&to= - takes priority over the tail-step default.
+  const prefilledFromQuery = useRef(false);
   useEffect(() => {
+    const fromId = searchParams.get("from");
+    const toId = searchParams.get("to");
+    if (!fromId && !toId) return;
+    prefilledFromQuery.current = true;
+    if (fromId) {
+      api.get<MovieSummary>(`/movies/${fromId}`).then(setStartMovie).catch(() => {});
+    }
+    if (toId) {
+      api.get<MovieSummary>(`/movies/${toId}`).then(setTargetMovie).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Default the starting movie to the selected run's last logged film -
+  // skipped when a ?from= query param already set it explicitly.
+  useEffect(() => {
+    if (prefilledFromQuery.current) return;
     if (tailStep) {
       setStartMovie({
         tmdb_id: tailStep.movie_id,

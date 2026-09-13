@@ -16,6 +16,7 @@ from app.api.routes_settings import router as settings_router
 from app.api.routes_system import router as system_router
 from app.api.routes_users import router as users_router
 from app.config import get_settings
+from app.integrations.omdb import OMDbClient
 from app.services.tmdb import TMDBClient
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
     async with httpx.AsyncClient(timeout=15.0) as http_client:
         app.state.http_client = http_client
         app.state.tmdb = TMDBClient(http_client)
+        app.state.omdb = OMDbClient(http_client)
         yield
 
 

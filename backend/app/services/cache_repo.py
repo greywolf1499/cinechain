@@ -20,8 +20,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.config import get_settings
-from app.models.cache import CachedActor, CachedGenre, CachedMovie, CachedMovieCast
+from app.integrations.omdb import OMDbClient, OMDbRatings
+from app.models.cache import (
+    CachedActor,
+    CachedGenre,
+    CachedMovie,
+    CachedMovieCast,
+    CachedMovieRating,
+)
 from app.services.tmdb import TMDBCastMember, TMDBClient, TMDBGenre, TMDBMovie, TMDBPersonCredit
+from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
 
 
@@ -263,6 +271,24 @@ class CacheRepo:
         self.session.commit()
         return rows
 
+    # --- OMDb ratings (JIT, keyed by our own tmdb movie id) ---
+
+    def get_cached_ratings(self, movie_id: int) -> CachedMovieRating | None:
+        return self.session.get(CachedMovieRating, movie_id)
+
+    def upsert_ratings(self, movie_id: int, ratings: OMDbRatings | None) -> CachedMovieRating:
+        row = self.session.get(CachedMovieRating, movie_id)
+        if row is None:
+            row = CachedMovieRating(movie_id=movie_id)
+        row.imdb_rating = ratings["imdb_rating"] if ratings else None
+        row.rotten_tomatoes = ratings["rotten_tomatoes"] if ratings else None
+        row.metacritic = ratings["metacritic"] if ratings else None
+        row.fetched_at = utcnow()
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
 
 # --- async read-through orchestration ---
 
@@ -317,3 +343,20 @@ async def get_cast_entry(session: Session, movie_id: int, actor_id: int) -> Cast
     has already populated cached_movie_cast for this pair. Never calls TMDB."""
     repo = CacheRepo(session)
     return await anyio.to_thread.run_sync(repo.get_cast_entry, movie_id, actor_id)
+
+
+async def get_movie_ratings(
+    session: Session, tmdb: TMDBClient, omdb: OMDbClient, tmdb_id: int
+) -> CachedMovieRating | None:
+    """JIT read-through for OMDb ratings. Returns None (no HTTP call at all)
+    whenever OMDb isn't configured, so this is a no-op for installs without an
+    OMDb key - never blocks/slows down a plain movie-detail fetch."""
+    if not omdb.enabled:  # cheap short-circuit, avoids a wasted movie lookup
+        return None
+    repo = CacheRepo(session)
+    cached = await anyio.to_thread.run_sync(repo.get_cached_ratings, tmdb_id)
+    if cached is not None:
+        return cached
+    movie = await get_movie(session, tmdb, tmdb_id)
+    ratings = await omdb.get_ratings_by_title(movie.title, parse_release_year(movie.release_date))
+    return await anyio.to_thread.run_sync(repo.upsert_ratings, tmdb_id, ratings)

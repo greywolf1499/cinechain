@@ -4,10 +4,13 @@ import httpx
 import respx
 from sqlmodel import Session, SQLModel
 
+from app.config import Settings
+from app.integrations.omdb import OMDbClient
 from app.services import cache_repo
 from app.services.tmdb import TMDBClient
 
 TMDB_BASE = "https://api.themoviedb.org/3"
+OMDB_BASE = "https://www.omdbapi.com/"
 
 
 def _session(config_dir) -> Session:
@@ -147,3 +150,61 @@ async def test_actor_credits_upsert_movie_stubs_without_marking_cast_fetched(con
             # Second call for the same actor must not re-hit TMDB.
             await cache_repo.get_actor_credits(session, tmdb, 500)
         assert credits_route.call_count == 1
+
+
+async def test_movie_ratings_skipped_entirely_when_omdb_not_configured(config_dir):
+    """No OMDb key configured -> zero HTTP calls, not even a movie lookup."""
+    with _session(config_dir) as session, respx.mock:
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            omdb = OMDbClient(client, Settings(omdb_api_key=""))
+            ratings = await cache_repo.get_movie_ratings(session, tmdb, omdb, 603)
+
+    assert ratings is None
+
+
+async def test_movie_ratings_cached_after_first_fetch_zero_http_on_repeat(config_dir):
+    with _session(config_dir) as session, respx.mock:
+        movie_route = respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 136,
+                    "genres": [],
+                },
+            )
+        )
+        omdb_route = respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "Response": "True",
+                    "imdbRating": "8.7",
+                    "Ratings": [{"Source": "Rotten Tomatoes", "Value": "87%"}],
+                },
+            )
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            omdb = OMDbClient(client, Settings(omdb_api_key="test-key"))
+
+            ratings = await cache_repo.get_movie_ratings(session, tmdb, omdb, 603)
+            assert ratings.imdb_rating == "8.7"
+            assert ratings.rotten_tomatoes == "87%"
+            assert movie_route.call_count == 1
+            assert omdb_route.call_count == 1
+
+            # Second call must hit SQLite only.
+            ratings_again = await cache_repo.get_movie_ratings(session, tmdb, omdb, 603)
+
+        assert ratings_again.imdb_rating == "8.7"
+        assert movie_route.call_count == 1
+        assert omdb_route.call_count == 1

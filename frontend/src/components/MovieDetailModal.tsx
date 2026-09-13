@@ -4,6 +4,7 @@ import { Check, Loader2, Trash2, User } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import MovieCastStrip from "./MovieCastStrip";
+import RatingBadges from "./RatingBadges";
 import { api } from "../lib/api";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
@@ -90,6 +91,9 @@ export default function MovieDetailModal({
               {step.movie_release_year ?? "—"}
               {movie?.runtime ? ` · ${movie.runtime} min` : ""}
             </p>
+            <div className="mt-1.5">
+              <RatingBadges ratings={movie?.ratings} />
+            </div>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {countries.map((country) => (
                 <span

@@ -2,6 +2,8 @@ from datetime import datetime
 
 from sqlmodel import JSON, Column, Field, SQLModel
 
+from app.utils.ids import utcnow
+
 
 class CachedMovie(SQLModel, table=True):
     __tablename__ = "cached_movies"
@@ -47,3 +49,18 @@ class CachedGenre(SQLModel, table=True):
 
     id: int = Field(primary_key=True)
     name: str
+
+
+class CachedMovieRating(SQLModel, table=True):
+    """JIT-cached OMDb ratings for a movie. `fetched_at` distinguishes a
+    genuine cache hit (even if OMDb had nothing for that title) from never
+    having been queried at all."""
+
+    __tablename__ = "cached_movie_ratings"
+
+    movie_id: int = Field(
+        foreign_key="cached_movies.tmdb_id", primary_key=True)
+    imdb_rating: str | None = None
+    rotten_tomatoes: str | None = None
+    metacritic: str | None = None
+    fetched_at: datetime = Field(default_factory=utcnow)

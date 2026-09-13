@@ -489,6 +489,15 @@ async def discover_next_movies(
     logged_movie_ids = {
         step.movie_id for step in session.exec(select(RunStep).where(RunStep.run_id == run.id)).all()
     }
+    ordered_steps = session.exec(
+        select(RunStep).where(RunStep.run_id ==
+                              run.id).order_by(RunStep.logged_at)
+    ).all()
+    step_number_by_movie_id: dict[int, int] = {}
+    for index, step in enumerate(ordered_steps):
+        step_number_by_movie_id.setdefault(step.movie_id, index + 1)
     for candidate in candidates:
         candidate.already_in_run = candidate.movie_id in logged_movie_ids
+        candidate.existing_step_number = step_number_by_movie_id.get(
+            candidate.movie_id)
     return candidates

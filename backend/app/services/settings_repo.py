@@ -13,8 +13,9 @@ from sqlmodel import Session, select
 from app.models.system import SystemSetting
 from app.utils.ids import utcnow
 
-# The only fields exposed for override in Phase 10.1 - never store arbitrary keys.
-OVERRIDABLE_KEYS = ("tmdb_api_key", "jellyfin_url", "jellyfin_api_key")
+# The only fields exposed for override - never store arbitrary keys.
+OVERRIDABLE_KEYS = ("tmdb_api_key", "jellyfin_url",
+                    "jellyfin_api_key", "omdb_api_key")
 
 
 def get_overrides(session: Session) -> dict[str, str]:

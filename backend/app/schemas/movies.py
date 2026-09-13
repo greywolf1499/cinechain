@@ -9,11 +9,18 @@ class MovieSummary(BaseModel):
     origin_country: str | None = None
 
 
+class MovieRatings(BaseModel):
+    imdb_rating: str | None = None
+    rotten_tomatoes: str | None = None
+    metacritic: str | None = None
+
+
 class MovieDetail(MovieSummary):
     overview: str | None = None
     runtime: int | None = None
     original_language: str | None = None
     genre_ids: list[int] = []
+    ratings: MovieRatings | None = None
 
 
 class CastMember(BaseModel):

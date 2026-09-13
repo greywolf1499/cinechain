@@ -85,6 +85,13 @@ export interface MovieDetail extends MovieSummary {
 	runtime: number | null;
 	original_language: string | null;
 	genre_ids: number[];
+	ratings: MovieRatings | null;
+}
+
+export interface MovieRatings {
+	imdb_rating: string | null;
+	rotten_tomatoes: string | null;
+	metacritic: string | null;
 }
 
 export interface CastMember {
@@ -179,6 +186,7 @@ export interface DiscoveryCandidate {
 	popularity: number | null;
 	connections: DiscoveryConnection[];
 	already_in_run: boolean;
+	existing_step_number: number | null;
 }
 
 // --- integrations (schemas/integrations.py) ---
@@ -221,6 +229,8 @@ export interface IntegrationConfig {
 	jellyfin_url: string;
 	jellyfin_configured: boolean;
 	jellyfin_api_key_masked: string | null;
+	omdb_configured: boolean;
+	omdb_api_key_masked: string | null;
 }
 
 export interface ConnectivityTestResult {

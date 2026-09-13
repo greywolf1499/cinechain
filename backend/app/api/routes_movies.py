@@ -4,12 +4,19 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from app.api.deps import get_current_user, get_tmdb_client
+from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client
 from app.db import get_session
+from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie
 from app.models.user import User
 from app.schemas.engine import SuggestionFilters
-from app.schemas.movies import CastMember, MovieDetail, MovieSearchResponse, MovieSummary
+from app.schemas.movies import (
+    CastMember,
+    MovieDetail,
+    MovieRatings,
+    MovieSearchResponse,
+    MovieSummary,
+)
 from app.services import cache_repo
 from app.services.cache_repo import CastEntry
 from app.services.movie_filters import passes_filters
@@ -24,6 +31,10 @@ class GenreOut(BaseModel):
     name: str
 
 
+class BulkRatingsRequest(BaseModel):
+    tmdb_ids: list[int]
+
+
 def _movie_to_summary(movie: CachedMovie) -> MovieSummary:
     return MovieSummary(
         tmdb_id=movie.tmdb_id,
@@ -34,13 +45,14 @@ def _movie_to_summary(movie: CachedMovie) -> MovieSummary:
     )
 
 
-def _movie_to_detail(movie: CachedMovie) -> MovieDetail:
+def _movie_to_detail(movie: CachedMovie, ratings: MovieRatings | None = None) -> MovieDetail:
     return MovieDetail(
         **_movie_to_summary(movie).model_dump(),
         overview=movie.overview,
         runtime=movie.runtime,
         original_language=movie.original_language,
         genre_ids=movie.genre_ids or [],
+        ratings=ratings,
     )
 
 
@@ -96,10 +108,62 @@ async def get_movie(
     tmdb_id: int,
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
+    omdb: OMDbClient = Depends(get_omdb_client),
     _current_user: User = Depends(get_current_user),
 ) -> MovieDetail:
     movie = await cache_repo.get_movie(session, tmdb, tmdb_id)
-    return _movie_to_detail(movie)
+    rating_row = await cache_repo.get_movie_ratings(session, tmdb, omdb, tmdb_id)
+    ratings = (
+        MovieRatings(
+            imdb_rating=rating_row.imdb_rating,
+            rotten_tomatoes=rating_row.rotten_tomatoes,
+            metacritic=rating_row.metacritic,
+        )
+        if rating_row is not None
+        else None
+    )
+    return _movie_to_detail(movie, ratings)
+
+
+@router.get("/movies/{tmdb_id}/ratings", response_model=MovieRatings | None)
+async def get_movie_ratings(
+    tmdb_id: int,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    omdb: OMDbClient = Depends(get_omdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> MovieRatings | None:
+    rating_row = await cache_repo.get_movie_ratings(session, tmdb, omdb, tmdb_id)
+    if rating_row is None:
+        return None
+    return MovieRatings(
+        imdb_rating=rating_row.imdb_rating,
+        rotten_tomatoes=rating_row.rotten_tomatoes,
+        metacritic=rating_row.metacritic,
+    )
+
+
+@router.post("/movies/ratings/bulk", response_model=dict[str, MovieRatings | None])
+async def get_movie_ratings_bulk(
+    payload: BulkRatingsRequest,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    omdb: OMDbClient = Depends(get_omdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> dict[str, MovieRatings | None]:
+    results: dict[str, MovieRatings | None] = {}
+    for tmdb_id in payload.tmdb_ids:
+        rating_row = await cache_repo.get_movie_ratings(session, tmdb, omdb, tmdb_id)
+        results[str(tmdb_id)] = (
+            MovieRatings(
+                imdb_rating=rating_row.imdb_rating,
+                rotten_tomatoes=rating_row.rotten_tomatoes,
+                metacritic=rating_row.metacritic,
+            )
+            if rating_row is not None
+            else None
+        )
+    return results
 
 
 @router.get("/movies/{tmdb_id}/cast", response_model=list[CastMember])

@@ -19,3 +19,6 @@ class DiscoveryCandidate(BaseModel):
     popularity: float | None = None
     connections: list[DiscoveryConnection] = []
     already_in_run: bool = False
+    # 1-based position in the run's step order, when already_in_run - lets the
+    # frontend show "Already in Run (Step X)" instead of a generic badge.
+    existing_step_number: int | None = None

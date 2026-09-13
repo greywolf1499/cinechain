@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     seerr_url: str = ""
     seerr_api_key: str = ""
 
+    # --- OMDb ratings (optional) ---
+    omdb_api_key: str = ""
+    omdb_api_base: str = "https://www.omdbapi.com/"
+
     # --- Pathfinder budget (Phase 6) ---
     pathfinder_max_depth: int = 5
     pathfinder_cast_limit: int = 15

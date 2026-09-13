@@ -178,6 +178,82 @@ def test_unknown_engine_raises_400():
     assert exc_info.value.status_code == 400
 
 
+async def test_discover_candidates_pools_across_cast_and_tracks_all_connections(config_dir):
+    with _session(config_dir) as session, respx.mock:
+        respx.get(
+            f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Frontier Film"))
+        respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
+            return_value=_credits_response(
+                [
+                    {"id": 10, "name": "Actor X", "profile_path": None,
+                        "character": "Hero", "order": 0},
+                    {"id": 20, "name": "Actor Y", "profile_path": None,
+                        "character": "Sidekick", "order": 1},
+                ]
+            )
+        )
+        respx.get(f"{TMDB_BASE}/person/10/movie_credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 10,
+                    "cast": [
+                        {"id": 2, "title": "Solo Film X", "release_date": "2001-01-01",
+                            "poster_path": None, "character": "X in Solo", "genre_ids": [],
+                            "original_language": "en", "popularity": 5.0},
+                        {"id": 4, "title": "Reunion Film", "release_date": "2010-01-01",
+                            "poster_path": None, "character": "X in Reunion", "genre_ids": [],
+                            "original_language": "en", "popularity": 9.5},
+                    ],
+                },
+            )
+        )
+        respx.get(f"{TMDB_BASE}/person/20/movie_credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 20,
+                    "cast": [
+                        {"id": 3, "title": "Solo Film Y", "release_date": "2003-01-01",
+                            "poster_path": None, "character": "Y in Solo", "genre_ids": [],
+                            "original_language": "en"},
+                        {"id": 4, "title": "Reunion Film", "release_date": "2010-01-01",
+                            "poster_path": None, "character": "Y in Reunion", "genre_ids": [],
+                            "original_language": "en"},
+                    ],
+                },
+            )
+        )
+
+        async with httpx.AsyncClient() as client:
+            engine = CineChainEngine(session, TMDBClient(client))
+            or_results = await engine.discover_candidates(frontier_movie_id=1, mode="or")
+            and_results = await engine.discover_candidates(frontier_movie_id=1, mode="and")
+
+    by_id = {c.movie_id: c for c in or_results}
+    assert {2, 3, 4} == set(by_id.keys())
+    assert 1 not in by_id  # never suggest the frontier movie itself
+
+    reunion = by_id[4]
+    assert len(reunion.connections) == 2
+    actor_ids = {c.actor_id for c in reunion.connections}
+    assert actor_ids == {10, 20}
+    by_actor = {c.actor_id: c for c in reunion.connections}
+    assert by_actor[10].character_in_frontier == "Hero"
+    assert by_actor[10].character_in_candidate == "X in Reunion"
+    assert by_actor[20].character_in_frontier == "Sidekick"
+    assert by_actor[20].character_in_candidate == "Y in Reunion"
+    assert reunion.popularity == 9.5
+
+    solo_x = by_id[2]
+    assert len(solo_x.connections) == 1
+    assert solo_x.connections[0].actor_id == 10
+
+    # AND mode narrows to only the true co-star reunion (2+ connections).
+    and_ids = {c.movie_id for c in and_results}
+    assert and_ids == {4}
+
+
 async def test_compute_stats_counts_countries_decades_and_hops(config_dir):
     with _session(config_dir) as session:
         steps = [

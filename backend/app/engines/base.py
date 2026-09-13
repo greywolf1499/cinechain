@@ -9,6 +9,7 @@ from typing import ClassVar
 from sqlmodel import Session
 
 from app.models.run import RunStep
+from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import RunStats, Suggestion, SuggestionFilters, ValidationResult
 from app.services.tmdb import TMDBClient
 
@@ -48,3 +49,18 @@ class BaseChallengeEngine(ABC):
         Event shape (progress/partial/result/error/done) is finalized in
         Phase 6 - this signature only reserves the contract.
         """
+
+    async def discover_candidates(
+        self,
+        frontier_movie_id: int,
+        mode: str = "or",
+        cast_limit: int | None = None,
+    ) -> list[DiscoveryCandidate]:
+        """Unified cast-aggregation "Pick Next" pool (Phase 13) - an OPTIONAL
+        capability, not part of the required Strategy contract (e.g. a future
+        DirectorLadderEngine would aggregate by director, not cast overlap).
+        Concrete engines that support it should override this; the route
+        layer catches NotImplementedError and reports it as an unsupported
+        capability rather than a 500.
+        """
+        raise NotImplementedError

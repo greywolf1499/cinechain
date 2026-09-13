@@ -156,14 +156,28 @@ export default function MovieDetailModal({
               />
             </label>
           ) : (
-            <button
-              type="button"
-              onClick={onRequestMarkWatched}
-              className="flex items-center justify-center gap-1.5 rounded-md bg-accent/10 px-3 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/20"
-            >
-              <Check className="h-3.5 w-3.5" />
-              Mark as Watched
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={updateStep.isPending}
+                onClick={() => updateStep.mutate({ stepId: step.id, watched_at: new Date().toISOString() })}
+                className="flex items-center justify-center gap-1.5 rounded-md bg-accent/10 px-3 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-60"
+              >
+                {updateStep.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Check className="h-3.5 w-3.5" />
+                )}
+                Mark as Watched
+              </button>
+              <button
+                type="button"
+                onClick={onRequestMarkWatched}
+                className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
+              >
+                Backdate...
+              </button>
+            </div>
           )}
 
           <label className="flex flex-col gap-1.5 text-xs font-medium text-zinc-400">

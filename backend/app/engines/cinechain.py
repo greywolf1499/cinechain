@@ -8,6 +8,7 @@ from typing import ClassVar
 
 from app.engines.base import BaseChallengeEngine
 from app.models.run import RunStep
+from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
 from app.schemas.engine import (
     KeystoneActor,
     RunStats,
@@ -32,6 +33,7 @@ class CineChainEngine(BaseChallengeEngine):
         "get_suggestions",
         "compute_stats",
         "solve_bridge",
+        "discover_candidates",
     ]
 
     async def validate_next_step(
@@ -93,6 +95,68 @@ class CineChainEngine(BaseChallengeEngine):
                     connecting_actor_name=member["name"],
                 )
         return list(suggestions.values())
+
+    async def discover_candidates(
+        self,
+        frontier_movie_id: int,
+        mode: str = "or",
+        cast_limit: int | None = None,
+    ) -> list[DiscoveryCandidate]:
+        """Pools every top-billed cast member's filmography into one set of
+        candidates, tracking ALL connecting actors per movie (not just the
+        first found) so the frontend can render "2 Shared Actors" pills and
+        do its own AND/OR-aware actor-chip filtering. `mode="and"` narrows the
+        pool server-side to movies with 2+ connections (true co-star reunions)
+        since that requires the full aggregation this method already does.
+        """
+        cast = await cache_repo.get_movie_cast(
+            self.session, self.tmdb, frontier_movie_id, cast_limit
+        )
+        frontier_character_by_actor = {
+            member["actor_id"]: member["character_name"] for member in cast
+        }
+
+        candidates: dict[int, DiscoveryCandidate] = {}
+        for member in cast:
+            credits_ = await cache_repo.get_actor_credits(
+                self.session, self.tmdb, member["actor_id"]
+            )
+            for movie in credits_:
+                if movie.tmdb_id == frontier_movie_id:
+                    continue
+                candidate = candidates.get(movie.tmdb_id)
+                if candidate is None:
+                    candidate = DiscoveryCandidate(
+                        movie_id=movie.tmdb_id,
+                        title=movie.title,
+                        poster_path=movie.poster_path,
+                        release_year=parse_release_year(movie.release_date),
+                        origin_country=movie.origin_country,
+                        genre_ids=movie.genre_ids or [],
+                        popularity=movie.popularity,
+                    )
+                    candidates[movie.tmdb_id] = candidate
+
+                # Already cached for free - get_actor_credits just upserted this
+                # exact (movie, actor) pairing into cached_movie_cast above.
+                cast_entry = await cache_repo.get_cast_entry(
+                    self.session, movie.tmdb_id, member["actor_id"]
+                )
+                candidate.connections.append(
+                    DiscoveryConnection(
+                        actor_id=member["actor_id"],
+                        actor_name=member["name"],
+                        profile_path=member["profile_path"],
+                        character_in_frontier=frontier_character_by_actor.get(
+                            member["actor_id"]),
+                        character_in_candidate=cast_entry["character_name"] if cast_entry else None,
+                    )
+                )
+
+        results = list(candidates.values())
+        if mode == "and":
+            results = [c for c in results if len(c.connections) >= 2]
+        return results
 
     async def compute_stats(self, steps: list[RunStep]) -> RunStats:
         # Planned-but-not-yet-watched steps haven't actually been experienced,

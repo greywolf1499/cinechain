@@ -16,6 +16,7 @@ import json
 from typing import TypedDict
 
 import anyio
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.config import get_settings
@@ -56,6 +57,7 @@ class CacheRepo:
         row.original_language = movie.get("original_language")
         row.runtime = movie.get("runtime")
         row.genre_ids = movie.get("genre_ids") or []
+        row.popularity = movie.get("popularity")
         self.session.add(row)
         self.session.commit()
         self.session.refresh(row)
@@ -71,20 +73,48 @@ class CacheRepo:
         row = self.session.get(CachedMovie, credit["id"])
         if row is not None:
             return row
-        row = CachedMovie(
-            tmdb_id=credit["id"],
-            title=credit.get("title") or "",
-            release_date=credit.get("release_date"),
-            poster_path=credit.get("poster_path"),
-            original_language=credit.get("original_language"),
-            genre_ids=credit.get("genre_ids") or [],
-        )
-        self.session.add(row)
+        try:
+            # SAVEPOINT: two concurrent requests can both JIT-discover this
+            # exact movie stub for the first time (e.g. the Discovery Hub's
+            # cast fetch and candidate-pool fetch racing on the same frontier
+            # movie) - fall back to whichever row wins instead of a 500.
+            with self.session.begin_nested():
+                row = CachedMovie(
+                    tmdb_id=credit["id"],
+                    title=credit.get("title") or "",
+                    release_date=credit.get("release_date"),
+                    poster_path=credit.get("poster_path"),
+                    original_language=credit.get("original_language"),
+                    genre_ids=credit.get("genre_ids") or [],
+                    popularity=credit.get("popularity"),
+                )
+                self.session.add(row)
+                self.session.flush()
+        except IntegrityError:
+            row = self.session.get(CachedMovie, credit["id"])
+            return row
         self.session.commit()
         self.session.refresh(row)
         return row
 
     # --- cast (top-N billing for a given movie) ---
+
+    def get_cast_entry(self, movie_id: int, actor_id: int) -> CastEntry | None:
+        """Pure cache read (no TMDB call) - a specific (movie, actor) cast row,
+        however it got there (top-billing fetch OR an actor's filmography fetch)."""
+        cast_row = self.session.get(CachedMovieCast, (movie_id, actor_id))
+        if cast_row is None:
+            return None
+        actor = self.session.get(CachedActor, actor_id)
+        if actor is None:
+            return None
+        return CastEntry(
+            actor_id=actor.tmdb_id,
+            name=actor.name,
+            profile_path=actor.profile_path,
+            character_name=cast_row.character_name,
+            cast_order=cast_row.cast_order,
+        )
 
     def get_cached_cast(self, movie_id: int, limit: int) -> list[CastEntry] | None:
         movie = self.session.get(CachedMovie, movie_id)
@@ -117,10 +147,24 @@ class CacheRepo:
         for member in top:
             actor = self.session.get(CachedActor, member["id"])
             if actor is None:
-                actor = CachedActor(tmdb_id=member["id"], name=member["name"])
+                try:
+                    # SAVEPOINT: same race as upsert_movie_stub, but for the
+                    # actor row - two requests can both JIT-cache this movie's
+                    # cast for the first time concurrently.
+                    with self.session.begin_nested():
+                        actor = CachedActor(
+                            tmdb_id=member["id"], name=member["name"],
+                            profile_path=member.get("profile_path"),
+                        )
+                        self.session.add(actor)
+                        self.session.flush()
+                except IntegrityError:
+                    actor = self.session.get(CachedActor, member["id"])
+                    actor.name = member["name"]
+                    actor.profile_path = member.get("profile_path")
             else:
                 actor.name = member["name"]
-            actor.profile_path = member.get("profile_path")
+                actor.profile_path = member.get("profile_path")
             self.session.add(actor)
 
             cast_row = self.session.get(
@@ -170,8 +214,16 @@ class CacheRepo:
         if actor is None:
             # We only ever look up credits for actors already seen via a
             # movie's cast, but fall back to a placeholder name just in case.
-            actor = CachedActor(
-                tmdb_id=actor_id, name=f"Unknown actor {actor_id}")
+            # SAVEPOINT-guarded for the same concurrent-first-JIT-fetch race
+            # as upsert_cast/upsert_movie_stub.
+            try:
+                with self.session.begin_nested():
+                    actor = CachedActor(
+                        tmdb_id=actor_id, name=f"Unknown actor {actor_id}")
+                    self.session.add(actor)
+                    self.session.flush()
+            except IntegrityError:
+                actor = self.session.get(CachedActor, actor_id)
         actor.credits_fetched_at = utcnow()
         self.session.add(actor)
 
@@ -258,3 +310,10 @@ async def get_genres(session: Session, tmdb: TMDBClient) -> list[CachedGenre]:
         return cached
     genres = await tmdb.get_genres()
     return await anyio.to_thread.run_sync(repo.upsert_genres, genres)
+
+
+async def get_cast_entry(session: Session, movie_id: int, actor_id: int) -> CastEntry | None:
+    """Cache-only lookup - only meaningful after get_movie_cast/get_actor_credits
+    has already populated cached_movie_cast for this pair. Never calls TMDB."""
+    repo = CacheRepo(session)
+    return await anyio.to_thread.run_sync(repo.get_cast_entry, movie_id, actor_id)

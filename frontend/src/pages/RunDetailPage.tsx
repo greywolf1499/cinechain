@@ -6,6 +6,7 @@ import ForkInTheRoadModal from "../components/ForkInTheRoadModal";
 import Modal from "../components/Modal";
 import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
+import PickNextHub from "../components/PickNextHub";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
 import { isoToFlagEmoji } from "../lib/countries";
@@ -143,7 +144,8 @@ export default function RunDetailPage() {
 
 function ActiveFrontierCard({ runId, tailStep }: { runId: string; tailStep: RunStep | undefined }) {
   const navigate = useNavigate();
-  const [showPicker, setShowPicker] = useState(false);
+  const [showHub, setShowHub] = useState(false);
+  const [showDirectSearch, setShowDirectSearch] = useState(false);
 
   return (
     <div className="rounded-xl border border-app-border bg-app-surface p-4">
@@ -166,8 +168,9 @@ function ActiveFrontierCard({ runId, tailStep }: { runId: string; tailStep: RunS
       <div className="flex flex-col gap-2">
         <button
           type="button"
-          onClick={() => setShowPicker((v) => !v)}
-          className="flex items-center justify-center gap-1.5 rounded-md bg-accent px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong"
+          onClick={() => setShowHub(true)}
+          disabled={!tailStep}
+          className="flex items-center justify-center gap-1.5 rounded-md bg-accent px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus className="h-4 w-4" />
           Pick Next Movie
@@ -180,16 +183,32 @@ function ActiveFrontierCard({ runId, tailStep }: { runId: string; tailStep: RunS
           <GitBranch className="h-4 w-4" />
           Bridge Solver
         </button>
+        <button
+          type="button"
+          onClick={() => setShowDirectSearch((v) => !v)}
+          className="text-xs text-zinc-500 transition-colors hover:text-zinc-300"
+        >
+          Or search for a specific film directly
+        </button>
       </div>
 
-      {showPicker && (
+      {showDirectSearch && (
         <div className="mt-4">
           <MovieSearchAutocomplete
             runId={runId}
             tailMovieId={tailStep?.movie_id}
-            onLogged={() => setShowPicker(false)}
+            onLogged={() => setShowDirectSearch(false)}
           />
         </div>
+      )}
+
+      {showHub && tailStep && (
+        <PickNextHub
+          open={showHub}
+          onClose={() => setShowHub(false)}
+          runId={runId}
+          frontierStep={tailStep}
+        />
       )}
     </div>
   );

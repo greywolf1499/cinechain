@@ -15,6 +15,8 @@ class CachedMovie(SQLModel, table=True):
     original_language: str | None = None
     runtime: int | None = None
     genre_ids: list[int] | None = Field(default=None, sa_column=Column(JSON))
+    # TMDB's popularity score - display/sort only, never a filter
+    popularity: float | None = None
     # Completeness flags: distinguish "no cast" from "cast not yet fetched".
     cast_fetched_at: datetime | None = None
 

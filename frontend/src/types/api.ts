@@ -159,6 +159,28 @@ export interface EngineMeta {
 	capabilities: string[];
 }
 
+// --- discovery (schemas/discovery.py, Phase 13) ---
+
+export interface DiscoveryConnection {
+	actor_id: number;
+	actor_name: string;
+	profile_path: string | null;
+	character_in_frontier: string | null;
+	character_in_candidate: string | null;
+}
+
+export interface DiscoveryCandidate {
+	movie_id: number;
+	title: string;
+	poster_path: string | null;
+	release_year: number | null;
+	origin_country: string | null;
+	genre_ids: number[];
+	popularity: number | null;
+	connections: DiscoveryConnection[];
+	already_in_run: boolean;
+}
+
 // --- integrations (schemas/integrations.py) ---
 
 export interface JellyfinItemSummary {

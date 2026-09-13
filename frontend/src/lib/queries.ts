@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type {
 	CacheStats,
+	DiscoveryCandidate,
 	Run,
 	RunDetail,
 	RunStats,
@@ -17,6 +18,8 @@ export const queryKeys = {
 	run: (id: string) => ["runs", id] as const,
 	runStats: (id: string) => ["runs", id, "stats"] as const,
 	cacheStats: ["system", "cache-stats"] as const,
+	discover: (runId: string, frontierMovieId: number, mode: "or" | "and") =>
+		["runs", runId, "discover", frontierMovieId, mode] as const,
 };
 
 export function useUsers() {
@@ -56,6 +59,21 @@ export function useCacheStats() {
 	return useQuery({
 		queryKey: queryKeys.cacheStats,
 		queryFn: () => api.get<CacheStats>("/system/cache/stats"),
+	});
+}
+
+export function useDiscoverCandidates(
+	runId: string,
+	frontierMovieId: number | undefined,
+	mode: "or" | "and",
+) {
+	return useQuery({
+		queryKey: queryKeys.discover(runId, frontierMovieId ?? 0, mode),
+		queryFn: () =>
+			api.get<DiscoveryCandidate[]>(
+				`/runs/${runId}/discover?frontier_movie_id=${frontierMovieId}&mode=${mode}`,
+			),
+		enabled: !!frontierMovieId,
 	});
 }
 

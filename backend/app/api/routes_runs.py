@@ -7,6 +7,7 @@ from app.engines.registry import get_engine
 from app.models.cache import CachedMovie
 from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
 from app.models.user import User
+from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import RunStats, Suggestion, SuggestionFilters
 from app.schemas.runs import (
     MarkWatchedRequest,
@@ -387,6 +388,11 @@ def update_step(
         step.transition_metadata = payload.transition_metadata
     if payload.watched_at is not None:
         step.watched_at = payload.watched_at
+        # Setting a watched date IS the act of marking it watched - keep the
+        # 1-click "Mark as Watched" quick action (which PATCHes only
+        # watched_at, not status) from leaving stale "planned" state behind.
+        if step.status == "planned":
+            step.status = "watched"
     session.add(step)
     session.commit()
     session.refresh(step)
@@ -450,3 +456,39 @@ async def get_run_stats(
     )
     engine = get_engine(run.game_type, session, tmdb)
     return await engine.compute_stats(steps)
+
+
+@router.get("/{run_id}/discover", response_model=list[DiscoveryCandidate])
+async def discover_next_movies(
+    frontier_movie_id: int = Query(...),
+    mode: str = Query(default="or", pattern="^(or|and)$"),
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> list[DiscoveryCandidate]:
+    """Unified "Pick Next" pool: every top-billed cast member's filmography,
+    pooled into one set of candidates (Phase 13). Movies already logged in
+    this run are NOT excluded from the pool - they're flagged
+    `already_in_run` instead, so the frontend can show/disable them rather
+    than silently hiding them.
+    """
+    engine = get_engine(run.game_type, session, tmdb)
+    rules = _run_rules(run)
+    try:
+        candidates = await engine.discover_candidates(
+            frontier_movie_id=frontier_movie_id,
+            mode=mode,
+            cast_limit=rules.get("max_cast_order"),
+        )
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Discovery is not supported for game_type '{run.game_type}'",
+        ) from None
+
+    logged_movie_ids = {
+        step.movie_id for step in session.exec(select(RunStep).where(RunStep.run_id == run.id)).all()
+    }
+    for candidate in candidates:
+        candidate.already_in_run = candidate.movie_id in logged_movie_ids
+    return candidates

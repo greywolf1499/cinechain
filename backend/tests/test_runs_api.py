@@ -213,3 +213,78 @@ def test_update_step_accepts_watched_at_and_notes(client):
     body = resp.json()
     assert body["user_notes"] == "Rewatched with commentary"
     assert body["watched_at"].startswith("2020-05-01")
+
+
+def test_update_step_watched_at_promotes_planned_to_watched(client):
+    _register_and_login(client, "alice")
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+    with respx.mock:
+        _mock_movie(603, "The Matrix", "1999-03-30")
+        step = client.post(
+            f"/api/runs/{run_id}/steps", json={"movie_id": 603, "status": "planned"}
+        ).json()
+    assert step["status"] == "planned"
+    assert step["watched_at"] is None
+
+    resp = client.patch(
+        f"/api/runs/{run_id}/steps/{step['id']}",
+        json={"watched_at": "2020-05-01T00:00:00"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "watched"
+    assert body["watched_at"].startswith("2020-05-01")
+
+
+def test_discover_endpoint_flags_movies_already_in_run(client):
+    _register_and_login(client, "alice")
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+    with respx.mock:
+        _mock_movie(1, "Frontier Film")
+        respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 1,
+                    "cast": [{"id": 10, "name": "Actor X",
+                             "profile_path": None, "character": "Hero", "order": 0}],
+                },
+            )
+        )
+        _mock_movie(2, "Already Logged Film")
+        step = client.post(
+            f"/api/runs/{run_id}/steps", json={"movie_id": 1}).json()
+        respx.get(f"{TMDB_BASE}/movie/2/credits").mock(
+            return_value=httpx.Response(200, json={"id": 2, "cast": []})
+        )
+        client.post(
+            f"/api/runs/{run_id}/steps",
+            json={"movie_id": 2, "force": True, "transition_metadata": None},
+        )
+        respx.get(f"{TMDB_BASE}/person/10/movie_credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 10,
+                    "cast": [
+                        {"id": 2, "title": "Already Logged Film", "release_date": "2001-01-01",
+                            "poster_path": None, "character": "Cameo", "genre_ids": []},
+                        {"id": 3, "title": "Brand New Film", "release_date": "2005-01-01",
+                            "poster_path": None, "character": "Lead", "genre_ids": []},
+                    ],
+                },
+            )
+        )
+
+        resp = client.get(
+            f"/api/runs/{run_id}/discover", params={"frontier_movie_id": step["movie_id"]}
+        )
+
+    assert resp.status_code == 200
+    by_id = {c["movie_id"]: c for c in resp.json()}
+    assert by_id[2]["already_in_run"] is True
+    assert by_id[3]["already_in_run"] is False

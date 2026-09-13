@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { Check, Loader2 } from "lucide-react";
 import MoviePoster from "./MoviePoster";
 import ChainLink from "./ChainLink";
 import MarkWatchedModal from "./MarkWatchedModal";
 import MovieDetailModal from "./MovieDetailModal";
 import { cn } from "../lib/cn";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
+import { useUpdateStep } from "../lib/queries";
 import type { ActorClickPayload } from "./actorClickTypes";
 import type { RunStep } from "../types/api";
 
@@ -56,6 +58,7 @@ export default function ChainTimeline({
   });
   const [selectedStep, setSelectedStep] = useState<RunStep | null>(null);
   const [markWatchedStep, setMarkWatchedStep] = useState<RunStep | null>(null);
+  const quickMarkWatched = useUpdateStep(runId);
 
   useEffect(() => {
     localStorage.setItem(ORDER_STORAGE_KEY, order);
@@ -100,6 +103,12 @@ export default function ChainTimeline({
               key={`station-${row.step.id}`}
               step={row.step}
               onOpen={() => setSelectedStep(row.step)}
+              onQuickMarkWatched={() =>
+                quickMarkWatched.mutate({ stepId: row.step.id, watched_at: new Date().toISOString() })
+              }
+              quickMarkWatchedPending={
+                quickMarkWatched.isPending && quickMarkWatched.variables?.stepId === row.step.id
+              }
             />
           ) : (
             <ChainLink
@@ -143,9 +152,20 @@ export default function ChainTimeline({
   );
 }
 
-function StationRow({ step, onOpen }: { step: RunStep; onOpen: () => void }) {
+function StationRow({
+  step,
+  onOpen,
+  onQuickMarkWatched,
+  quickMarkWatchedPending,
+}: {
+  step: RunStep;
+  onOpen: () => void;
+  onQuickMarkWatched: () => void;
+  quickMarkWatchedPending: boolean;
+}) {
   const decade = step.movie_release_year ? Math.floor(step.movie_release_year / 10) * 10 : null;
   const countries = parseOriginCountries(step.movie_origin_country);
+  const isPlanned = step.status === "planned";
 
   return (
     <div className="relative flex items-start gap-3 py-1.5">
@@ -153,70 +173,81 @@ function StationRow({ step, onOpen }: { step: RunStep; onOpen: () => void }) {
         <span
           className={cn(
             "h-3 w-3 rounded-full border-2 border-app-bg",
-            step.status === "watched" ? "bg-accent" : "bg-zinc-600",
+            isPlanned ? "bg-zinc-600" : "bg-accent",
           )}
         />
       </div>
 
-      <button
-        type="button"
-        onClick={onOpen}
+      <div
         className={cn(
-          "flex min-w-0 flex-1 items-start gap-3 rounded-lg border border-app-border bg-app-surface p-2.5 text-left transition-colors hover:border-accent/50",
-          step.status === "planned" && "border-dashed",
+          "flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-app-border bg-app-surface p-2.5",
+          isPlanned && "border-dashed border-accent/40 bg-accent/5",
         )}
       >
-        <div className="relative w-16 shrink-0">
-          <MoviePoster
-            path={step.movie_poster_path}
-            title={step.movie_title}
-            className={cn("w-16", step.status === "planned" && "opacity-60")}
-          />
-          {step.status === "planned" && (
-            <span className="absolute left-1 top-1 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-semibold text-zinc-950">
-              Up Next
-            </span>
-          )}
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-sm font-medium text-zinc-100">{step.movie_title}</p>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
-            <span>{step.movie_release_year ?? "—"}</span>
-            {decade !== null && (
-              <span className="rounded-full bg-app-surface-hover px-1.5 py-0.5 text-zinc-400">
-                {decade}s
-              </span>
-            )}
-            {countries.map((country) => (
-              <span key={country} className="rounded-full bg-app-surface-hover px-1.5 py-0.5">
-                {isoToFlagEmoji(country)} {country}
-              </span>
-            ))}
-            <span
-              className={cn(
-                "rounded-full px-1.5 py-0.5 font-medium",
-                step.status === "watched"
-                  ? "bg-emerald-950 text-emerald-400"
-                  : "bg-app-surface-hover text-zinc-500",
-              )}
-            >
-              {step.status === "watched" ? "Watched" : "Planned"}
-            </span>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex min-w-0 items-start gap-3 text-left transition-opacity hover:opacity-90"
+        >
+          <div className="relative w-16 shrink-0">
+            <MoviePoster
+              path={step.movie_poster_path}
+              title={step.movie_title}
+              className={cn("w-16", isPlanned && "opacity-60")}
+            />
           </div>
 
-          {step.status === "watched" && step.watched_at && (
-            <p className="mt-1 text-[10px] text-zinc-600">
-              Watched {new Date(step.watched_at).toLocaleDateString()}
-            </p>
-          )}
-          {step.user_notes && (
-            <p className="mt-1 line-clamp-2 text-[10px] italic text-zinc-500">“{step.user_notes}”</p>
-          )}
+          <div className="min-w-0 flex-1">
+            <p className="line-clamp-2 text-sm font-medium text-zinc-100">{step.movie_title}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
+              <span>{step.movie_release_year ?? "—"}</span>
+              {decade !== null && (
+                <span className="rounded-full bg-app-surface-hover px-1.5 py-0.5 text-zinc-400">
+                  {decade}s
+                </span>
+              )}
+              {countries.map((country) => (
+                <span key={country} className="rounded-full bg-app-surface-hover px-1.5 py-0.5">
+                  {isoToFlagEmoji(country)} {country}
+                </span>
+              ))}
+              {isPlanned ? (
+                <span className="rounded-full bg-accent/15 px-1.5 py-0.5 font-medium text-accent">
+                  🎟️ Up Next
+                </span>
+              ) : (
+                <span className="rounded-full bg-emerald-950 px-1.5 py-0.5 font-medium text-emerald-400">
+                  {step.watched_at
+                    ? `Watched on ${new Date(step.watched_at).toLocaleDateString()}`
+                    : "Watched"}
+                </span>
+              )}
+            </div>
 
-          <RuleFlags meta={step.transition_metadata} />
-        </div>
-      </button>
+            {step.user_notes && (
+              <p className="mt-1 line-clamp-2 text-[10px] italic text-zinc-500">“{step.user_notes}”</p>
+            )}
+
+            <RuleFlags meta={step.transition_metadata} />
+          </div>
+        </button>
+
+        {isPlanned && (
+          <button
+            type="button"
+            onClick={onQuickMarkWatched}
+            disabled={quickMarkWatchedPending}
+            className="flex w-fit items-center gap-1.5 self-start rounded-md bg-accent/10 px-2.5 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-60"
+          >
+            {quickMarkWatchedPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Check className="h-3 w-3" />
+            )}
+            Mark as Watched
+          </button>
+        )}
+      </div>
     </div>
   );
 }

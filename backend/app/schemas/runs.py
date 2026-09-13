@@ -50,6 +50,7 @@ class MarkWatchedRequest(BaseModel):
 class RunStepUpdate(BaseModel):
     user_notes: str | None = None
     transition_metadata: dict[str, Any] | None = None
+    watched_at: datetime | None = None
 
 
 class RunStepPublic(BaseModel):

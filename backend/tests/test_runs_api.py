@@ -192,3 +192,24 @@ def test_fetching_run_timeline_makes_zero_http_calls(client):
         resp = client.get(f"/api/runs/{run_id}")
         assert resp.status_code == 200
         assert len(resp.json()["steps"]) == 1
+
+
+def test_update_step_accepts_watched_at_and_notes(client):
+    _register_and_login(client, "alice")
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+    with respx.mock:
+        _mock_movie(603, "The Matrix", "1999-03-30")
+        step = client.post(
+            f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
+
+    resp = client.patch(
+        f"/api/runs/{run_id}/steps/{step['id']}",
+        json={"user_notes": "Rewatched with commentary",
+              "watched_at": "2020-05-01T00:00:00"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["user_notes"] == "Rewatched with commentary"
+    assert body["watched_at"].startswith("2020-05-01")

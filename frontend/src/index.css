@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+/* Unlayered (not @layer) so it always wins over Tailwind's layered utilities,
+   regardless of which text-size class a given input/select/textarea has -
+   this is the one thing that reliably stops iOS/WebKit auto-zoom-on-focus. */
+#root {
+	max-width: 100%;
+	overflow-x: clip;
+}
+
+@media (max-width: 640px) {
+	input,
+	select,
+	textarea {
+		font-size: 16px;
+	}
+}
+
 @theme {
 	--color-app-bg: #0f1117;
 	--color-app-surface: #15171d;

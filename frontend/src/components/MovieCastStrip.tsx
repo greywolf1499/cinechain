@@ -37,6 +37,7 @@ export default function MovieCastStrip({
               actorId: member.actor_id,
               actorName: member.name,
               profilePath: member.profile_path,
+              characterName: member.character_name,
             })
           }
           className="overflow-hidden rounded-full border border-app-border transition-transform hover:scale-110 hover:border-accent"

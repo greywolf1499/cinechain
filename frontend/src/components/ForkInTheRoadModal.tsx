@@ -24,6 +24,7 @@ export default function ForkInTheRoadModal({
   actorId,
   actorName,
   actorProfilePath = null,
+  actorCharacterName = null,
   runId,
   onLogged,
 }: {
@@ -32,6 +33,7 @@ export default function ForkInTheRoadModal({
   actorId: number;
   actorName: string;
   actorProfilePath?: string | null;
+  actorCharacterName?: string | null;
   runId: string;
   onLogged?: () => void;
 }) {
@@ -79,7 +81,12 @@ export default function ForkInTheRoadModal({
     await createStep.mutateAsync({
       movie_id: movie.tmdb_id,
       force: true,
-      transition_metadata: { actor_id: actorId, actor_name: actorName, profile_path: actorProfilePath },
+      transition_metadata: {
+        actor_id: actorId,
+        actor_name: actorName,
+        profile_path: actorProfilePath,
+        character_in_from: actorCharacterName,
+      },
     });
     onLogged?.();
     onClose();

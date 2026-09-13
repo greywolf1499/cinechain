@@ -190,3 +190,27 @@ def test_get_person_credits_with_filters(client):
 def test_movies_routes_require_auth(client):
     resp = client.get("/api/movies/search", params={"q": "matrix"})
     assert resp.status_code == 401
+
+
+def test_list_genres(client):
+    _register_and_login(client)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/genre/movie/list").mock(
+            return_value=httpx.Response(
+                200,
+                json={"genres": [{"id": 28, "name": "Action"},
+                                 {"id": 18, "name": "Drama"}]},
+            )
+        )
+        resp = client.get("/api/movies/genres")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {"id": 28, "name": "Action"} in body
+    assert {"id": 18, "name": "Drama"} in body
+
+    # Second call is served from the cache - zero further HTTP calls.
+    with respx.mock:
+        resp = client.get("/api/movies/genres")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2

@@ -2,16 +2,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Award, BookUser, Loader2 } from "lucide-react";
 import PageHeading from "../components/PageHeading";
 import EmptyState from "../components/EmptyState";
+import { isoToFlagEmoji } from "../lib/countries";
 import { useRunStats, useRuns } from "../lib/queries";
 
 const MEDALS = ["🥇", "🥈", "🥉"];
-
-function isoToFlagEmoji(iso: string): string {
-  if (iso.length !== 2) return iso;
-  return iso
-    .toUpperCase()
-    .replace(/./g, (char) => String.fromCodePoint(127397 + char.charCodeAt(0)));
-}
 
 export default function PassportPage() {
   const { data: runs, isLoading: runsLoading } = useRuns();

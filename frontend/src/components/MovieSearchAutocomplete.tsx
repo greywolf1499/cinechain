@@ -83,6 +83,8 @@ export default function MovieSearchAutocomplete({
             actor_id: connection.actor_id,
             actor_name: connection.actor_name,
             profile_path: connection.profile_path,
+            character_in_from: connection.character_in_from,
+            character_in_to: connection.character_in_to,
           }
         : null,
     });

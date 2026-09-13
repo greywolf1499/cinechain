@@ -131,6 +131,23 @@ export function useMarkStepWatched(runId: string) {
 	});
 }
 
+export function useUpdateStep(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			stepId,
+			...payload
+		}: {
+			stepId: string;
+			user_notes?: string | null;
+			watched_at?: string | null;
+		}) => api.patch(`/runs/${runId}/steps/${stepId}`, payload),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+		},
+	});
+}
+
 export function useDeleteStep(runId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({

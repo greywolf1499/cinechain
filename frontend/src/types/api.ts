@@ -95,6 +95,11 @@ export interface CastMember {
 	cast_order: number | null;
 }
 
+export interface GenreOut {
+	id: number;
+	name: string;
+}
+
 // --- engine (schemas/engine.py) ---
 
 export interface SharedActorConnection {

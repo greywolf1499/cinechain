@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlmodel import Session
 
 from app.api.deps import get_current_user, get_tmdb_client
@@ -16,6 +17,11 @@ from app.services.tmdb import TMDBClient
 from app.utils.dates import parse_release_year
 
 router = APIRouter(tags=["movies"])
+
+
+class GenreOut(BaseModel):
+    id: int
+    name: str
 
 
 def _movie_to_summary(movie: CachedMovie) -> MovieSummary:
@@ -73,6 +79,16 @@ async def search_movies(
         page=raw.get("page", page),
         total_pages=raw.get("total_pages", 1),
     )
+
+
+@router.get("/movies/genres", response_model=list[GenreOut])
+async def list_genres(
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> list[GenreOut]:
+    genres = await cache_repo.get_genres(session, tmdb)
+    return [GenreOut(id=g.id, name=g.name) for g in genres]
 
 
 @router.get("/movies/{tmdb_id}", response_model=MovieDetail)

@@ -385,6 +385,8 @@ def update_step(
         step.user_notes = payload.user_notes
     if payload.transition_metadata is not None:
         step.transition_metadata = payload.transition_metadata
+    if payload.watched_at is not None:
+        step.watched_at = payload.watched_at
     session.add(step)
     session.commit()
     session.refresh(step)

@@ -1,35 +1,22 @@
 # CineChain v1.1 Development Instructions
 
 ## Project Overview
-
 CineChain is a self-hosted movie challenge companion tool built for couples/households.
-
 - Architecture: Single-container monolith (Vite SPA -> FastAPI serving static assets & API on port 8787).
 - Database: SQLite with SQLModel at `/config/cinechain.db` using WAL mode.
-- Pathfinding: Bipartite graph (Movie <-> Actor), iterative bidirectional BFS with live SSE streaming. JIT caching from TMDB.
-- Philosophy: Unrestricted world cinema. ZERO popularity, vote-count, language, or decade filters. Supports Hollywood, Bollywood, vintage international, and indie films equally.
+- Pathfinding: Bipartite graph (Movie <-> Actor), iterative bidirectional BFS with live SSE streaming.
+- Host: Arch Linux laptop running 17 Docker containers. Strict idle RAM budget < 60 MiB RSS. Zero persistent background daemons.
 
 ## Current State (Phase 15 Complete)
-
-- All backend tests passing across `backend/tests/test_*.py`.
-- OMDb ratings cached and displayed (IMDb / Rotten Tomatoes / Metacritic).
-- Frontier link guard & accidental wildcard burn protection in movie modals.
-- Cycle/duplicate movie prevention rule (`allow_movie_repeats`).
-- Reality filter excludes unreleased/cancelled/in-production movies from the
-  bridge graph and candidate pools (release-date/status only - never
-  popularity/vote-count/rating).
-- Bridge solver is run-scoped (`run_id`): excludes already-watched movies,
-  inherits the run's cast-depth/min-runtime rules, and the Bridge Solver page
-  shows a "solving within context of" banner + duplicate-target warning.
-- Bridge solver returns up to 3 distinct collision-layer paths (Shortest /
-  Alternative Cast Link / Underdog-International), presented as switchable
-  tabs; every bridge movie card opens a read-only preview modal.
-- Mid-run rule mutation (`PATCH /api/runs/{id}/rules`) with a 409 guard
-  against setting the wildcard budget below wildcards already consumed, plus
-  an "Edit Rules" modal and expanded Rules Summary card on the Cockpit.
-- "Delete Run" is available end-to-end (backend already had cascading
-  delete; Phase 15 added the confirmation-gated UI button).
+- 104/104 backend tests passing across `backend/tests/test_*.py`.
+- Run-scoped Bridge Solver with cycle exclusion, active run banner, and multi-bridge candidate paths.
+- Unreleased/cancelled reality filter active (no phantom movies, zero indie/international bias).
+- Mid-run rule mutation (`PATCH /api/runs/{id}/rules`) with safety guards and Delete Run confirmation.
 
 ## Active Roadmap: v1.1 Enhancements
-
-- **Phase 16 (ACTIVE)**: Real Radarr & Seerr write-integrations (quality profiles, root folders, one-click send).
+- **Phase 15.5 (ACTIVE)**: Complete UX Polish, Solver Pacing, Jellyfin Diagnostics & Curated Canon Engine:
+  1. In-Dialog Breadcrumb Navigation: Eliminate modal stacking; allow drill-down and back navigation inside a single modal shell.
+  2. Bridge Solver Pacing & Timeout: Server-level search timeout setting, adaptive TMDB rate-limiting during BFS.
+  3. Jellyfin Match Diagnostics: Settings inspector tool and robust title/year/TMDB matching for local files.
+  4. Curated Canon & Letterboxd Engine: Port `letterboxd_poc.py` into native on-demand service, store caches in `/config/cache_letterboxd`, add Settings UI for Canons/Watchlists, wire laurel badges (`🏆 SS22`), and activate "The Cinephile Route" in Bridge Solver.
+- **Phase 16**: Real Radarr & Seerr write-integrations (quality profiles, root folders, one-click send).

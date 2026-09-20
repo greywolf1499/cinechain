@@ -105,6 +105,18 @@ export function useUpdateRun(runId: string) {
 	});
 }
 
+export function useUpdateRunRules(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (payload: RulesConfig) =>
+			api.patch<RunDetail>(`/runs/${runId}/rules`, payload),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+			queryClient.invalidateQueries({ queryKey: ["runs"] });
+		},
+	});
+}
+
 export function useDeleteRun() {
 	const queryClient = useQueryClient();
 	return useMutation({

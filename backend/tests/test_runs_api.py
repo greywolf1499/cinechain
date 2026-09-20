@@ -290,3 +290,111 @@ def test_discover_endpoint_flags_movies_already_in_run(client):
     assert by_id[2]["existing_step_number"] == 2
     assert by_id[3]["already_in_run"] is False
     assert by_id[3]["existing_step_number"] is None
+
+
+def _default_rules(**overrides):
+    rules = {
+        "preset": "standard",
+        "allow_repeats": "strict",
+        "no_consecutive_actor": True,
+        "max_cast_order": 15,
+        "min_runtime": 40,
+        "wildcards_budget": 2,
+    }
+    rules.update(overrides)
+    return rules
+
+
+def test_update_run_rules_persists_new_values(client):
+    _register_and_login(client, "alice")
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+
+    resp = client.patch(
+        f"/api/runs/{run_id}/rules",
+        json=_default_rules(preset="purist", max_cast_order=5,
+                            min_runtime=60, wildcards_budget=0),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["rules_config"]["preset"] == "purist"
+    assert body["rules_config"]["max_cast_order"] == 5
+    assert body["rules_config"]["wildcards_budget"] == 0
+
+
+def test_update_run_rules_rejects_budget_below_consumed_wildcards(client):
+    _register_and_login(client, "alice")
+    run_id = client.post(
+        "/api/runs",
+        json={"name": "Run", "participant_user_ids": [],
+              "rules_config": _default_rules(wildcards_budget=2)},
+    ).json()["id"]
+
+    with respx.mock:
+        _mock_movie(1, "Film One")
+        respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
+            return_value=httpx.Response(200, json={"id": 1, "cast": []})
+        )
+        client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 1})
+
+        _mock_movie(2, "Unrelated Film")
+        respx.get(f"{TMDB_BASE}/movie/2/credits").mock(
+            return_value=httpx.Response(200, json={"id": 2, "cast": []})
+        )
+        # No shared cast with Film One + force=True -> spends 1 wildcard.
+        resp = client.post(
+            f"/api/runs/{run_id}/steps", json={"movie_id": 2, "force": True})
+        assert resp.json()["transition_metadata"]["wildcard_used"] is True
+
+    # 1 wildcard already consumed - trying to set the budget to 0 must 409.
+    resp = client.patch(
+        f"/api/runs/{run_id}/rules",
+        json=_default_rules(wildcards_budget=0),
+    )
+    assert resp.status_code == 409
+
+    # A budget still >= consumed is accepted.
+    resp = client.patch(
+        f"/api/runs/{run_id}/rules",
+        json=_default_rules(wildcards_budget=1),
+    )
+    assert resp.status_code == 200
+
+    # Unlimited (-1) is always accepted regardless of consumption.
+    resp = client.patch(
+        f"/api/runs/{run_id}/rules",
+        json=_default_rules(wildcards_budget=-1),
+    )
+    assert resp.status_code == 200
+
+
+def test_bridge_stream_run_scoped_excludes_watched_movies_and_404s_for_non_participant(client):
+    _register_and_login(client, "alice")
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
+        "id"
+    ]
+    with respx.mock:
+        _mock_movie(1, "Watched Film")
+        respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
+            return_value=httpx.Response(200, json={"id": 1, "cast": []})
+        )
+        client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 1})
+
+        _mock_movie(2, "Start Film")
+        _mock_movie(3, "Target Film")
+        resp = client.get(
+            "/api/engine/bridge/stream",
+            params={"from_movie_id": 2, "to_movie_id": 3, "run_id": run_id},
+        )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+    _register_and_login(client, "bob")
+    with respx.mock:
+        resp = client.get(
+            "/api/engine/bridge/stream",
+            params={"from_movie_id": 2, "to_movie_id": 3, "run_id": run_id},
+        )
+    assert resp.status_code == 404

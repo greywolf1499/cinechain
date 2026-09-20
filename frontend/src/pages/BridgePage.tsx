@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Flag,
   GitBranch,
+  Link2,
   Loader2,
   RotateCcw,
   Sparkles,
@@ -13,8 +14,10 @@ import PageHeading from "../components/PageHeading";
 import EmptyState from "../components/EmptyState";
 import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
+import MoviePreviewModal from "../components/MoviePreviewModal";
 import BridgePathView from "../components/BridgePathView";
 import { ApiError, api } from "../lib/api";
+import { cn } from "../lib/cn";
 import { useCreateStep, useRun, useRuns } from "../lib/queries";
 import type { BridgeResult, JellyfinItemSummary, MovieSummary } from "../types/api";
 
@@ -54,6 +57,8 @@ export default function BridgePage() {
   const [status, setStatus] = useState<SolveStatus>("idle");
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [result, setResult] = useState<BridgeResult | null>(null);
+  const [activePathIndex, setActivePathIndex] = useState(0);
+  const [previewMovieId, setPreviewMovieId] = useState<number | null>(null);
   const [exhausted, setExhausted] = useState<ExhaustedEvent | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [onServerMap, setOnServerMap] = useState<Record<number, JellyfinItemSummary>>({});
@@ -63,12 +68,22 @@ export default function BridgePage() {
 
   const sourceRef = useRef<EventSource | null>(null);
 
-  // Default the run picker to the most recently created active run.
+  const runIdFromQuery = searchParams.get("run_id");
+
+  // A ?run_id= query param scopes the whole solve to that run - takes over
+  // the run picker entirely (no free choice of "queue to a different run").
   useEffect(() => {
+    if (runIdFromQuery) setSelectedRunId(runIdFromQuery);
+  }, [runIdFromQuery]);
+
+  // Default the run picker to the most recently created active run - skipped
+  // when a ?run_id= query param already pinned it.
+  useEffect(() => {
+    if (runIdFromQuery) return;
     if (!selectedRunId && activeRuns && activeRuns.length > 0) {
       setSelectedRunId(activeRuns[0].id);
     }
-  }, [activeRuns, selectedRunId]);
+  }, [activeRuns, selectedRunId, runIdFromQuery]);
 
   const tailStep = selectedRun?.steps[selectedRun.steps.length - 1];
 
@@ -112,12 +127,18 @@ export default function BridgePage() {
   }, []);
 
   // Fetch Jellyfin "on server" badges once a path is solved (non-fatal on failure).
+  // Covers every path option's movies, not just the primary, so switching tabs
+  // still shows correct badges without a refetch.
   useEffect(() => {
     if (!result) return;
+    const allMovieIds = [
+      ...result.path.map((node) => node.movie_id),
+      ...(result.alternate_paths ?? []).flatMap((alt) => alt.path.map((node) => node.movie_id)),
+    ];
     let cancelled = false;
     api
       .post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
-        tmdb_ids: result.path.map((node) => node.movie_id),
+        tmdb_ids: allMovieIds,
       })
       .then((data) => {
         if (cancelled) return;
@@ -146,6 +167,7 @@ export default function BridgePage() {
     setStatus("streaming");
     setProgress(null);
     setResult(null);
+    setActivePathIndex(0);
     setExhausted(null);
     setErrorMessage(null);
     setOnServerMap({});
@@ -158,6 +180,7 @@ export default function BridgePage() {
       game_type: "cinechain",
       max_depth: String(depth),
     });
+    if (runIdFromQuery) params.set("run_id", runIdFromQuery);
     const source = new EventSource(`/api/engine/bridge/stream?${params.toString()}`, {
       withCredentials: true,
     });
@@ -168,6 +191,7 @@ export default function BridgePage() {
     });
     source.addEventListener("result", (event) => {
       setResult(JSON.parse((event as MessageEvent).data));
+      setActivePathIndex(0);
       setStatus("solved");
       closeSource();
     });
@@ -214,14 +238,27 @@ export default function BridgePage() {
   const canQueue =
     !!selectedRun && !!result && !!tailStep && startMovie?.tmdb_id === tailStep.movie_id;
 
+  // Path 1 (Shortest) + up to 2 alternates returned by the collision-layer
+  // multi-path search - the active tab drives both the rendered path and queueing.
+  const pathOptions: BridgeResult[] = result
+    ? [
+        { label: result.label ?? "Shortest", path: result.path, hops: result.hops, connections: result.connections },
+        ...(result.alternate_paths ?? []),
+      ]
+    : [];
+  const activePath = pathOptions[activePathIndex] ?? pathOptions[0];
+
+  const targetAlreadyInRun =
+    !!selectedRun && !!targetMovie && selectedRun.steps.some((s) => s.movie_id === targetMovie.tmdb_id);
+
   async function handleQueue() {
-    if (!canQueue || !result || !selectedRun) return;
+    if (!canQueue || !activePath || !selectedRun) return;
     setQueueing(true);
     setQueueError(null);
     try {
-      for (let i = 1; i < result.path.length; i++) {
-        const node = result.path[i];
-        const connection = result.connections[i - 1];
+      for (let i = 1; i < activePath.path.length; i++) {
+        const node = activePath.path[i];
+        const connection = activePath.connections[i - 1];
         await createStep.mutateAsync({
           movie_id: node.movie_id,
           status: "planned",
@@ -250,8 +287,16 @@ export default function BridgePage() {
       <PageHeading title="Bridge Solver" subtitle="Find a path between any two films" />
 
       <div className="flex flex-col gap-5">
+        {runIdFromQuery && selectedRun && (
+          <div className="flex items-center gap-2.5 rounded-xl border border-accent/40 bg-accent/10 px-5 py-3 text-sm text-accent">
+            <Link2 className="h-4 w-4 shrink-0" />
+            Solving within context of <strong>{selectedRun.name}</strong> - excluding{" "}
+            {selectedRun.steps.length} already watched movie{selectedRun.steps.length === 1 ? "" : "s"}.
+          </div>
+        )}
+
         <div className="rounded-xl border border-app-border bg-app-surface p-5">
-          {activeRuns && activeRuns.length > 0 && (
+          {activeRuns && activeRuns.length > 0 && !runIdFromQuery && (
             <div className="mb-4">
               <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-zinc-500">
                 Queue results to
@@ -272,7 +317,15 @@ export default function BridgePage() {
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <MovieSlot label="Starting film" movie={startMovie} onPick={setStartMovie} />
-            <MovieSlot label="Target film" movie={targetMovie} onPick={setTargetMovie} />
+            <div>
+              <MovieSlot label="Target film" movie={targetMovie} onPick={setTargetMovie} />
+              {targetAlreadyInRun && (
+                <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-amber-400">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  This film is already logged in {selectedRun?.name}.
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="mt-4">
@@ -322,8 +375,9 @@ export default function BridgePage() {
             <div className="text-sm text-zinc-300">
               {progress ? (
                 <>
-                  Searching depth {progress.depth} &middot; {progress.tmdb_calls} TMDB calls &middot;{" "}
-                  {progress.cache_hits} cache hits &middot; {(progress.elapsed_ms / 1000).toFixed(1)}s
+                  Searching depth {progress.depth} from start and target (up to {maxDepth} hops
+                  total) &middot; {progress.tmdb_calls} TMDB calls &middot; {progress.cache_hits}{" "}
+                  cache hits &middot; {(progress.elapsed_ms / 1000).toFixed(1)}s
                   <p className="mt-0.5 text-xs text-zinc-500">
                     Frontier: {progress.frontier_forward} forward / {progress.frontier_backward}{" "}
                     backward
@@ -368,10 +422,11 @@ export default function BridgePage() {
 
         {status === "solved" && result && (
           <div className="rounded-xl border border-app-border bg-app-surface p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-sm font-medium text-zinc-200">
                 <Sparkles className="h-4 w-4 text-accent" />
-                Solved in {result.hops} hop{result.hops === 1 ? "" : "s"}
+                Solved in {activePath?.hops ?? result.hops} hop
+                {(activePath?.hops ?? result.hops) === 1 ? "" : "s"}
               </div>
               <button
                 type="button"
@@ -389,16 +444,45 @@ export default function BridgePage() {
               </button>
             </div>
 
+            {pathOptions.length > 1 && (
+              <div className="mb-4 flex flex-wrap gap-1.5">
+                {pathOptions.map((option, index) => (
+                  <button
+                    key={`${option.label}-${index}`}
+                    type="button"
+                    onClick={() => setActivePathIndex(index)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                      index === activePathIndex
+                        ? "border-accent bg-accent/10 text-accent"
+                        : "border-app-border text-zinc-500 hover:text-zinc-200",
+                    )}
+                  >
+                    Path {index + 1} ({option.label})
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="overflow-x-auto pb-2">
               <BridgePathView
-                path={result.path}
-                connections={result.connections}
+                path={activePath?.path ?? result.path}
+                connections={activePath?.connections ?? result.connections}
                 onServerMap={onServerMap}
+                onMovieClick={setPreviewMovieId}
               />
             </div>
 
             {queueError && <p className="mt-3 text-xs text-red-400">{queueError}</p>}
           </div>
+        )}
+
+        {previewMovieId !== null && (
+          <MoviePreviewModal
+            open={previewMovieId !== null}
+            onClose={() => setPreviewMovieId(null)}
+            movieId={previewMovieId}
+          />
         )}
 
         {status === "idle" && !result && (

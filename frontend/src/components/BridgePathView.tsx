@@ -8,18 +8,27 @@ export default function BridgePathView({
   path,
   connections,
   onServerMap,
+  onMovieClick,
 }: {
   path: BridgeNode[];
   connections: SharedActorConnection[];
   onServerMap?: Record<number, JellyfinItemSummary>;
+  onMovieClick?: (movieId: number) => void;
 }) {
   return (
     <div className="flex flex-wrap items-start gap-1">
       {path.map((node, index) => (
         <div key={`${node.movie_id}-${index}`} className="flex items-start gap-1">
           <div className="w-24 text-center">
-            <MoviePoster path={node.poster_path} title={node.title} className="w-24" />
-            <p className="mt-1.5 truncate text-xs font-medium text-zinc-200">{node.title}</p>
+            <button
+              type="button"
+              onClick={() => onMovieClick?.(node.movie_id)}
+              disabled={!onMovieClick}
+              className="w-full text-left transition-opacity hover:opacity-80 disabled:cursor-default disabled:hover:opacity-100"
+            >
+              <MoviePoster path={node.poster_path} title={node.title} className="w-24" />
+              <p className="mt-1.5 truncate text-xs font-medium text-zinc-200">{node.title}</p>
+            </button>
             {node.release_year && <p className="text-[11px] text-zinc-500">{node.release_year}</p>}
             <div className="mt-1 flex justify-center">
               <OnServerBadge onServer={onServerMap?.[node.movie_id]?.on_server} />

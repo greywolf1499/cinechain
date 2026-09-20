@@ -32,6 +32,15 @@ class RunUpdate(BaseModel):
     status: str | None = None  # active | completed | abandoned
 
 
+class RunRulesUpdate(BaseModel):
+    preset: str = "custom"
+    allow_repeats: str = "strict"  # strict | penalty | allowed
+    no_consecutive_actor: bool = True
+    max_cast_order: int = 15
+    min_runtime: int = 40
+    wildcards_budget: int = 2  # -1 = unlimited
+
+
 class RunStepCreate(BaseModel):
     movie_id: int
     transition_metadata: dict[str, Any] | None = None

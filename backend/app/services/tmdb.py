@@ -33,6 +33,7 @@ class TMDBMovie(TypedDict, total=False):
     runtime: int | None
     genre_ids: list[int]
     popularity: float | None
+    status: str | None
 
 
 class TMDBCastMember(TypedDict):
@@ -155,6 +156,7 @@ def _normalize_movie_detail(data: dict[str, Any]) -> TMDBMovie:
         runtime=data.get("runtime"),
         genre_ids=[g["id"] for g in data.get("genres", [])],
         popularity=data.get("popularity"),
+        status=data.get("status"),
     )
 
 

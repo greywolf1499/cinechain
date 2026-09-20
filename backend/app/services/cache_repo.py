@@ -66,6 +66,7 @@ class CacheRepo:
         row.runtime = movie.get("runtime")
         row.genre_ids = movie.get("genre_ids") or []
         row.popularity = movie.get("popularity")
+        row.status = movie.get("status")
         self.session.add(row)
         self.session.commit()
         self.session.refresh(row)

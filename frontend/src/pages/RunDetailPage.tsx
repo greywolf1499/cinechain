@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Clapperboard, GitBranch, Loader2, Plus } from "lucide-react";
+import { Clapperboard, GitBranch, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import ChainTimeline from "../components/ChainTimeline";
+import EditRulesModal from "../components/EditRulesModal";
 import ForkInTheRoadModal from "../components/ForkInTheRoadModal";
 import Modal from "../components/Modal";
 import MoviePoster from "../components/MoviePoster";
@@ -10,19 +11,23 @@ import PickNextHub from "../components/PickNextHub";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
 import { isoToFlagEmoji } from "../lib/countries";
-import { useDeleteStep, useRun, useRunStats, useUsers } from "../lib/queries";
+import { allowsMovieRepeats } from "../lib/rules";
+import { useDeleteRun, useDeleteStep, useRun, useRunStats, useUsers } from "../lib/queries";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import type { RulesConfig, RunStats, RunStep } from "../types/api";
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { data: run, isLoading } = useRun(id);
   const { data: users } = useUsers();
   const { data: stats } = useRunStats(id);
   const deleteStep = useDeleteStep(id ?? "");
+  const deleteRun = useDeleteRun();
 
   const [activeActor, setActiveActor] = useState<ActorClickPayload | null>(null);
   const [confirmDeleteStepId, setConfirmDeleteStepId] = useState<string | null>(null);
+  const [confirmDeleteRun, setConfirmDeleteRun] = useState(false);
 
   if (isLoading) {
     return (
@@ -58,6 +63,12 @@ export default function RunDetailPage() {
     setConfirmDeleteStepId(null);
   }
 
+  async function handleDeleteRun() {
+    if (!run) return;
+    await deleteRun.mutateAsync(run.id);
+    navigate("/runs");
+  }
+
   return (
     <div>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -68,6 +79,14 @@ export default function RunDetailPage() {
           </div>
           <p className="mt-1 text-sm text-zinc-500">{participantNames || "No participants"}</p>
         </div>
+        <button
+          type="button"
+          onClick={() => setConfirmDeleteRun(true)}
+          className="flex items-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:border-red-900 hover:text-red-400"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Delete Run
+        </button>
       </div>
 
       {run.steps.length === 0 ? (
@@ -83,7 +102,7 @@ export default function RunDetailPage() {
           <div className="order-1 flex flex-col gap-5 lg:order-2 lg:col-span-5 lg:col-start-8 lg:sticky lg:top-20 lg:self-start xl:col-span-4 xl:col-start-9">
             <ActiveFrontierCard runId={run.id} tailStep={lastStep} rulesConfig={run.rules_config} steps={run.steps} />
             <MiniPassportWidget stats={stats} rules={run.rules_config} />
-            <RulesSummaryCard rules={run.rules_config} />
+            <RulesSummaryCard runId={run.id} rules={run.rules_config} steps={run.steps} />
           </div>
 
           <div className="order-2 min-w-0 lg:order-1 lg:col-span-7 lg:col-start-1 xl:col-span-8">
@@ -143,6 +162,36 @@ export default function RunDetailPage() {
           </button>
         </div>
       </Modal>
+
+      <Modal
+        open={confirmDeleteRun}
+        onClose={() => setConfirmDeleteRun(false)}
+        title="Delete this run?"
+        widthClassName="max-w-sm"
+      >
+        <p className="text-sm text-zinc-400">
+          Are you sure you want to permanently delete this challenge run? All logged steps and
+          history will be lost. This can't be undone.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setConfirmDeleteRun(false)}
+            className="rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-app-surface-hover"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={deleteRun.isPending}
+            onClick={handleDeleteRun}
+            className="flex items-center gap-1.5 rounded-md bg-red-950 px-3 py-1.5 text-sm font-medium text-red-300 transition-colors hover:bg-red-900 disabled:opacity-60"
+          >
+            {deleteRun.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Delete Permanently
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -192,7 +241,7 @@ function ActiveFrontierCard({
         </button>
         <button
           type="button"
-          onClick={() => navigate("/bridge")}
+          onClick={() => navigate(`/bridge?run_id=${runId}`)}
           className="flex items-center justify-center gap-1.5 rounded-md border border-app-border px-3.5 py-2.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover"
         >
           <GitBranch className="h-4 w-4" />
@@ -280,10 +329,33 @@ function MiniPassportWidget({ stats, rules }: { stats: RunStats | undefined; rul
   );
 }
 
-function RulesSummaryCard({ rules }: { rules: RulesConfig }) {
+function RulesSummaryCard({
+  runId,
+  rules,
+  steps,
+}: {
+  runId: string;
+  rules: RulesConfig;
+  steps: RunStep[];
+}) {
+  const [showEdit, setShowEdit] = useState(false);
+  const wildcardsConsumed = steps.filter(
+    (step) => (step.transition_metadata as { wildcard_used?: boolean } | null)?.wildcard_used,
+  ).length;
+
   return (
     <div className="rounded-xl border border-app-border bg-app-surface p-4">
-      <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">Ruleset</p>
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Ruleset</p>
+        <button
+          type="button"
+          onClick={() => setShowEdit(true)}
+          className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+        >
+          <Pencil className="h-3 w-3" />
+          Edit Rules
+        </button>
+      </div>
       <div className="flex flex-col gap-2.5 text-sm">
         <div className="flex items-center justify-between">
           <span className="text-zinc-400">Preset</span>
@@ -294,10 +366,35 @@ function RulesSummaryCard({ rules }: { rules: RulesConfig }) {
           <span className="text-zinc-200">Top {rules.max_cast_order}</span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-zinc-400">Repeats</span>
-          <span className="capitalize text-zinc-200">{rules.allow_repeats}</span>
+          <span className="text-zinc-400">Repeat Movies</span>
+          <span className="text-zinc-200">
+            {allowsMovieRepeats(rules) ? "Allowed" : "Disallowed"}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-zinc-400">Wildcard Budget</span>
+          <span className="text-zinc-200">
+            {rules.wildcards_budget === -1
+              ? `${wildcardsConsumed} used / Unlimited`
+              : `${wildcardsConsumed} used / ${rules.wildcards_budget} total`}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-zinc-400">Min Runtime</span>
+          <span className="text-zinc-200">
+            {rules.min_runtime > 0 ? `${rules.min_runtime} min` : "No minimum"}
+          </span>
         </div>
       </div>
+
+      {showEdit && (
+        <EditRulesModal
+          open={showEdit}
+          onClose={() => setShowEdit(false)}
+          runId={runId}
+          currentRules={rules}
+        />
+      )}
     </div>
   );
 }

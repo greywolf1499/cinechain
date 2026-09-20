@@ -18,7 +18,7 @@ from app.schemas.engine import (
     ValidationResult,
 )
 from app.services import cache_repo, pathfinder
-from app.services.movie_filters import passes_filters
+from app.services.movie_filters import is_reality_eligible, passes_filters
 from app.utils.dates import parse_release_year
 
 
@@ -124,6 +124,8 @@ class CineChainEngine(BaseChallengeEngine):
             for movie in credits_:
                 if movie.tmdb_id == frontier_movie_id:
                     continue
+                if not is_reality_eligible(movie):
+                    continue
                 candidate = candidates.get(movie.tmdb_id)
                 if candidate is None:
                     candidate = DiscoveryCandidate(
@@ -201,6 +203,9 @@ class CineChainEngine(BaseChallengeEngine):
         to_movie_id: int,
         max_depth: int | None = None,
         call_budget: int | None = None,
+        cast_limit: int | None = None,
+        min_runtime: int | None = None,
+        excluded_movie_ids: set[int] | None = None,
     ):
         return pathfinder.solve_bridge_bipartite(
             self.session,
@@ -209,4 +214,7 @@ class CineChainEngine(BaseChallengeEngine):
             to_movie_id,
             max_depth=max_depth,
             call_budget=call_budget,
+            cast_limit=cast_limit,
+            min_runtime=min_runtime,
+            excluded_movie_ids=excluded_movie_ids,
         )

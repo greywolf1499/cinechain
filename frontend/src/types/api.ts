@@ -144,12 +144,22 @@ export interface BridgeNode {
 	title: string;
 	poster_path: string | null;
 	release_year: number | null;
+	popularity: number | null;
+}
+
+export interface BridgeAlternatePath {
+	label: string;
+	path: BridgeNode[];
+	hops: number;
+	connections: SharedActorConnection[];
 }
 
 export interface BridgeResult {
 	path: BridgeNode[];
 	hops: number;
 	connections: SharedActorConnection[];
+	label?: string;
+	alternate_paths?: BridgeAlternatePath[];
 }
 
 export interface RunStats {

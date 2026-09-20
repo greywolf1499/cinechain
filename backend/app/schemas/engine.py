@@ -43,6 +43,7 @@ class BridgeNode(BaseModel):
     title: str
     poster_path: str | None = None
     release_year: int | None = None
+    popularity: float | None = None
 
 
 class BridgeResult(BaseModel):

@@ -29,6 +29,7 @@ from app.schemas.engine import BridgeNode, SharedActorConnection
 from app.services import cache_repo
 from app.services.cache_repo import CacheRepo
 from app.services.graph import FrontierSide, NodeKey, actor_node, movie_node
+from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient
 from app.utils.dates import parse_release_year
 
@@ -50,12 +51,18 @@ async def solve_bridge_bipartite(
     to_movie_id: int,
     max_depth: int | None = None,
     call_budget: int | None = None,
+    cast_limit: int | None = None,
+    min_runtime: int | None = None,
+    excluded_movie_ids: set[int] | None = None,
 ) -> AsyncIterator[dict]:
     settings = get_settings()
     max_depth = max_depth or settings.pathfinder_max_depth
     call_budget = call_budget or settings.pathfinder_call_budget
-    cast_limit = settings.pathfinder_cast_limit
+    # A run's own `max_cast_order` rule overrides the global default depth,
+    # same "optional extra kwarg" pattern as validate_next_step's cast_limit.
+    cast_limit = cast_limit or settings.pathfinder_cast_limit
     actor_cap = settings.pathfinder_actor_credit_limit
+    excluded_movie_ids = excluded_movie_ids or set()
 
     async with _SEARCH_SEMAPHORE:
         start = time.monotonic()
@@ -69,7 +76,7 @@ async def solve_bridge_bipartite(
 
             if from_movie_id == to_movie_id:
                 result = await anyio.to_thread.run_sync(
-                    _build_result, session, [movie_node(from_movie_id)]
+                    _build_multi_result, session, [[movie_node(from_movie_id)]]
                 )
                 yield {"type": "result", **result}
                 yield {"type": "done"}
@@ -91,7 +98,15 @@ async def solve_bridge_bipartite(
                     side.next_type = "actor"
                 else:
                     new_nodes = await _expand_actor_side(
-                        session, tmdb, repo, side, actor_cap, stats, call_budget
+                        session,
+                        tmdb,
+                        repo,
+                        side,
+                        actor_cap,
+                        stats,
+                        call_budget,
+                        excluded_movie_ids,
+                        min_runtime,
                     )
                     side.next_type = "movie"
                     side.hops += 1
@@ -113,11 +128,14 @@ async def solve_bridge_bipartite(
                     "elapsed_ms": elapsed_ms,
                 }
 
-                meeting = _find_intersection(forward.visited, backward.visited)
-                if meeting is not None:
-                    combined_path = _reconstruct_path(
-                        forward, backward, meeting)
-                    result = await anyio.to_thread.run_sync(_build_result, session, combined_path)
+                meetings = _find_intersections(
+                    forward.visited, backward.visited, limit=3)
+                if meetings:
+                    candidate_paths = [
+                        _reconstruct_path(forward, backward, meeting) for meeting in meetings
+                    ]
+                    result = await anyio.to_thread.run_sync(
+                        _build_multi_result, session, candidate_paths)
                     yield {"type": "result", **result}
                     yield {"type": "done"}
                     return
@@ -195,6 +213,8 @@ async def _expand_actor_side(
     actor_cap: int,
     stats: _SearchStats,
     call_budget: int,
+    excluded_movie_ids: set[int],
+    min_runtime: int | None,
 ) -> dict[NodeKey, NodeKey]:
     actor_ids = [node[1] for node in side.frontier]
 
@@ -225,23 +245,38 @@ async def _expand_actor_side(
         else:
             stats.cache_hits += 1
         for movie in credits_:
+            # Reality filter + run-scoped exclusion/min-runtime pruning happen
+            # HERE (the only place new movie nodes enter the graph) - roots
+            # (from_movie_id/to_movie_id) are added directly and never pass
+            # through this filter, so a run's own already-watched frontier
+            # movie can still be a valid start/target even though it's also
+            # in `excluded_movie_ids`.
+            if not is_reality_eligible(movie):
+                continue
+            if movie.tmdb_id in excluded_movie_ids:
+                continue
+            if min_runtime and movie.runtime is not None and movie.runtime < min_runtime:
+                continue
             new_nodes.setdefault(movie_node(movie.tmdb_id), parent)
 
     return new_nodes
 
 
-def _find_intersection(
-    forward_visited: dict[NodeKey, NodeKey | None], backward_visited: dict[NodeKey, NodeKey | None]
-) -> NodeKey | None:
+def _find_intersections(
+    forward_visited: dict[NodeKey, NodeKey | None],
+    backward_visited: dict[NodeKey, NodeKey | None],
+    limit: int = 3,
+) -> list[NodeKey]:
+    """Collects up to `limit` distinct meeting nodes discovered in THIS round
+    (not just the first) so the caller can offer 2-3 alternate bridge paths -
+    e.g. two different actors both directly connecting the same two films."""
     small, large = (
         (forward_visited, backward_visited)
         if len(forward_visited) <= len(backward_visited)
         else (backward_visited, forward_visited)
     )
-    for node in small:
-        if node in large:
-            return node
-    return None
+    found = [node for node in small if node in large]
+    return found[:limit]
 
 
 def _reconstruct_path(forward: FrontierSide, backward: FrontierSide, meeting: NodeKey) -> list[NodeKey]:
@@ -276,6 +311,7 @@ def _build_result(session: Session, combined_path: list[NodeKey]) -> dict:
                 poster_path=movie.poster_path if movie else None,
                 release_year=parse_release_year(
                     movie.release_date) if movie else None,
+                popularity=movie.popularity if movie else None,
             )
         )
 
@@ -300,3 +336,59 @@ def _build_result(session: Session, combined_path: list[NodeKey]) -> dict:
         "hops": len(movie_ids) - 1,
         "connections": connections,
     }
+
+
+def _build_multi_result(session: Session, candidate_paths: list[list[NodeKey]]) -> dict:
+    """Builds every candidate collision-layer path and picks up to 3 distinct
+    ones (shortest first) to return as `alternate_paths`, so the frontend can
+    offer 'Path 1 (Shortest)' / 'Path 2 (Alternative Cast Link)' style tabs.
+    """
+    built = [_build_result(session, path) for path in candidate_paths]
+    built.sort(key=lambda entry: entry["hops"])
+    labels = _label_paths(built)
+
+    primary = built[0]
+    alternates = [
+        {"label": label, **entry} for label, entry in zip(labels[1:], built[1:], strict=True)
+    ]
+    return {
+        "path": primary["path"],
+        "hops": primary["hops"],
+        "connections": primary["connections"],
+        "label": labels[0],
+        "alternate_paths": alternates,
+    }
+
+
+def _label_paths(built: list[dict]) -> list[str]:
+    """Shortest first; same-length siblings are 'Alternative Cast Link' (a
+    different connecting actor/bridge film at the same hop count), UNLESS
+    an alternate's intermediate films are notably less mainstream (lower
+    average TMDB popularity) than the primary's - then it's flagged as the
+    'Underdog / International Pick', celebrating world/indie cinema rather
+    than penalizing it."""
+    if len(built) == 1:
+        return ["Shortest"]
+
+    def avg_intermediate_popularity(entry: dict) -> float:
+        intermediates = entry["path"][1:-1]
+        pops = [
+            node.popularity for node in intermediates if node.popularity is not None]
+        return sum(pops) / len(pops) if pops else 0.0
+
+    primary_hops = built[0]["hops"]
+    primary_popularity = avg_intermediate_popularity(built[0])
+    rest = built[1:]
+    rest_popularity = [avg_intermediate_popularity(entry) for entry in rest]
+    underdog_index = rest_popularity.index(
+        min(rest_popularity)) if rest_popularity else None
+
+    labels = ["Shortest"]
+    for i, entry in enumerate(rest):
+        if entry["hops"] > primary_hops:
+            labels.append("Alternative Path")
+        elif i == underdog_index and rest_popularity[i] < primary_popularity:
+            labels.append("Underdog / International Pick")
+        else:
+            labels.append("Alternative Cast Link")
+    return labels

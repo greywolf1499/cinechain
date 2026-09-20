@@ -15,6 +15,7 @@ from app.schemas.runs import (
     ParticipantPublic,
     RunCreate,
     RunDetail,
+    RunRulesUpdate,
     RunStepCreate,
     RunStepPublic,
     RunStepUpdate,
@@ -50,6 +51,11 @@ def _last_step(session: Session, run_id: str) -> RunStep | None:
 
 def _run_rules(run: Run) -> dict:
     return run.rules_config or dict(DEFAULT_RULES_CONFIG)
+
+
+def _count_wildcards_consumed(session: Session, run_id: str) -> int:
+    steps = session.exec(select(RunStep).where(RunStep.run_id == run_id)).all()
+    return sum(1 for step in steps if (step.transition_metadata or {}).get("wildcard_used"))
 
 
 async def _enforce_run_rules(
@@ -249,6 +255,29 @@ def update_run(
             )
         run.status = payload.status
         run.completed_at = utcnow() if payload.status == "completed" else None
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
+@router.patch("/{run_id}/rules", response_model=RunDetail)
+def update_run_rules(
+    payload: RunRulesUpdate,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+):
+    if payload.wildcards_budget != -1:
+        consumed = _count_wildcards_consumed(session, run.id)
+        if payload.wildcards_budget < consumed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot set wildcard budget to {payload.wildcards_budget} - "
+                    f"{consumed} wildcard(s) have already been used this run."
+                ),
+            )
+    run.rules_config = payload.model_dump()
     session.add(run)
     session.commit()
     session.refresh(run)

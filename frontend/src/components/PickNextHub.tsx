@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Search, User } from "lucide-react";
+import { ArrowDownAZ, ArrowUpAZ, Loader2, Search, User, X } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import OnServerBadge from "./OnServerBadge";
@@ -23,6 +23,7 @@ import type {
 
 type CoStarMode = "or" | "and";
 type SortBy = "year" | "popularity" | "imdb" | "rt";
+type SortDir = "asc" | "desc";
 
 const DECADE_PILLS: { key: string; label: string }[] = [
   { key: "all", label: "All" },
@@ -61,7 +62,20 @@ export default function PickNextHub({
   const [genreId, setGenreId] = useState<number | null>(null);
   const [decadeKey, setDecadeKey] = useState("all");
   const [sortBy, setSortBy] = useState<SortBy>("year");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
+
+  function clearFilters() {
+    setSelectedActorIds(new Set());
+    setSearch("");
+    setGenreId(null);
+    setDecadeKey("all");
+    setSortBy("year");
+    setSortDir("desc");
+  }
+
+  const hasActiveFilters =
+    selectedActorIds.size > 0 || search.trim() !== "" || genreId !== null || decadeKey !== "all";
 
   const { data: cast } = useQuery({
     queryKey: ["movies", frontierStep.movie_id, "cast"],
@@ -139,13 +153,15 @@ export default function PickNextHub({
       );
     }
 
+    const direction = sortDir === "asc" ? -1 : 1;
     return [...list].sort((a, b) => {
-      if (sortBy === "year") return (b.release_year ?? 0) - (a.release_year ?? 0);
-      if (sortBy === "popularity") return (b.popularity ?? 0) - (a.popularity ?? 0);
-      return ratingSortValue(b, sortBy === "imdb" ? "imdb" : "rt") - ratingSortValue(a, sortBy === "imdb" ? "imdb" : "rt");
+      if (sortBy === "year") return direction * ((b.release_year ?? 0) - (a.release_year ?? 0));
+      if (sortBy === "popularity") return direction * ((b.popularity ?? 0) - (a.popularity ?? 0));
+      const key = sortBy === "imdb" ? "imdb" : "rt";
+      return direction * (ratingSortValue(b, key) - ratingSortValue(a, key));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, selectedActorIds, mode, genreId, decadeKey, search, sortBy, ratingsMap]);
+  }, [candidates, selectedActorIds, mode, genreId, decadeKey, search, sortBy, sortDir, ratingsMap]);
 
   function toggleActor(actorId: number) {
     setSelectedActorIds((prev) => {
@@ -270,11 +286,36 @@ export default function PickNextHub({
             onChange={(e) => setSortBy(e.target.value as SortBy)}
             className="rounded-md border border-app-border bg-app-bg px-2.5 py-2 text-sm text-zinc-200 focus:border-accent focus:outline-none"
           >
-            <option value="year">Sort: Newest First</option>
+            <option value="year">Sort: Year</option>
             <option value="popularity">Sort: Popularity</option>
-            <option value="imdb">Sort: IMDb Rating (Highest First)</option>
-            <option value="rt">Sort: Rotten Tomatoes (Highest First)</option>
+            <option value="imdb">Sort: IMDb Rating</option>
+            <option value="rt">Sort: Rotten Tomatoes</option>
           </select>
+
+          <button
+            type="button"
+            onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+            title={sortDir === "asc" ? "Ascending" : "Descending"}
+            className="flex items-center gap-1.5 rounded-md border border-app-border bg-app-bg px-2.5 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover"
+          >
+            {sortDir === "asc" ? (
+              <ArrowUpAZ className="h-4 w-4" />
+            ) : (
+              <ArrowDownAZ className="h-4 w-4" />
+            )}
+            {sortDir === "asc" ? "Asc" : "Desc"}
+          </button>
+
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="flex items-center gap-1 rounded-md px-2.5 py-2 text-sm font-medium text-zinc-500 transition-colors hover:text-zinc-200"
+            >
+              <X className="h-3.5 w-3.5" />
+              Clear Filters
+            </button>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-1.5">
@@ -308,7 +349,7 @@ export default function PickNextHub({
         )}
 
         {!isLoading && filtered.length > 0 && (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+          <div className="grid grid-cols-2 items-stretch gap-3 sm:grid-cols-3 md:grid-cols-4">
             {filtered.map((candidate) => (
               <CandidateCard
                 key={candidate.movie_id}
@@ -354,67 +395,71 @@ function CandidateCard({
   const isLockedDuplicate = candidate.already_in_run && !allowRepeats;
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-app-border bg-app-surface p-2.5">
-      <div className="relative">
-        <MoviePoster path={candidate.poster_path} title={candidate.title} className="w-full" />
-        <div className="absolute left-1 top-1">
-          <OnServerBadge onServer={onServer} />
+    <div className="flex h-full flex-col justify-between gap-2 rounded-lg border border-app-border bg-app-surface p-2.5">
+      <div className="flex flex-col gap-2">
+        <div className="relative">
+          <MoviePoster path={candidate.poster_path} title={candidate.title} className="w-full" />
+          <div className="absolute left-1 top-1">
+            <OnServerBadge onServer={onServer} />
+          </div>
         </div>
+
+        <div>
+          <p className="line-clamp-2 text-xs font-medium text-zinc-100">{candidate.title}</p>
+          <p className="text-[10px] text-zinc-500">{candidate.release_year ?? "—"}</p>
+          <RatingBadges ratings={ratings} />
+          {genreNames.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {genreNames.slice(0, 2).map((name) => (
+                <span
+                  key={name}
+                  className="rounded-full bg-app-surface-hover px-1.5 py-0.5 text-[9px] text-zinc-400"
+                >
+                  {name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <ConnectionBadge connections={candidate.connections} />
       </div>
 
-      <div>
-        <p className="line-clamp-2 text-xs font-medium text-zinc-100">{candidate.title}</p>
-        <p className="text-[10px] text-zinc-500">{candidate.release_year ?? "—"}</p>
-        <RatingBadges ratings={ratings} />
-        {genreNames.length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {genreNames.slice(0, 2).map((name) => (
-              <span
-                key={name}
-                className="rounded-full bg-app-surface-hover px-1.5 py-0.5 text-[9px] text-zinc-400"
-              >
-                {name}
-              </span>
-            ))}
+      <div className="flex flex-col gap-1.5">
+        {candidate.already_in_run && (
+          <span
+            className={cn(
+              "rounded-md px-2 py-1 text-center text-[10px] font-medium",
+              isLockedDuplicate ? "bg-red-950 text-red-300" : "bg-app-surface-hover text-zinc-500",
+            )}
+          >
+            {isLockedDuplicate ? "Locked: " : ""}Already in Run (Step {candidate.existing_step_number})
+          </span>
+        )}
+
+        {isLockedDuplicate ? null : (
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={onQueue}
+              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-app-border px-2 py-1.5 text-[10px] font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:opacity-60"
+            >
+              {pending && <Loader2 className="h-3 w-3 animate-spin" />}
+              Queue Up Next
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={onLogWatched}
+              className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-[10px] font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
+            >
+              {pending && <Loader2 className="h-3 w-3 animate-spin" />}
+              Log Watched
+            </button>
           </div>
         )}
       </div>
-
-      <ConnectionBadge connections={candidate.connections} />
-
-      {candidate.already_in_run && (
-        <span
-          className={cn(
-            "rounded-md px-2 py-1 text-center text-[10px] font-medium",
-            isLockedDuplicate ? "bg-red-950 text-red-300" : "bg-app-surface-hover text-zinc-500",
-          )}
-        >
-          {isLockedDuplicate ? "Locked: " : ""}Already in Run (Step {candidate.existing_step_number})
-        </span>
-      )}
-
-      {isLockedDuplicate ? null : (
-        <div className="flex gap-1.5">
-          <button
-            type="button"
-            disabled={pending}
-            onClick={onQueue}
-            className="flex flex-1 items-center justify-center gap-1 rounded-md border border-app-border px-2 py-1.5 text-[10px] font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:opacity-60"
-          >
-            {pending && <Loader2 className="h-3 w-3 animate-spin" />}
-            Queue Up Next
-          </button>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={onLogWatched}
-            className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-[10px] font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
-          >
-            {pending && <Loader2 className="h-3 w-3 animate-spin" />}
-            Log Watched
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -325,3 +325,147 @@ async def test_tmdb_failure_emits_error_event_not_a_raw_exception(config_dir):
     assert [e["type"] for e in events] == ["error", "done"]
     assert "50" in events[0]["message"] or "401" in events[0]["message"]
     assert not pathfinder._SEARCH_SEMAPHORE.locked()
+
+
+async def test_excluded_movie_ids_prunes_the_only_bridge(config_dir):
+    """Phase 15 run-scoped solver: a would-be bridge movie in `excluded_movie_ids`
+    must never enter the graph, even though it's the only route between the pair."""
+    with _session(config_dir) as session, respx.mock:
+        _mock_movie_and_credits(3, "Movie C", [_cast_member(200, "Actor P")])
+        _mock_movie_and_credits(4, "Movie D", [_cast_member(201, "Actor Q")])
+        respx.get(f"{TMDB_BASE}/person/200/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(3, "Movie C"),
+                 _person_credit(5, "Movie Bridge")]
+            )
+        )
+        respx.get(f"{TMDB_BASE}/person/201/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(4, "Movie D"),
+                 _person_credit(5, "Movie Bridge")]
+            )
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            events = await _collect(
+                pathfinder.solve_bridge_bipartite(
+                    session, tmdb, 3, 4, max_depth=5, excluded_movie_ids={5}
+                )
+            )
+
+    assert not any(e["type"] == "result" for e in events)
+    exhausted = next(e for e in events if e["type"] == "exhausted")
+    assert exhausted["reason"] == "max_depth_reached"
+
+
+async def test_future_release_date_excludes_candidate_from_graph(config_dir):
+    """Reality filter: an unreleased (future release_date) movie must never be
+    used as a bridge, even though it's otherwise a perfectly good connector."""
+    with _session(config_dir) as session, respx.mock:
+        _mock_movie_and_credits(3, "Movie C", [_cast_member(200, "Actor P")])
+        _mock_movie_and_credits(4, "Movie D", [_cast_member(201, "Actor Q")])
+        respx.get(f"{TMDB_BASE}/person/200/movie_credits").mock(
+            return_value=_person_credits_response(
+                [
+                    _person_credit(3, "Movie C"),
+                    _person_credit(
+                        5, "Unreleased Sequel", release_date="2099-01-01"),
+                ]
+            )
+        )
+        respx.get(f"{TMDB_BASE}/person/201/movie_credits").mock(
+            return_value=_person_credits_response(
+                [
+                    _person_credit(4, "Movie D"),
+                    _person_credit(
+                        5, "Unreleased Sequel", release_date="2099-01-01"),
+                ]
+            )
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            events = await _collect(
+                pathfinder.solve_bridge_bipartite(
+                    session, tmdb, 3, 4, max_depth=5)
+            )
+
+    assert not any(e["type"] == "result" for e in events)
+    exhausted = next(e for e in events if e["type"] == "exhausted")
+    assert exhausted["reason"] == "max_depth_reached"
+
+
+async def test_min_runtime_filters_a_known_short_bridge_movie(config_dir):
+    """A bridge movie whose runtime is ALREADY cached (from an earlier full
+    detail fetch) and falls below the run's min_runtime rule must be pruned.
+    Unknown-runtime stubs (the common case) are never penalized - only
+    checked when the data happens to already be known."""
+    from app.models.cache import CachedMovie
+
+    with _session(config_dir) as session, respx.mock:
+        session.add(
+            CachedMovie(
+                tmdb_id=5, title="Short Film", release_date="2000-01-01", runtime=10,
+            )
+        )
+        session.commit()
+
+        _mock_movie_and_credits(3, "Movie C", [_cast_member(200, "Actor P")])
+        _mock_movie_and_credits(4, "Movie D", [_cast_member(201, "Actor Q")])
+        respx.get(f"{TMDB_BASE}/person/200/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(3, "Movie C"),
+                 _person_credit(5, "Short Film")]
+            )
+        )
+        respx.get(f"{TMDB_BASE}/person/201/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(4, "Movie D"),
+                 _person_credit(5, "Short Film")]
+            )
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            events = await _collect(
+                pathfinder.solve_bridge_bipartite(
+                    session, tmdb, 3, 4, max_depth=5, min_runtime=60)
+            )
+
+    assert not any(e["type"] == "result" for e in events)
+    exhausted = next(e for e in events if e["type"] == "exhausted")
+    assert exhausted["reason"] == "max_depth_reached"
+
+
+async def test_multiple_direct_actor_links_produce_alternate_paths(config_dir):
+    """Two different actors both directly connecting the same two films must
+    surface as a primary path plus an 'Alternative Cast Link' alternate."""
+    with _session(config_dir) as session, respx.mock:
+        _mock_movie_and_credits(
+            1,
+            "Movie A",
+            [_cast_member(100, "Actor Shared 1"),
+             _cast_member(101, "Actor Shared 2")],
+        )
+        _mock_movie_and_credits(
+            2,
+            "Movie B",
+            [_cast_member(100, "Actor Shared 1"),
+             _cast_member(101, "Actor Shared 2")],
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            events = await _collect(
+                pathfinder.solve_bridge_bipartite(
+                    session, tmdb, 1, 2, max_depth=5)
+            )
+
+    result = next(e for e in events if e["type"] == "result")
+    assert result["hops"] == 1
+    assert result["label"] == "Shortest"
+    assert len(result["alternate_paths"]) == 1
+    alternate = result["alternate_paths"][0]
+    assert alternate["label"] == "Alternative Cast Link"
+    assert alternate["connections"][0].actor_id != result["connections"][0].actor_id

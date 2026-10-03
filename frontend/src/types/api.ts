@@ -210,6 +210,8 @@ export interface JellyfinItemSummary {
 export interface RequestClientStatus {
 	enabled: boolean;
 	implemented: boolean;
+	reachable: boolean | null;
+	version: string | null;
 }
 
 export interface IntegrationStatus {
@@ -241,6 +243,81 @@ export interface IntegrationConfig {
 	jellyfin_api_key_masked: string | null;
 	omdb_configured: boolean;
 	omdb_api_key_masked: string | null;
+	radarr_url: string;
+	radarr_configured: boolean;
+	radarr_api_key_masked: string | null;
+	radarr_default_quality_profile_id: number | null;
+	radarr_default_root_folder_path: string | null;
+	seerr_url: string;
+	seerr_configured: boolean;
+	seerr_api_key_masked: string | null;
+	seerr_request_mode: RequestMode;
+	seerr_user_id: number | null;
+}
+
+// --- Radarr / Seerr request flow (routes_integrations.py, Phase 16) ---
+
+export type RequestMode = "auto" | "prompt";
+
+export interface QualityProfile {
+	id: number;
+	name: string;
+}
+
+export interface RootFolder {
+	id: number | null;
+	path: string;
+	free_space: number | null;
+}
+
+export interface RadarrOptions {
+	enabled: boolean;
+	profiles: QualityProfile[];
+	root_folders: RootFolder[];
+	default_quality_profile_id: number | null;
+	default_root_folder_path: string | null;
+}
+
+export interface SeerrUser {
+	id: number;
+	display_name: string;
+	email: string | null;
+}
+
+export interface SeerrServer {
+	id: number;
+	name: string;
+	is_default: boolean;
+	is_4k: boolean;
+	active_profile_id: number | null;
+	active_directory: string | null;
+	profiles: QualityProfile[];
+	root_folders: RootFolder[];
+}
+
+export interface SeerrOptions {
+	enabled: boolean;
+	request_mode: RequestMode;
+	default_user_id: number | null;
+	users: SeerrUser[];
+	servers: SeerrServer[];
+}
+
+export interface RequestConfig {
+	service: "seerr" | "radarr" | null;
+	request_mode: RequestMode;
+}
+
+export interface AcquisitionStatus {
+	state: "available" | "downloading" | "requested" | "missing";
+	source: "jellyfin" | "radarr" | "seerr" | null;
+}
+
+export interface RequestResult {
+	success: boolean;
+	service: "seerr" | "radarr";
+	mode: "auto" | "advanced";
+	state: "requested" | "downloading";
 }
 
 export interface ConnectivityTestResult {

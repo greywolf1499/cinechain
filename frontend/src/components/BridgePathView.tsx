@@ -1,4 +1,5 @@
 import { ArrowRight } from "lucide-react";
+import AcquisitionControl from "./AcquisitionControl";
 import MoviePoster from "./MoviePoster";
 import OnServerBadge from "./OnServerBadge";
 import { profileUrl } from "../lib/tmdbImage";
@@ -30,8 +31,13 @@ export default function BridgePathView({
               <p className="mt-1.5 truncate text-xs font-medium text-zinc-200">{node.title}</p>
             </button>
             {node.release_year && <p className="text-[11px] text-zinc-500">{node.release_year}</p>}
-            <div className="mt-1 flex justify-center">
+            <div className="mt-1 flex flex-col items-center gap-1">
               <OnServerBadge onServer={onServerMap?.[node.movie_id]?.on_server} />
+              <AcquisitionControl
+                tmdbId={node.movie_id}
+                title={node.title}
+                onServer={onServerMap?.[node.movie_id]?.on_server}
+              />
             </div>
           </div>
 

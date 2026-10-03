@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
+import AcquisitionControl from "./AcquisitionControl";
 import OnServerBadge from "./OnServerBadge";
 import RatingBadges from "./RatingBadges";
 import { CanonBadgeList } from "./CanonBadge";
@@ -800,6 +801,11 @@ function MovieScreenView({
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <RatingBadges ratings={movie?.ratings} />
             <OnServerBadge onServer={jellyfinStatus?.[String(screen.movieId)]?.on_server} />
+            <AcquisitionControl
+              tmdbId={screen.movieId}
+              title={screen.label}
+              onServer={jellyfinStatus?.[String(screen.movieId)]?.on_server}
+            />
           </div>
           <div className="mt-1.5">
             <CanonBadgeList badges={badgesMap?.[String(screen.movieId)]} />

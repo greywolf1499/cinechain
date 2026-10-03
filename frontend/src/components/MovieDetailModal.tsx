@@ -5,6 +5,7 @@ import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import MovieCastStrip from "./MovieCastStrip";
 import RatingBadges from "./RatingBadges";
+import AcquisitionControl from "./AcquisitionControl";
 import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
@@ -105,6 +106,11 @@ export default function MovieDetailModal({
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               <RatingBadges ratings={movie?.ratings} />
               <OnServerBadge onServer={jellyfinStatus?.[String(step.movie_id)]?.on_server} />
+              <AcquisitionControl
+                tmdbId={step.movie_id}
+                title={step.movie_title}
+                onServer={jellyfinStatus?.[String(step.movie_id)]?.on_server}
+              />
             </div>
             <div className="mt-1.5">
               <CanonBadgeList badges={badgesMap?.[String(step.movie_id)]} />

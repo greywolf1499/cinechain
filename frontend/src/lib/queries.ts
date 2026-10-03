@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type {
+	AcquisitionStatus,
 	CacheStats,
 	CanonBadge,
 	CuratedAccount,
@@ -11,6 +12,7 @@ import type {
 	RunStats,
 	RunStatus,
 	RulesConfig,
+	RequestConfig,
 	StepStatus,
 	UserSummary,
 } from "../types/api";
@@ -78,6 +80,32 @@ export function useCuratedAccounts() {
 	return useQuery({
 		queryKey: queryKeys.curatedAccounts,
 		queryFn: () => api.get<CuratedAccount[]>("/curated/accounts"),
+	});
+}
+
+export function useRequestConfig() {
+	return useQuery({
+		queryKey: ["integrations", "request-config"],
+		queryFn: () => api.get<RequestConfig>("/integrations/request-config"),
+		staleTime: 60_000,
+	});
+}
+
+export const acquisitionKey = (tmdbId: number) =>
+	["integrations", "acquisition", tmdbId] as const;
+
+export function useAcquisitionStatus(tmdbId: number, enabled = true) {
+	return useQuery({
+		queryKey: acquisitionKey(tmdbId),
+		queryFn: async (): Promise<AcquisitionStatus> => {
+			const result = await api.post<Record<string, AcquisitionStatus>>(
+				"/integrations/status/lookup",
+				{ tmdb_ids: [tmdbId] },
+			);
+			return result[String(tmdbId)] ?? { state: "missing", source: null };
+		},
+		enabled,
+		staleTime: 30_000,
 	});
 }
 

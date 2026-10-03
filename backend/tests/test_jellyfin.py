@@ -300,13 +300,6 @@ def test_jellyfin_lookup_route(client):
     assert resp.json()["603"]["on_server"] is True
 
 
-def test_radarr_stub_returns_501(client):
-    _register_and_login(client)
-    resp = client.post("/api/integrations/radarr/request",
-                       json={"tmdb_id": 603, "title": "The Matrix"})
-    assert resp.status_code == 501
-
-
 def test_jellyfin_test_lookup_requires_admin(client):
     _register_and_login(client, "alice")  # first user - admin
     client.post(

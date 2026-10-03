@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import RatingBadges from "./RatingBadges";
+import AcquisitionControl from "./AcquisitionControl";
 import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
@@ -66,6 +67,11 @@ export default function MoviePreviewModal({
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <RatingBadges ratings={movie.ratings} />
                 <OnServerBadge onServer={jellyfinStatus?.[String(movieId)]?.on_server} />
+                <AcquisitionControl
+                  tmdbId={movieId}
+                  title={movie.title}
+                  onServer={jellyfinStatus?.[String(movieId)]?.on_server}
+                />
               </div>
               <div className="mt-1.5">
                 <CanonBadgeList badges={badgesMap?.[String(movieId)]} />

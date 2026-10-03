@@ -20,6 +20,14 @@ OVERRIDABLE_KEYS = (
     "jellyfin_api_key",
     "omdb_api_key",
     "bridge_max_duration_seconds",
+    "radarr_url",
+    "radarr_api_key",
+    "radarr_default_quality_profile_id",
+    "radarr_default_root_folder_path",
+    "seerr_url",
+    "seerr_api_key",
+    "seerr_request_mode",
+    "seerr_user_id",
 )
 
 

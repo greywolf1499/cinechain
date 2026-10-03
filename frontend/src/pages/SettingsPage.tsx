@@ -4,6 +4,7 @@ import { CheckCircle2, Clock, HelpCircle, Loader2, Search, XCircle } from "lucid
 import PageHeading from "../components/PageHeading";
 import Toast, { type ToastState } from "../components/Toast";
 import CuratedCanonsCard from "../components/CuratedCanonsCard";
+import { RadarrSettingsCard, SeerrSettingsCard } from "../components/ArrIntegrationCards";
 import { ApiError, api } from "../lib/api";
 import { queryKeys, useCacheStats, useUsers } from "../lib/queries";
 import { useAuthStore } from "../store/authStore";
@@ -12,6 +13,7 @@ import type {
   IntegrationConfig,
   IntegrationStatus,
   JellyfinTestLookupResult,
+  RequestClientStatus,
   SolverConfig,
   User,
 } from "../types/api";
@@ -51,19 +53,23 @@ export default function SettingsPage() {
               <IntegrationRow
                 name="Radarr"
                 enabled={data.radarr.enabled}
-                detail={data.radarr.implemented ? "Available" : "Not implemented yet (v1.1)"}
-                ok={null}
+                detail={requestServiceDetail(data.radarr)}
+                ok={data.radarr.enabled ? data.radarr.reachable : null}
               />
               <IntegrationRow
                 name="Seerr"
                 enabled={data.seerr.enabled}
-                detail={data.seerr.implemented ? "Available" : "Not implemented yet (v1.1)"}
-                ok={null}
+                detail={requestServiceDetail(data.seerr)}
+                ok={data.seerr.enabled ? data.seerr.reachable : null}
               />
             </div>
           )}
           {currentUser?.is_admin && <IntegrationSettingsEditor />}
         </SettingsCard>
+
+        {currentUser?.is_admin && <RadarrSettingsCard />}
+
+        {currentUser?.is_admin && <SeerrSettingsCard />}
 
         {currentUser?.is_admin && <SolverSettingsCard />}
 
@@ -88,6 +94,12 @@ export default function SettingsPage() {
       </div>
     </div>
   );
+}
+
+function requestServiceDetail(status: RequestClientStatus): string {
+  if (!status.enabled) return "Not configured";
+  if (!status.reachable) return "Configured but unreachable";
+  return `Reachable${status.version ? ` (v${status.version})` : ""}`;
 }
 
 function SettingsCard({ title, children }: { title: string; children: ReactNode }) {

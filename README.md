@@ -94,10 +94,10 @@ First launch creates the SQLite DB and prompts you to create the first (admin) a
 | `TZ`               |    No    | `Etc/UTC` | Timezone for log timestamps.                                                                                                                                      |
 | `JELLYFIN_URL`     |    No    | _(empty)_ | Base URL of your Jellyfin server (e.g. `http://jellyfin:8096`). Leave empty to disable Jellyfin badges.                                                           |
 | `JELLYFIN_API_KEY` |    No    | _(empty)_ | Jellyfin API key (Dashboard → API Keys).                                                                                                                          |
-| `RADARR_URL`       |    No    | _(empty)_ | Reserved for a future "Queue to Radarr" action (interface + 501 stub today).                                                                                      |
-| `RADARR_API_KEY`   |    No    | _(empty)_ | Radarr API key.                                                                                                                                                   |
-| `SEERR_URL`        |    No    | _(empty)_ | Reserved for a future Overseerr/Jellyseerr request integration.                                                                                                   |
-| `SEERR_API_KEY`    |    No    | _(empty)_ | Seerr API key.                                                                                                                                                    |
+| `RADARR_URL`       |    No    | _(empty)_ | Radarr base URL (defaults to `http://radarr:7878` once a key is set). Powers the "Request" button when Seerr is not configured. Also editable in Settings.        |
+| `RADARR_API_KEY`   |    No    | _(empty)_ | Radarr API key (Settings → General). Setting it enables Radarr.                                                                                                   |
+| `SEERR_URL`        |    No    | _(empty)_ | Overseerr/Jellyseerr base URL (defaults to `http://seerr:5055` once a key is set). Also editable in Settings.                                                     |
+| `SEERR_API_KEY`    |    No    | _(empty)_ | Seerr admin API key. Setting it enables one-click requests (Auto-Route or per-request folder/server/profile).                                                     |
 | `CINECHAIN_PORT`   |    No    | `8787`    | Host port published (container always listens on 8787 internally).                                                                                                |
 
 \* `TMDB_API_KEY` can be left blank in `.env` and set later via **Settings → Integrations** instead

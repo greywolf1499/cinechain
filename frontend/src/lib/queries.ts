@@ -2,6 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type {
 	CacheStats,
+	CanonBadge,
+	CuratedAccount,
+	CuratedListSummary,
 	DiscoveryCandidate,
 	Run,
 	RunDetail,
@@ -18,6 +21,8 @@ export const queryKeys = {
 	run: (id: string) => ["runs", id] as const,
 	runStats: (id: string) => ["runs", id, "stats"] as const,
 	cacheStats: ["system", "cache-stats"] as const,
+	curatedLists: ["curated", "lists"] as const,
+	curatedAccounts: ["curated", "accounts"] as const,
 	discover: (runId: string, frontierMovieId: number, mode: "or" | "and") =>
 		["runs", runId, "discover", frontierMovieId, mode] as const,
 };
@@ -59,6 +64,31 @@ export function useCacheStats() {
 	return useQuery({
 		queryKey: queryKeys.cacheStats,
 		queryFn: () => api.get<CacheStats>("/system/cache/stats"),
+	});
+}
+
+export function useCuratedLists() {
+	return useQuery({
+		queryKey: queryKeys.curatedLists,
+		queryFn: () => api.get<CuratedListSummary[]>("/curated/lists"),
+	});
+}
+
+export function useCuratedAccounts() {
+	return useQuery({
+		queryKey: queryKeys.curatedAccounts,
+		queryFn: () => api.get<CuratedAccount[]>("/curated/accounts"),
+	});
+}
+
+export function useCanonBadgesBulk(movieIds: number[]) {
+	return useQuery({
+		queryKey: ["curated", "badges", "bulk", movieIds],
+		queryFn: () =>
+			api.post<Record<string, CanonBadge[]>>("/curated/badges/bulk", {
+				movie_ids: movieIds,
+			}),
+		enabled: movieIds.length > 0,
 	});
 }
 

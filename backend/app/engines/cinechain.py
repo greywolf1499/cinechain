@@ -206,6 +206,7 @@ class CineChainEngine(BaseChallengeEngine):
         cast_limit: int | None = None,
         min_runtime: int | None = None,
         excluded_movie_ids: set[int] | None = None,
+        max_duration_seconds: int | None = None,
     ):
         return pathfinder.solve_bridge_bipartite(
             self.session,
@@ -217,4 +218,5 @@ class CineChainEngine(BaseChallengeEngine):
             cast_limit=cast_limit,
             min_runtime=min_runtime,
             excluded_movie_ids=excluded_movie_ids,
+            max_duration_seconds=max_duration_seconds,
         )

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.api.deps import get_current_admin
@@ -129,3 +129,37 @@ async def test_omdb_connection(
         request.app.state.http_client, payload.omdb_api_key, get_settings().omdb_api_base
     )
     return ConnectivityTestResult(**result)
+
+
+class SolverConfigOut(BaseModel):
+    bridge_max_duration_seconds: int
+
+
+class SolverConfigUpdate(BaseModel):
+    bridge_max_duration_seconds: int = Field(ge=5, le=300)
+
+
+@router.get("/solver", response_model=SolverConfigOut)
+def get_solver_settings(
+    session: Session = Depends(get_session),
+    _admin: User = Depends(get_current_admin),
+) -> SolverConfigOut:
+    overrides = settings_repo.get_overrides(session)
+    raw = overrides.get("bridge_max_duration_seconds")
+    return SolverConfigOut(
+        bridge_max_duration_seconds=int(
+            raw) if raw else get_settings().bridge_max_duration_seconds
+    )
+
+
+@router.patch("/solver", response_model=SolverConfigOut)
+def update_solver_settings(
+    payload: SolverConfigUpdate,
+    session: Session = Depends(get_session),
+    _admin: User = Depends(get_current_admin),
+) -> SolverConfigOut:
+    settings_repo.set_overrides(
+        session, {"bridge_max_duration_seconds": str(
+            payload.bridge_max_duration_seconds)}
+    )
+    return SolverConfigOut(bridge_max_duration_seconds=payload.bridge_max_duration_seconds)

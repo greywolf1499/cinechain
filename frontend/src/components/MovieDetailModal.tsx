@@ -5,12 +5,14 @@ import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import MovieCastStrip from "./MovieCastStrip";
 import RatingBadges from "./RatingBadges";
+import OnServerBadge from "./OnServerBadge";
+import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
-import { useUpdateStep } from "../lib/queries";
+import { useCanonBadgesBulk, useUpdateStep } from "../lib/queries";
 import type { ActorClickPayload } from "./actorClickTypes";
-import type { GenreOut, MovieDetail, RunStep } from "../types/api";
+import type { GenreOut, JellyfinItemSummary, MovieDetail, RunStep } from "../types/api";
 
 interface TransitionMeta {
   actor_id?: number;
@@ -49,6 +51,15 @@ export default function MovieDetailModal({
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
     enabled: open,
   });
+  const { data: jellyfinStatus } = useQuery({
+    queryKey: ["jellyfin", "lookup", [step.movie_id]],
+    queryFn: () =>
+      api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
+        tmdb_ids: [step.movie_id],
+      }),
+    enabled: open,
+  });
+  const { data: badgesMap } = useCanonBadgesBulk(open ? [step.movie_id] : []);
 
   const updateStep = useUpdateStep(runId);
   const [notes, setNotes] = useState(step.user_notes ?? "");
@@ -91,8 +102,12 @@ export default function MovieDetailModal({
               {step.movie_release_year ?? "—"}
               {movie?.runtime ? ` · ${movie.runtime} min` : ""}
             </p>
-            <div className="mt-1.5">
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               <RatingBadges ratings={movie?.ratings} />
+              <OnServerBadge onServer={jellyfinStatus?.[String(step.movie_id)]?.on_server} />
+            </div>
+            <div className="mt-1.5">
+              <CanonBadgeList badges={badgesMap?.[String(step.movie_id)]} />
             </div>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {countries.map((country) => (

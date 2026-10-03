@@ -275,6 +275,7 @@ function ActiveFrontierCard({
           runId={runId}
           frontierStep={tailStep}
           rulesConfig={rulesConfig}
+          steps={steps}
         />
       )}
     </div>

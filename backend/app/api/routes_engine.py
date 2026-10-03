@@ -12,6 +12,7 @@ from app.engines.registry import ENGINE_REGISTRY, get_engine
 from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
 from app.models.user import User
 from app.schemas.engine import ValidationResult
+from app.services import settings_repo
 from app.services.tmdb import TMDBClient
 
 router = APIRouter(tags=["engine"])
@@ -121,6 +122,10 @@ async def bridge_stream(
         cast_limit = rules.get("max_cast_order")
         min_runtime = rules.get("min_runtime")
 
+    overrides = settings_repo.get_overrides(session)
+    raw_max_duration = overrides.get("bridge_max_duration_seconds")
+    max_duration_seconds = int(raw_max_duration) if raw_max_duration else None
+
     async def event_source():
         agen = engine.solve_bridge(
             from_movie_id,
@@ -129,6 +134,7 @@ async def bridge_stream(
             cast_limit=cast_limit,
             min_runtime=min_runtime,
             excluded_movie_ids=excluded_movie_ids,
+            max_duration_seconds=max_duration_seconds,
         )
         try:
             async for event in agen:

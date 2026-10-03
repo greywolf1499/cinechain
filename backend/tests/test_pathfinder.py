@@ -469,3 +469,91 @@ async def test_multiple_direct_actor_links_produce_alternate_paths(config_dir):
     alternate = result["alternate_paths"][0]
     assert alternate["label"] == "Alternative Cast Link"
     assert alternate["connections"][0].actor_id != result["connections"][0].actor_id
+
+
+async def test_solve_duration_timeout_emits_clean_timeout_event(config_dir):
+    """max_duration_seconds=0 must stop the search cleanly (not an error) as
+    soon as a round completes without a meeting, explaining depth reached."""
+    with _session(config_dir) as session, respx.mock:
+        _mock_movie_and_credits(3, "Movie C", [_cast_member(200, "Actor P")])
+        _mock_movie_and_credits(4, "Movie D", [_cast_member(201, "Actor Q")])
+        respx.get(f"{TMDB_BASE}/person/200/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(3, "Movie C"),
+                 _person_credit(5, "Movie Bridge")]
+            )
+        )
+        respx.get(f"{TMDB_BASE}/person/201/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(4, "Movie D"),
+                 _person_credit(5, "Movie Bridge")]
+            )
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            events = await _collect(
+                pathfinder.solve_bridge_bipartite(
+                    session, tmdb, 3, 4, max_depth=5, max_duration_seconds=0)
+            )
+
+    assert not any(e["type"] == "result" for e in events)
+    assert not any(e["type"] == "error" for e in events)
+    timeout_event = next(e for e in events if e["type"] == "timeout")
+    assert timeout_event["depth_reached"] == 0
+    assert "timeout" in timeout_event["message"].lower()
+    assert events[-1]["type"] == "done"
+
+
+async def test_canon_badged_alternate_is_labeled_cinephile_route(config_dir):
+    """An alternate bridge path whose intermediate film carries a Curated
+    Canon badge must be labeled 'The Cinephile Route', regardless of hop
+    count/popularity-based labeling."""
+    from app.models.curated import CanonMovieBadge, CuratedList
+
+    with _session(config_dir) as session, respx.mock:
+        curated_list = CuratedList(
+            title="Sight & Sound Top 100 (2022)",
+            url="https://letterboxd.com/sightsoundmag/list/x/",
+            badge_prefix="SS22",
+        )
+        session.add(curated_list)
+        session.commit()
+        session.refresh(curated_list)
+        for movie_id in (5, 6):
+            session.add(CanonMovieBadge(
+                curated_list_id=curated_list.id, movie_id=movie_id, badge_label="SS22"))
+        session.commit()
+
+        _mock_movie_and_credits(
+            3, "Movie C", [_cast_member(200, "Actor P"), _cast_member(202, "Actor P2")])
+        _mock_movie_and_credits(
+            4, "Movie D", [_cast_member(201, "Actor Q"), _cast_member(203, "Actor Q2")])
+        respx.get(f"{TMDB_BASE}/person/200/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(3, "Movie C"), _person_credit(5, "Movie Bridge A")])
+        )
+        respx.get(f"{TMDB_BASE}/person/202/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(3, "Movie C"), _person_credit(6, "Movie Bridge B")])
+        )
+        respx.get(f"{TMDB_BASE}/person/201/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(4, "Movie D"), _person_credit(5, "Movie Bridge A")])
+        )
+        respx.get(f"{TMDB_BASE}/person/203/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(4, "Movie D"), _person_credit(6, "Movie Bridge B")])
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            events = await _collect(
+                pathfinder.solve_bridge_bipartite(
+                    session, tmdb, 3, 4, max_depth=5)
+            )
+
+    result = next(e for e in events if e["type"] == "result")
+    assert result["label"] == "Shortest"
+    assert len(result["alternate_paths"]) == 1
+    assert result["alternate_paths"][0]["label"] == "The Cinephile Route"

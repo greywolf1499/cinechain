@@ -75,10 +75,20 @@ class TMDBClient:
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._max_retries = max_retries
         self._overrides: dict[str, str] = {}
+        # Adaptive pacing state: counts recent 429s, decays on clean requests.
+        self._consecutive_429s = 0
 
     def set_overrides(self, overrides: dict[str, str]) -> None:
         """Admin-configured DB overrides (Phase 10.1) take precedence over .env."""
         self._overrides = overrides
+
+    @property
+    def pacing_delay_seconds(self) -> float:
+        """Adaptive backoff for BURSTS of uncached requests (e.g. the bridge
+        pathfinder's graph expansion) - scales with recently observed 429s so
+        the caller slows down proactively instead of only reacting after
+        already being rate-limited again."""
+        return min(0.2 * self._consecutive_429s, 2.0)
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{self._settings.tmdb_api_base}{path}"
@@ -86,9 +96,11 @@ class TMDBClient:
             "tmdb_api_key") or self._settings.tmdb_api_key
         headers = {"Authorization": f"Bearer {api_key}"}
         backoff = 0.5
+        hit_429 = False
 
         async with self._semaphore:
             response = await self._client.get(url, params=params, headers=headers)
+            hit_429 = hit_429 or response.status_code == 429
             for attempt in range(1, self._max_retries + 1):
                 if response.status_code not in RETRYABLE_STATUS_CODES:
                     break
@@ -107,6 +119,12 @@ class TMDBClient:
                 await asyncio.sleep(delay)
                 backoff *= 2
                 response = await self._client.get(url, params=params, headers=headers)
+                hit_429 = hit_429 or response.status_code == 429
+
+            self._consecutive_429s = (
+                min(self._consecutive_429s + 1,
+                    10) if hit_429 else max(self._consecutive_429s - 1, 0)
+            )
 
         if response.status_code >= 400:
             raise TMDBError(

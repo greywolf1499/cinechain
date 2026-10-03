@@ -16,8 +16,9 @@ from sqlmodel import Session, SQLModel, create_engine
 from app.api.routes_integrations import get_jellyfin_client
 from app.config import Settings
 from app.db import get_session
-from app.integrations.jellyfin import JellyfinClient, _cache
+from app.integrations.jellyfin import JellyfinClient, _cache, _normalize_title
 from app.main import app
+from app.models.cache import CachedMovie
 
 JELLYFIN_BASE = "http://jellyfin.test"
 
@@ -78,6 +79,135 @@ async def test_unconfigured_jellyfin_makes_zero_http_calls():
             results = await jellyfin.lookup_movies([603])
 
     assert results[603].on_server is None
+
+
+def test_normalize_title_strips_punctuation_and_case():
+    assert _normalize_title("Se7en") == _normalize_title("SE7EN")
+    assert _normalize_title("The Matrix: Reloaded") == _normalize_title(
+        "the matrix reloaded")
+    assert _normalize_title("Spider-Man") == _normalize_title("spiderman")
+
+
+async def test_title_year_fallback_matches_when_provider_id_missing(config_dir):
+    """Provider-id pass misses (no Tmdb id tagged on the local file), but the
+    normalized title+year fallback finds it via a Jellyfin SearchTerm match."""
+    from app.db import engine as app_engine
+
+    SQLModel.metadata.create_all(app_engine)
+    with Session(app_engine) as session:
+        session.add(
+            CachedMovie(tmdb_id=603, title="The Matrix",
+                        release_date="1999-03-30")
+        )
+        session.commit()
+
+        with respx.mock:
+            respx.get(f"{JELLYFIN_BASE}/Items").mock(
+                side_effect=[
+                    # provider-id pass: no match
+                    httpx.Response(200, json={"Items": []}),
+                    httpx.Response(
+                        200,
+                        json={
+                            "Items": [
+                                {
+                                    "Id": "xyz789",
+                                    "Name": "The Matrix (1999)",
+                                    "ProductionYear": 1999,
+                                    "ProviderIds": {},
+                                }
+                            ]
+                        },
+                    ),
+                ]
+            )
+            async with httpx.AsyncClient() as client:
+                jellyfin = JellyfinClient(
+                    client, settings=_configured_settings())
+                results = await jellyfin.lookup_movies([603], session=session)
+
+    assert results[603].on_server is True
+    assert results[603].item_id == "xyz789"
+
+
+async def test_title_year_fallback_rejects_wrong_year(config_dir):
+    from app.db import engine as app_engine
+
+    SQLModel.metadata.create_all(app_engine)
+    with Session(app_engine) as session:
+        session.add(
+            CachedMovie(tmdb_id=603, title="The Matrix",
+                        release_date="1999-03-30")
+        )
+        session.commit()
+
+        with respx.mock:
+            respx.get(f"{JELLYFIN_BASE}/Items").mock(
+                side_effect=[
+                    httpx.Response(200, json={"Items": []}),
+                    httpx.Response(
+                        200,
+                        json={
+                            "Items": [
+                                {
+                                    "Id": "wrong-year",
+                                    "Name": "The Matrix",
+                                    "ProductionYear": 2021,  # Resurrections, not the original
+                                    "ProviderIds": {},
+                                }
+                            ]
+                        },
+                    ),
+                ]
+            )
+            async with httpx.AsyncClient() as client:
+                jellyfin = JellyfinClient(
+                    client, settings=_configured_settings())
+                results = await jellyfin.lookup_movies([603], session=session)
+
+    assert results[603].on_server is False
+
+
+async def test_test_lookup_by_tmdb_id():
+    with respx.mock:
+        respx.get(f"{JELLYFIN_BASE}/Items").mock(
+            return_value=httpx.Response(
+                200,
+                json={"Items": [{"Id": "abc123", "Name": "The Matrix",
+                                 "ProductionYear": 1999, "ProviderIds": {"Tmdb": "603"}}]},
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            jellyfin = JellyfinClient(client, settings=_configured_settings())
+            result = await jellyfin.test_lookup("603")
+
+    assert result["query_type"] == "tmdb_id"
+    assert result["matches"][0]["name"] == "The Matrix"
+
+
+async def test_test_lookup_by_title():
+    with respx.mock:
+        respx.get(f"{JELLYFIN_BASE}/Items").mock(
+            return_value=httpx.Response(
+                200, json={"Items": [{"Id": "abc123", "Name": "The Matrix", "ProductionYear": 1999}]}
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            jellyfin = JellyfinClient(client, settings=_configured_settings())
+            result = await jellyfin.test_lookup("The Matrix")
+
+    assert result["query_type"] == "title"
+    assert len(result["matches"]) == 1
+
+
+async def test_test_lookup_disabled_makes_zero_http_calls():
+    with respx.mock:
+        async with httpx.AsyncClient() as client:
+            jellyfin = JellyfinClient(client, settings=Settings())
+            result = await jellyfin.test_lookup("The Matrix")
+
+    assert result["enabled"] is False
+    assert result["matches"] == []
 
 
 @pytest.fixture()
@@ -175,3 +305,40 @@ def test_radarr_stub_returns_501(client):
     resp = client.post("/api/integrations/radarr/request",
                        json={"tmdb_id": 603, "title": "The Matrix"})
     assert resp.status_code == 501
+
+
+def test_jellyfin_test_lookup_requires_admin(client):
+    _register_and_login(client, "alice")  # first user - admin
+    client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "display_name": "Bob"},
+    )
+    client.post("/api/auth/login",
+                json={"username": "bob", "password": "password123"})
+
+    resp = client.post("/api/integrations/jellyfin/test-lookup",
+                       json={"query": "The Matrix"})
+    assert resp.status_code == 403
+
+
+def test_jellyfin_test_lookup_route_returns_raw_matches(client):
+    _register_and_login(client)
+    _override_jellyfin(_configured_settings())
+    try:
+        with respx.mock:
+            respx.get(f"{JELLYFIN_BASE}/Items").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"Items": [{"Id": "abc123", "Name": "The Matrix",
+                                     "ProductionYear": 1999, "ProviderIds": {"Tmdb": "603"}}]},
+                )
+            )
+            resp = client.post(
+                "/api/integrations/jellyfin/test-lookup", json={"query": "The Matrix"})
+    finally:
+        app.dependency_overrides.pop(get_jellyfin_client, None)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["query_type"] == "title"
+    assert body["matches"][0]["name"] == "The Matrix"

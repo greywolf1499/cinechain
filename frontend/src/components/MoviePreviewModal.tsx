@@ -3,9 +3,12 @@ import { Loader2 } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import RatingBadges from "./RatingBadges";
+import OnServerBadge from "./OnServerBadge";
+import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
-import type { GenreOut, MovieDetail } from "../types/api";
+import { useCanonBadgesBulk } from "../lib/queries";
+import type { GenreOut, JellyfinItemSummary, MovieDetail } from "../types/api";
 
 /** Lightweight, read-only movie preview - used for bridge path nodes (not yet
  * logged in any run, so the heavier step-editing MovieDetailModal doesn't apply). */
@@ -30,6 +33,15 @@ export default function MoviePreviewModal({
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
     enabled: open,
   });
+  const { data: jellyfinStatus } = useQuery({
+    queryKey: ["jellyfin", "lookup", [movieId]],
+    queryFn: () =>
+      api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
+        tmdb_ids: [movieId],
+      }),
+    enabled: open,
+  });
+  const { data: badgesMap } = useCanonBadgesBulk(open ? [movieId] : []);
 
   const countries = parseOriginCountries(movie?.origin_country ?? null);
   const genreNames = (movie?.genre_ids ?? [])
@@ -51,8 +63,12 @@ export default function MoviePreviewModal({
                 {movie.release_year ?? "—"}
                 {movie.runtime ? ` · ${movie.runtime} min` : ""}
               </p>
-              <div className="mt-1.5">
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <RatingBadges ratings={movie.ratings} />
+                <OnServerBadge onServer={jellyfinStatus?.[String(movieId)]?.on_server} />
+              </div>
+              <div className="mt-1.5">
+                <CanonBadgeList badges={badgesMap?.[String(movieId)]} />
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {countries.map((country) => (

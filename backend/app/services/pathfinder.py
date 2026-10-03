@@ -21,10 +21,11 @@ import time
 from collections.abc import AsyncIterator
 
 import anyio
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.config import get_settings
 from app.models.cache import CachedActor, CachedMovie, CachedMovieCast
+from app.models.curated import CanonMovieBadge
 from app.schemas.engine import BridgeNode, SharedActorConnection
 from app.services import cache_repo
 from app.services.cache_repo import CacheRepo
@@ -54,6 +55,7 @@ async def solve_bridge_bipartite(
     cast_limit: int | None = None,
     min_runtime: int | None = None,
     excluded_movie_ids: set[int] | None = None,
+    max_duration_seconds: int | None = None,
 ) -> AsyncIterator[dict]:
     settings = get_settings()
     max_depth = max_depth or settings.pathfinder_max_depth
@@ -63,6 +65,12 @@ async def solve_bridge_bipartite(
     cast_limit = cast_limit or settings.pathfinder_cast_limit
     actor_cap = settings.pathfinder_actor_credit_limit
     excluded_movie_ids = excluded_movie_ids or set()
+    # `or` would treat an explicit 0 as "unset" - 0 is a legitimate caller
+    # value here (e.g. tests forcing an immediate timeout), unlike the other
+    # budget knobs above where 0 would never be a meaningful override.
+    max_duration_seconds = (
+        max_duration_seconds if max_duration_seconds is not None else settings.bridge_max_duration_seconds
+    )
 
     async with _SEARCH_SEMAPHORE:
         start = time.monotonic()
@@ -150,6 +158,21 @@ async def solve_bridge_bipartite(
                     yield {"type": "done"}
                     return
 
+                if time.monotonic() - start >= max_duration_seconds:
+                    yield {
+                        "type": "timeout",
+                        "depth_reached": forward.hops + backward.hops,
+                        "tmdb_calls": stats.tmdb_calls,
+                        "elapsed_ms": (time.monotonic() - start) * 1000,
+                        "message": (
+                            f"Search exceeded the {max_duration_seconds}s solver timeout after "
+                            f"reaching depth {forward.hops + backward.hops}. Try widening the "
+                            "cast depth rule or raising the solver timeout in Settings."
+                        ),
+                    }
+                    yield {"type": "done"}
+                    return
+
                 if not forward.frontier and not backward.frontier:
                     break  # both sides stalled - nothing left to explore before max_depth
 
@@ -196,6 +219,8 @@ async def _expand_movie_side(
     for movie_id in uncached:
         if stats.tmdb_calls >= call_budget:
             break
+        if stats.tmdb_calls > 0:
+            await asyncio.sleep(tmdb.pacing_delay_seconds)
         cast = await cache_repo.get_movie_cast(session, tmdb, movie_id, cast_limit)
         stats.tmdb_calls += 1
         parent = movie_node(movie_id)
@@ -240,6 +265,8 @@ async def _expand_actor_side(
         if credits_ is None:
             if stats.tmdb_calls >= call_budget:
                 continue
+            if stats.tmdb_calls > 0:
+                await asyncio.sleep(tmdb.pacing_delay_seconds)
             credits_ = await cache_repo.get_actor_credits(session, tmdb, actor_id)
             stats.tmdb_calls += 1
         else:
@@ -345,7 +372,7 @@ def _build_multi_result(session: Session, candidate_paths: list[list[NodeKey]]) 
     """
     built = [_build_result(session, path) for path in candidate_paths]
     built.sort(key=lambda entry: entry["hops"])
-    labels = _label_paths(built)
+    labels = _label_paths(session, built)
 
     primary = built[0]
     alternates = [
@@ -360,13 +387,15 @@ def _build_multi_result(session: Session, candidate_paths: list[list[NodeKey]]) 
     }
 
 
-def _label_paths(built: list[dict]) -> list[str]:
+def _label_paths(session: Session, built: list[dict]) -> list[str]:
     """Shortest first; same-length siblings are 'Alternative Cast Link' (a
     different connecting actor/bridge film at the same hop count), UNLESS
     an alternate's intermediate films are notably less mainstream (lower
     average TMDB popularity) than the primary's - then it's flagged as the
     'Underdog / International Pick', celebrating world/indie cinema rather
-    than penalizing it."""
+    than penalizing it. An alternate that traverses a Curated Canon badged
+    film (Sight & Sound, Letterboxd Top 250, etc) is surfaced as 'The
+    Cinephile Route' instead, taking priority over both other labels."""
     if len(built) == 1:
         return ["Shortest"]
 
@@ -375,6 +404,18 @@ def _label_paths(built: list[dict]) -> list[str]:
         pops = [
             node.popularity for node in intermediates if node.popularity is not None]
         return sum(pops) / len(pops) if pops else 0.0
+
+    def has_canon_badge(entry: dict) -> bool:
+        movie_ids = [node.movie_id for node in entry["path"][1:-1]]
+        if not movie_ids:
+            return False
+        return (
+            session.exec(
+                select(CanonMovieBadge.id).where(
+                    CanonMovieBadge.movie_id.in_(movie_ids)).limit(1)
+            ).first()
+            is not None
+        )
 
     primary_hops = built[0]["hops"]
     primary_popularity = avg_intermediate_popularity(built[0])
@@ -385,7 +426,9 @@ def _label_paths(built: list[dict]) -> list[str]:
 
     labels = ["Shortest"]
     for i, entry in enumerate(rest):
-        if entry["hops"] > primary_hops:
+        if has_canon_badge(entry):
+            labels.append("The Cinephile Route")
+        elif entry["hops"] > primary_hops:
             labels.append("Alternative Path")
         elif i == underdog_index and rest_popularity[i] < primary_popularity:
             labels.append("Underdog / International Pick")

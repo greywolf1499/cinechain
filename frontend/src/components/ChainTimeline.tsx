@@ -4,11 +4,12 @@ import MoviePoster from "./MoviePoster";
 import ChainLink from "./ChainLink";
 import MarkWatchedModal from "./MarkWatchedModal";
 import MovieDetailModal from "./MovieDetailModal";
+import { CanonBadgeList } from "./CanonBadge";
 import { cn } from "../lib/cn";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
-import { useUpdateStep } from "../lib/queries";
+import { useCanonBadgesBulk, useUpdateStep } from "../lib/queries";
 import type { ActorClickPayload } from "./actorClickTypes";
-import type { RunStep } from "../types/api";
+import type { CanonBadge, RunStep } from "../types/api";
 
 type Order = "story" | "latest";
 const ORDER_STORAGE_KEY = "cinechain:timeline-order";
@@ -59,6 +60,7 @@ export default function ChainTimeline({
   const [selectedStep, setSelectedStep] = useState<RunStep | null>(null);
   const [markWatchedStep, setMarkWatchedStep] = useState<RunStep | null>(null);
   const quickMarkWatched = useUpdateStep(runId);
+  const { data: badgesMap } = useCanonBadgesBulk(steps.map((s) => s.movie_id));
 
   useEffect(() => {
     localStorage.setItem(ORDER_STORAGE_KEY, order);
@@ -102,6 +104,7 @@ export default function ChainTimeline({
             <StationRow
               key={`station-${row.step.id}`}
               step={row.step}
+              badges={badgesMap?.[String(row.step.movie_id)]}
               onOpen={() => setSelectedStep(row.step)}
               onQuickMarkWatched={() =>
                 quickMarkWatched.mutate({ stepId: row.step.id, watched_at: new Date().toISOString() })
@@ -154,11 +157,13 @@ export default function ChainTimeline({
 
 function StationRow({
   step,
+  badges,
   onOpen,
   onQuickMarkWatched,
   quickMarkWatchedPending,
 }: {
   step: RunStep;
+  badges: CanonBadge[] | undefined;
   onOpen: () => void;
   onQuickMarkWatched: () => void;
   quickMarkWatchedPending: boolean;
@@ -227,6 +232,10 @@ function StationRow({
             {step.user_notes && (
               <p className="mt-1 line-clamp-2 text-[10px] italic text-zinc-500">“{step.user_notes}”</p>
             )}
+
+            <div className="mt-1">
+              <CanonBadgeList badges={badges} />
+            </div>
 
             <RuleFlags meta={step.transition_metadata} />
           </div>

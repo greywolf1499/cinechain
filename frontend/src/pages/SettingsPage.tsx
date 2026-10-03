@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, HelpCircle, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, HelpCircle, Loader2, Search, XCircle } from "lucide-react";
 import PageHeading from "../components/PageHeading";
 import Toast, { type ToastState } from "../components/Toast";
+import CuratedCanonsCard from "../components/CuratedCanonsCard";
 import { ApiError, api } from "../lib/api";
 import { queryKeys, useCacheStats, useUsers } from "../lib/queries";
 import { useAuthStore } from "../store/authStore";
@@ -10,6 +11,8 @@ import type {
   ConnectivityTestResult,
   IntegrationConfig,
   IntegrationStatus,
+  JellyfinTestLookupResult,
+  SolverConfig,
   User,
 } from "../types/api";
 
@@ -62,6 +65,10 @@ export default function SettingsPage() {
           {currentUser?.is_admin && <IntegrationSettingsEditor />}
         </SettingsCard>
 
+        {currentUser?.is_admin && <SolverSettingsCard />}
+
+        {currentUser?.is_admin && <CuratedCanonsCard />}
+
         <SettingsCard title="Cache Stats">
           {cacheLoading && <div className="px-5 py-4 text-sm text-zinc-500">Loading...</div>}
           {cacheStats && (
@@ -91,6 +98,69 @@ function SettingsCard({ title, children }: { title: string; children: ReactNode 
       </div>
       {children}
     </div>
+  );
+}
+
+function SolverSettingsCard() {
+  const queryClient = useQueryClient();
+  const { data: config } = useQuery({
+    queryKey: ["settings", "solver"],
+    queryFn: () => api.get<SolverConfig>("/settings/solver"),
+  });
+  const [value, setValue] = useState<number | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+
+  useEffect(() => {
+    if (config) setValue(config.bridge_max_duration_seconds);
+  }, [config]);
+
+  const save = useMutation({
+    mutationFn: (seconds: number) =>
+      api.patch<SolverConfig>("/settings/solver", { bridge_max_duration_seconds: seconds }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["settings", "solver"], updated);
+      setToast({ type: "success", message: "Solver timeout saved." });
+    },
+    onError: (err) => {
+      setToast({
+        type: "error",
+        message: err instanceof ApiError ? err.message : "Failed to save solver settings.",
+      });
+    },
+  });
+
+  return (
+    <SettingsCard title="Bridge Solver">
+      <div className="flex flex-col gap-2 px-5 py-4">
+        <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+          <Clock className="h-3.5 w-3.5" /> Max Search Duration
+        </p>
+        <p className="text-xs text-zinc-600">
+          How long the bridge solver searches before giving up with a clean timeout message.
+        </p>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <input
+            type="number"
+            min={5}
+            max={300}
+            value={value ?? ""}
+            onChange={(e) => setValue(Number(e.target.value))}
+            className={`${inputClass} w-24`}
+          />
+          <span className="text-xs text-zinc-500">seconds</span>
+          <button
+            type="button"
+            disabled={save.isPending || value === null}
+            onClick={() => value !== null && save.mutate(value)}
+            className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {save.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Save
+          </button>
+        </div>
+        <Toast toast={toast} onDismiss={() => setToast(null)} />
+      </div>
+    </SettingsCard>
   );
 }
 
@@ -366,9 +436,73 @@ function IntegrationSettingsEditor() {
             </span>
           )}
         </div>
+
+        <JellyfinLookupInspector />
       </div>
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
+    </div>
+  );
+}
+
+function JellyfinLookupInspector() {
+  const [query, setQuery] = useState("");
+  const testLookup = useMutation({
+    mutationFn: (q: string) =>
+      api.post<JellyfinTestLookupResult>("/integrations/jellyfin/test-lookup", { query: q }),
+  });
+
+  function handleTest() {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    testLookup.mutate(trimmed);
+  }
+
+  return (
+    <div className="mt-4 rounded-md border border-app-border bg-app-bg p-3">
+      <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+        <Search className="h-3.5 w-3.5" /> Jellyfin Lookup Inspector
+      </p>
+      <p className="mb-2 text-xs text-zinc-600">
+        Enter a movie title or TMDB id to see exactly what Jellyfin's API returns for it.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="e.g. The Matrix, or 603"
+          className={`${inputClass} min-w-[200px] flex-1`}
+        />
+        <button
+          type="button"
+          onClick={handleTest}
+          disabled={testLookup.isPending}
+          className="flex items-center gap-1.5 rounded-md border border-app-border px-3.5 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {testLookup.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Test Lookup
+        </button>
+      </div>
+
+      {testLookup.data && (
+        <div className="mt-2.5 flex flex-col gap-1.5">
+          <p className="text-[11px] text-zinc-500">
+            Query type: <span className="text-zinc-300">{testLookup.data.query_type}</span>
+            {!testLookup.data.enabled && " - Jellyfin is not configured"}
+          </p>
+          {testLookup.data.matches.length === 0 && testLookup.data.enabled && (
+            <p className="text-xs text-amber-400">No matches found.</p>
+          )}
+          {testLookup.data.matches.map((match) => (
+            <pre
+              key={match.item_id ?? match.name}
+              className="overflow-x-auto rounded-md bg-app-surface-hover p-2 text-[11px] text-zinc-300"
+            >
+              {JSON.stringify(match, null, 2)}
+            </pre>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

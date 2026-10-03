@@ -244,3 +244,39 @@ async def test_saved_omdb_override_is_used_by_ratings_lookup(client):
     assert resp.status_code == 200
     assert resp.json()["ratings"]["imdb_rating"] == "8.7"
     assert omdb_route.calls.last.request.url.params["apikey"] == "brand-new-omdb-key"
+
+
+def test_solver_settings_requires_admin(client):
+    _register_and_login(client, "alice")  # first user - admin
+    client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "display_name": "Bob"},
+    )
+    client.post("/api/auth/login",
+                json={"username": "bob", "password": "password123"})
+
+    assert client.get("/api/settings/solver").status_code == 403
+    assert client.patch("/api/settings/solver",
+                        json={"bridge_max_duration_seconds": 60}).status_code == 403
+
+
+def test_solver_settings_default_and_update(client):
+    _register_and_login(client)
+    assert client.get("/api/settings/solver").json() == {
+        "bridge_max_duration_seconds": 45}
+
+    resp = client.patch("/api/settings/solver",
+                        json={"bridge_max_duration_seconds": 90})
+    assert resp.status_code == 200
+    assert resp.json()["bridge_max_duration_seconds"] == 90
+
+    # Persisted - a fresh GET reflects the saved override.
+    assert client.get("/api/settings/solver").json()[
+        "bridge_max_duration_seconds"] == 90
+
+
+def test_solver_settings_rejects_out_of_range_values(client):
+    _register_and_login(client)
+    resp = client.patch("/api/settings/solver",
+                        json={"bridge_max_duration_seconds": 1})
+    assert resp.status_code == 422

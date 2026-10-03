@@ -248,3 +248,66 @@ export interface ConnectivityTestResult {
 	version: string | null;
 	detail: string | null;
 }
+
+export interface SolverConfig {
+	bridge_max_duration_seconds: number;
+}
+
+export interface JellyfinTestLookupResult {
+	query_type: string;
+	enabled: boolean;
+	matches: Array<{
+		item_id: string | null;
+		name: string | null;
+		production_year: number | null;
+		provider_ids: Record<string, string>;
+	}>;
+	error?: string | null;
+}
+
+// --- curated canons (schemas/curated.py, Phase 15.5) ---
+
+export interface CuratedListSummary {
+	id: string;
+	preset_key: string | null;
+	title: string;
+	url: string;
+	badge_prefix: string;
+	badge_color: string;
+	is_ranked: boolean;
+	total_items: number;
+	is_enabled: boolean;
+	film_count: number;
+	description: string | null;
+	preview_posters: string[];
+	source_account_id: string | null;
+	last_synced_at: string | null;
+	last_sync_error: string | null;
+}
+
+export interface CuratedAccount {
+	username: string;
+	display_name: string | null;
+	avatar_url: string | null;
+	bio: string | null;
+	is_hq: boolean;
+	account_tier: string | null;
+	total_public_lists: number;
+	last_inspected_at: string | null;
+	lists_discovered_at: string | null;
+	discovered_lists: number;
+	enabled_lists: number;
+}
+
+export interface CuratedAccountLists {
+	account: CuratedAccount;
+	discovered: boolean;
+	partial: boolean;
+	error: string | null;
+	lists: CuratedListSummary[];
+}
+
+export interface CanonBadge {
+	badge_label: string;
+	badge_color: string;
+}

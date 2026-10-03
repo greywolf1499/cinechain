@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     pathfinder_cast_limit: int = 15
     pathfinder_actor_credit_limit: int = 120
     pathfinder_call_budget: int = 150
+    # --- Bridge solver pacing (Phase 15.5) ---
+    bridge_max_duration_seconds: int = 45
 
     @property
     def database_path(self) -> Path:

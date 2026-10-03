@@ -14,8 +14,13 @@ from app.models.system import SystemSetting
 from app.utils.ids import utcnow
 
 # The only fields exposed for override - never store arbitrary keys.
-OVERRIDABLE_KEYS = ("tmdb_api_key", "jellyfin_url",
-                    "jellyfin_api_key", "omdb_api_key")
+OVERRIDABLE_KEYS = (
+    "tmdb_api_key",
+    "jellyfin_url",
+    "jellyfin_api_key",
+    "omdb_api_key",
+    "bridge_max_duration_seconds",
+)
 
 
 def get_overrides(session: Session) -> dict[str, str]:

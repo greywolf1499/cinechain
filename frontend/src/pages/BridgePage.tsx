@@ -8,6 +8,7 @@ import {
   Link2,
   Loader2,
   RotateCcw,
+  Search,
   Sparkles,
   XCircle,
 } from "lucide-react";
@@ -17,11 +18,20 @@ import EmptyState from "../components/EmptyState";
 import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
 import MoviePreviewModal from "../components/MoviePreviewModal";
-import BridgePathView from "../components/BridgePathView";
+import BridgePathView, { PathTagChips } from "../components/BridgePathView";
+import BridgeSwapPanel, { type SwapState } from "../components/BridgeSwapPanel";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useCreateStep, useRun, useRuns } from "../lib/queries";
-import type { BridgeResult, JellyfinItemSummary, MovieSummary } from "../types/api";
+import type {
+  BridgeResult,
+  BridgeRoute,
+  JellyfinItemSummary,
+  MovieSummary,
+  PathTagsResult,
+  SwapCandidate,
+  SwapNodeResult,
+} from "../types/api";
 
 interface ProgressEvent {
   depth: number;
@@ -53,9 +63,37 @@ interface ExhaustedEvent {
 
 type SolveStatus = "idle" | "streaming" | "solved" | "exhausted" | "timeout" | "error";
 
+type DeeperState =
+  | { status: "idle" }
+  | { status: "streaming"; target: number; progress: ProgressEvent | null }
+  | { status: "empty" | "timeout" | "error"; message: string };
+
+function routesFromResult(result: BridgeResult, labelPrefix = ""): BridgeRoute[] {
+  return [
+    {
+      label: `${labelPrefix}${result.label ?? "Shortest"}`,
+      path: result.path,
+      hops: result.hops,
+      connections: result.connections,
+      tags: result.tags ?? [],
+    },
+    ...(result.alternate_paths ?? []).map((alt) => ({
+      label: `${labelPrefix}${alt.label}`,
+      path: alt.path,
+      hops: alt.hops,
+      connections: alt.connections,
+      tags: alt.tags ?? [],
+    })),
+  ];
+}
+
+const pathKey = (path: { movie_id: number }[]) => path.map((node) => node.movie_id).join(",");
+
 const MIN_DEPTH = 2;
 const MAX_DEPTH = 5;
 const DEFAULT_DEPTH = 4;
+// Mirrors the backend's DEEP_SEARCH_MAX_HOPS.
+const DEEP_SEARCH_MAX_HOPS = 8;
 
 export default function BridgePage() {
   const navigate = useNavigate();
@@ -72,6 +110,13 @@ export default function BridgePage() {
   const [status, setStatus] = useState<SolveStatus>("idle");
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [result, setResult] = useState<BridgeResult | null>(null);
+  // Every displayable route (primary, alternates, deeper finds), edited in place by swaps.
+  const [options, setOptions] = useState<BridgeRoute[]>([]);
+  const [swap, setSwap] = useState<SwapState | null>(null);
+  const [applyingSwap, setApplyingSwap] = useState(false);
+  const [deeper, setDeeper] = useState<DeeperState>({ status: "idle" });
+  // Highest "Search Deeper" hop target that already came back empty.
+  const [deeperFloor, setDeeperFloor] = useState(0);
   const [activePathIndex, setActivePathIndex] = useState(0);
   const [previewMovieId, setPreviewMovieId] = useState<number | null>(null);
   const [exhausted, setExhausted] = useState<ExhaustedEvent | null>(null);
@@ -84,6 +129,9 @@ export default function BridgePage() {
   const [queueError, setQueueError] = useState<string | null>(null);
 
   const sourceRef = useRef<EventSource | null>(null);
+  const deeperSourceRef = useRef<EventSource | null>(null);
+  const swapRequestRef = useRef(0);
+  const lookedUpRef = useRef<Set<number>>(new Set());
 
   const runIdFromQuery = searchParams.get("run_id");
 
@@ -140,6 +188,7 @@ export default function BridgePage() {
   useEffect(() => {
     return () => {
       sourceRef.current?.close();
+      deeperSourceRef.current?.close();
     };
   }, []);
 
@@ -150,47 +199,53 @@ export default function BridgePage() {
     return () => window.clearTimeout(timer);
   }, [rateLimitNotice]);
 
-  // Fetch Jellyfin "on server" badges once a path is solved (non-fatal on failure).
-  // Covers every path option's movies, not just the primary, so switching tabs
-  // still shows correct badges without a refetch.
-  useEffect(() => {
-    if (!result) return;
-    const allMovieIds = [
-      ...result.path.map((node) => node.movie_id),
-      ...(result.alternate_paths ?? []).flatMap((alt) => alt.path.map((node) => node.movie_id)),
-    ];
-    let cancelled = false;
-    api
-      .post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
-        tmdb_ids: allMovieIds,
-      })
-      .then((data) => {
-        if (cancelled) return;
-        const numeric: Record<number, JellyfinItemSummary> = {};
-        for (const [key, value] of Object.entries(data)) {
-          numeric[Number(key)] = value;
-        }
-        setOnServerMap(numeric);
-      })
-      .catch(() => {
-        /* badges are a nice-to-have - skip silently */
+  // Jellyfin "on server" badges (non-fatal on failure). Looks up only films not
+  // seen yet, so switching tabs or swapping a node never refetches the rest.
+  async function lookupOnServer(movieIds: number[]) {
+    const missing = [...new Set(movieIds)].filter((id) => !lookedUpRef.current.has(id));
+    if (missing.length === 0) return;
+    missing.forEach((id) => lookedUpRef.current.add(id));
+    try {
+      const data = await api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
+        tmdb_ids: missing,
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [result]);
+      setOnServerMap((prev) => {
+        const next = { ...prev };
+        for (const [key, value] of Object.entries(data)) next[Number(key)] = value;
+        return next;
+      });
+    } catch {
+      missing.forEach((id) => lookedUpRef.current.delete(id));
+    }
+  }
+
+  useEffect(() => {
+    void lookupOnServer(options.flatMap((option) => option.path.map((node) => node.movie_id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options]);
 
   function closeSource() {
     sourceRef.current?.close();
     sourceRef.current = null;
   }
 
+  function closeDeeperSource() {
+    deeperSourceRef.current?.close();
+    deeperSourceRef.current = null;
+  }
+
   function startSolve(depthOverride?: number) {
     if (!startMovie || !targetMovie) return;
     closeSource();
+    closeDeeperSource();
     setStatus("streaming");
     setProgress(null);
     setResult(null);
+    setOptions([]);
+    setSwap(null);
+    setDeeper({ status: "idle" });
+    setDeeperFloor(0);
+    lookedUpRef.current = new Set();
     setActivePathIndex(0);
     setExhausted(null);
     setTimedOut(null);
@@ -227,7 +282,9 @@ export default function BridgePage() {
     });
     source.addEventListener("result", (event) => {
       finished = true;
-      setResult(JSON.parse((event as MessageEvent).data));
+      const parsed: BridgeResult = JSON.parse((event as MessageEvent).data);
+      setResult(parsed);
+      setOptions(routesFromResult(parsed));
       setActivePathIndex(0);
       setStatus("solved");
       closeSource();
@@ -281,18 +338,179 @@ export default function BridgePage() {
     startSolve(nextDepth);
   }
 
-  const canQueue =
-    !!selectedRun && !!result && !!tailStep && startMovie?.tmdb_id === tailStep.movie_id;
-
   // Path 1 (Shortest) + up to 2 alternates returned by the collision-layer
-  // multi-path search - the active tab drives both the rendered path and queueing.
-  const pathOptions: BridgeResult[] = result
-    ? [
-        { label: result.label ?? "Shortest", path: result.path, hops: result.hops, connections: result.connections },
-        ...(result.alternate_paths ?? []),
-      ]
-    : [];
-  const activePath = pathOptions[activePathIndex] ?? pathOptions[0];
+  // multi-path search, plus any "Search Deeper" finds - the active tab drives
+  // both the rendered path and queueing.
+  const activePath: BridgeRoute | undefined = options[activePathIndex] ?? options[0];
+
+  const canQueue =
+    !!selectedRun && !!activePath && !!tailStep && startMovie?.tmdb_id === tailStep.movie_id;
+
+  function selectPath(index: number) {
+    swapRequestRef.current += 1; // drop any in-flight swap lookup for the old tab
+    setSwap(null);
+    setActivePathIndex(index);
+  }
+
+  async function handleSwap(index: number) {
+    if (!activePath) return;
+    if (swap?.index === index) {
+      setSwap(null);
+      return;
+    }
+    const connectionIn = activePath.connections[index - 1];
+    const connectionOut = activePath.connections[index];
+    if (!connectionIn || !connectionOut) return;
+
+    const requestId = ++swapRequestRef.current;
+    setSwap({ index, status: "loading" });
+    const params = new URLSearchParams({
+      movie_id: String(activePath.path[index].movie_id),
+      from_movie_id: String(activePath.path[index - 1].movie_id),
+      to_movie_id: String(activePath.path[index + 1].movie_id),
+      actor_in_id: String(connectionIn.actor_id),
+      actor_out_id: String(connectionOut.actor_id),
+      exclude_movie_ids: activePath.path.map((node) => node.movie_id).join(","),
+      game_type: "cinechain",
+    });
+    if (runIdFromQuery) params.set("run_id", runIdFromQuery);
+    try {
+      const data = await api.get<SwapNodeResult>(`/engine/bridge/swap-node?${params.toString()}`);
+      if (requestId !== swapRequestRef.current) return;
+      setSwap({ index, status: "ready", candidates: data.candidates, total: data.total });
+      void lookupOnServer(data.candidates.map((candidate) => candidate.node.movie_id));
+    } catch (err) {
+      if (requestId !== swapRequestRef.current) return;
+      setSwap({
+        index,
+        status: "error",
+        message: err instanceof ApiError ? err.message : "Couldn't look up alternatives.",
+      });
+    }
+  }
+
+  async function applySwap(candidate: SwapCandidate) {
+    if (!swap || !activePath) return;
+    const { index } = swap;
+    const routeIndex = activePathIndex;
+    const newPath = activePath.path.map((node, i) => (i === index ? candidate.node : node));
+    const newConnections = activePath.connections.map((connection, i) =>
+      i === index - 1 ? candidate.connection_in : i === index ? candidate.connection_out : connection,
+    );
+    const key = pathKey(newPath);
+
+    setSwap(null);
+    // Tags describe the old path - drop them until the re-analysis returns.
+    setOptions((prev) =>
+      prev.map((route, i) =>
+        i === routeIndex ? { ...route, path: newPath, connections: newConnections, tags: [] } : route,
+      ),
+    );
+
+    setApplyingSwap(true);
+    try {
+      const analysis = await api.get<PathTagsResult>(
+        `/engine/bridge/tags?movie_ids=${newPath.map((node) => node.movie_id).join(",")}`,
+      );
+      setOptions((prev) =>
+        prev.map((route, i) =>
+          i === routeIndex && pathKey(route.path) === key
+            ? { ...route, path: analysis.nodes, tags: analysis.tags }
+            : route,
+        ),
+      );
+    } catch {
+      /* tags are a nice-to-have - the swapped path itself is already applied */
+    } finally {
+      setApplyingSwap(false);
+    }
+  }
+
+  const maxHopsFound = options.reduce((max, option) => Math.max(max, option.hops), 0);
+  const nextDeeperHops = Math.max(maxHopsFound, deeperFloor) + 1;
+
+  function searchDeeper() {
+    if (!startMovie || !targetMovie || options.length === 0) return;
+    if (nextDeeperHops > DEEP_SEARCH_MAX_HOPS) return;
+    closeDeeperSource();
+    const target = nextDeeperHops;
+    setSwap(null);
+    setDeeper({ status: "streaming", target, progress: null });
+
+    // Same SSE endpoint, told to skip routes shallower than `target` hops. The
+    // shallow levels are cache hits; every new level it reaches is cached.
+    const params = new URLSearchParams({
+      from_movie_id: String(startMovie.tmdb_id),
+      to_movie_id: String(targetMovie.tmdb_id),
+      game_type: "cinechain",
+      max_depth: String(target),
+      min_hops: String(target),
+    });
+    if (runIdFromQuery) params.set("run_id", runIdFromQuery);
+    const source = new EventSource(`/api/engine/bridge/stream?${params.toString()}`, {
+      withCredentials: true,
+    });
+    deeperSourceRef.current = source;
+    let finished = false;
+    const finish = (state: DeeperState) => {
+      finished = true;
+      setDeeper(state);
+      closeDeeperSource();
+    };
+
+    source.addEventListener("progress", (event) => {
+      const progressEvent: ProgressEvent = JSON.parse((event as MessageEvent).data);
+      setDeeper((prev) => (prev.status === "streaming" ? { ...prev, progress: progressEvent } : prev));
+    });
+    source.addEventListener("result", (event) => {
+      const parsed: BridgeResult = JSON.parse((event as MessageEvent).data);
+      const known = new Set(options.map((option) => pathKey(option.path)));
+      const fresh = routesFromResult(parsed, "Deeper - ").filter((route) => !known.has(pathKey(route.path)));
+      if (fresh.length > 0) {
+        setOptions((prev) => [...prev, ...fresh]);
+        setActivePathIndex(options.length);
+        finish({ status: "idle" });
+      } else {
+        setDeeperFloor(target);
+        finish({ status: "empty", message: `No new ${target}+ hop routes turned up.` });
+      }
+    });
+    source.addEventListener("exhausted", () => {
+      setDeeperFloor(target);
+      finish({
+        status: "empty",
+        message: `No routes of ${target}+ hops exist within this search depth. The levels it explored are now cached.`,
+      });
+    });
+    source.addEventListener("timeout", (event) => {
+      const timeout: TimeoutEvent = JSON.parse((event as MessageEvent).data);
+      finish({
+        status: "timeout",
+        message: `Timed out at depth ${timeout.depth_reached} after ${(timeout.elapsed_ms / 1000).toFixed(0)}s. What it explored is cached, so searching again goes further.`,
+      });
+    });
+    source.addEventListener("error", (event) => {
+      const messageEvent = event as MessageEvent;
+      let message = "Connection to the solver was lost.";
+      if (messageEvent.data) {
+        try {
+          message = JSON.parse(messageEvent.data).message ?? "Deeper search failed.";
+        } catch {
+          message = "Deeper search failed.";
+        }
+      }
+      finish({ status: "error", message });
+    });
+    source.addEventListener("done", () => {
+      closeDeeperSource();
+      if (!finished) setDeeper({ status: "error", message: "The solver stopped without returning a result." });
+    });
+  }
+
+  function cancelDeeper() {
+    closeDeeperSource();
+    setDeeper({ status: "idle" });
+  }
 
   const targetAlreadyInRun =
     !!selectedRun && !!targetMovie && selectedRun.steps.some((s) => s.movie_id === targetMovie.tmdb_id);
@@ -533,13 +751,13 @@ export default function BridgePage() {
               </button>
             </div>
 
-            {pathOptions.length > 1 && (
+            {options.length > 1 && (
               <div className="mb-4 flex flex-wrap gap-1.5">
-                {pathOptions.map((option, index) => (
+                {options.map((option, index) => (
                   <button
                     key={`${option.label}-${index}`}
                     type="button"
-                    onClick={() => setActivePathIndex(index)}
+                    onClick={() => selectPath(index)}
                     className={cn(
                       "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
                       index === activePathIndex
@@ -553,16 +771,97 @@ export default function BridgePage() {
               </div>
             )}
 
+            {activePath && activePath.tags.length > 0 && (
+              <div className="mb-3">
+                <PathTagChips tags={activePath.tags} />
+              </div>
+            )}
+
             <div className="overflow-x-auto pb-2">
               <BridgePathView
                 path={activePath?.path ?? result.path}
                 connections={activePath?.connections ?? result.connections}
                 onServerMap={onServerMap}
                 onMovieClick={setPreviewMovieId}
+                onSwapNode={handleSwap}
+                swapIndex={swap?.index ?? null}
               />
             </div>
 
+            {swap && activePath && (
+              <BridgeSwapPanel
+                movieTitle={activePath.path[swap.index].title}
+                actorNames={[
+                  activePath.connections[swap.index - 1]?.actor_name ?? "the first actor",
+                  activePath.connections[swap.index]?.actor_name ?? "the second actor",
+                ]}
+                state={swap}
+                onServerMap={onServerMap}
+                applying={applyingSwap}
+                onPick={applySwap}
+                onClose={() => {
+                  swapRequestRef.current += 1;
+                  setSwap(null);
+                }}
+              />
+            )}
+
             {queueError && <p className="mt-3 text-xs text-red-400">{queueError}</p>}
+
+            <div className="mt-5 border-t border-app-border pt-4">
+              {deeper.status === "streaming" ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
+                  <p className="min-w-0 flex-1 text-sm text-zinc-300">
+                    Searching for {deeper.target}+ hop routes
+                    {deeper.progress && (
+                      <span className="text-zinc-500">
+                        {" "}
+                        &middot; depth {deeper.progress.depth} &middot; {deeper.progress.tmdb_calls} TMDB calls
+                        &middot; {deeper.progress.cache_hits} cache hits &middot;{" "}
+                        {(deeper.progress.elapsed_ms / 1000).toFixed(1)}s
+                      </span>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={cancelDeeper}
+                    className="flex items-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover"
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={searchDeeper}
+                    disabled={nextDeeperHops > DEEP_SEARCH_MAX_HOPS}
+                    className="flex items-center gap-1.5 rounded-md border border-accent/50 px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Search className="h-4 w-4" />
+                    Search Deeper
+                  </button>
+                  <p className="min-w-0 flex-1 text-xs text-zinc-500">
+                    {nextDeeperHops > DEEP_SEARCH_MAX_HOPS
+                      ? `Already searched to the ${DEEP_SEARCH_MAX_HOPS}-hop limit.`
+                      : `Hunt for weirder routes of ${nextDeeperHops}+ hops. Everything it explores is cached, so repeat searches get faster.`}
+                  </p>
+                </div>
+              )}
+              {(deeper.status === "empty" || deeper.status === "timeout") && (
+                <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
+                  {deeper.status === "timeout" ? (
+                    <Clock className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  {deeper.message}
+                </p>
+              )}
+              {deeper.status === "error" && <p className="mt-2 text-xs text-red-400">{deeper.message}</p>}
+            </div>
           </div>
         )}
 

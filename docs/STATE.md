@@ -1,4 +1,4 @@
 # CineChain Project State
-**Current Phase:** Phase 20a: Challenge Engine V2 & Perpetual States
-**Current Task:** Upgrading the Run state machine, adding engine versioning, and building the JSON Super-Unlock builder.
-**Next Steps:** Phase 20a complete and committed. Await human confirmation to begin the next phase.
+**Current Phase:** Phase 20b: Bridge Solver 2.0
+**Current Task:** Implementing Dynamic Path Tagging, Node Swapping (Edge Multiplicity), and the "Search Deeper" feature.
+**Next Steps:** Phase 20b complete and committed. Await human confirmation to begin the next phase.

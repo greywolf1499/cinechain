@@ -166,6 +166,16 @@ export interface BridgeNode {
 	poster_path: string | null;
 	release_year: number | null;
 	popularity: number | null;
+	runtime: number | null; // null = detail not fetched yet
+	origin_countries: string[];
+}
+
+/** Dynamic highlight chip derived from analysing a whole path (backend `PathTag`). */
+export interface PathTag {
+	key: "canon_heavy" | "multi_country" | "epic_runtimes" | (string & {});
+	label: string;
+	emoji: string;
+	detail: string;
 }
 
 export interface BridgeAlternatePath {
@@ -173,6 +183,7 @@ export interface BridgeAlternatePath {
 	path: BridgeNode[];
 	hops: number;
 	connections: SharedActorConnection[];
+	tags?: PathTag[];
 }
 
 export interface BridgeResult {
@@ -180,7 +191,33 @@ export interface BridgeResult {
 	hops: number;
 	connections: SharedActorConnection[];
 	label?: string;
+	tags?: PathTag[];
 	alternate_paths?: BridgeAlternatePath[];
+}
+
+/** One displayable route: the primary result or an alternate/deeper one (edited in place by swaps). */
+export interface BridgeRoute {
+	label: string;
+	path: BridgeNode[];
+	hops: number;
+	connections: SharedActorConnection[];
+	tags: PathTag[];
+}
+
+export interface SwapCandidate {
+	node: BridgeNode;
+	connection_in: SharedActorConnection;
+	connection_out: SharedActorConnection;
+}
+
+export interface SwapNodeResult {
+	candidates: SwapCandidate[];
+	total: number;
+}
+
+export interface PathTagsResult {
+	tags: PathTag[];
+	nodes: BridgeNode[];
 }
 
 export interface RunStats {

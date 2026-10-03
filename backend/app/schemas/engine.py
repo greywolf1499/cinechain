@@ -44,12 +44,42 @@ class BridgeNode(BaseModel):
     poster_path: str | None = None
     release_year: int | None = None
     popularity: float | None = None
+    runtime: int | None = None  # None = detail not fetched yet
+    origin_countries: list[str] = []
+
+
+class PathTag(BaseModel):
+    """A dynamic highlight chip derived from analysing a whole path."""
+
+    key: str  # canon_heavy | multi_country | epic_runtimes
+    label: str
+    emoji: str
+    detail: str
 
 
 class BridgeResult(BaseModel):
     path: list[BridgeNode]
     hops: int
     connections: list[SharedActorConnection]
+    tags: list[PathTag] = []
+
+
+class SwapCandidate(BaseModel):
+    """A movie that can replace a path node while keeping both its actor links."""
+
+    node: BridgeNode
+    connection_in: SharedActorConnection
+    connection_out: SharedActorConnection
+
+
+class SwapNodeResult(BaseModel):
+    candidates: list[SwapCandidate]
+    total: int  # candidates found before the response cap
+
+
+class PathTagsResult(BaseModel):
+    tags: list[PathTag]
+    nodes: list[BridgeNode]
 
 
 class RunStats(BaseModel):

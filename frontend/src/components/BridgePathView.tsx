@@ -1,10 +1,38 @@
-import { ArrowRight, User } from "lucide-react";
+import { ArrowRight, Shuffle, User } from "lucide-react";
 import AcquisitionControl from "./AcquisitionControl";
 import MoviePoster from "./MoviePoster";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { cn } from "../lib/cn";
 import { profileUrl } from "../lib/tmdbImage";
-import type { BridgeNode, JellyfinItemSummary, SharedActorConnection } from "../types/api";
+import type { BridgeNode, JellyfinItemSummary, PathTag, SharedActorConnection } from "../types/api";
+
+const TAG_STYLES: Record<string, string> = {
+  canon_heavy: "border-amber-800/60 bg-amber-950/40 text-amber-300",
+  multi_country: "border-sky-800/60 bg-sky-950/40 text-sky-300",
+  epic_runtimes: "border-violet-800/60 bg-violet-950/40 text-violet-300",
+};
+
+/** Small highlight chips for a path ("Canon Heavy", "Multi-Country", ...); the detail is a tooltip. */
+export function PathTagChips({ tags }: { tags: PathTag[] | undefined }) {
+  if (!tags || tags.length === 0) return null;
+  return (
+    <ul aria-label="Path highlights" className="flex flex-wrap gap-1.5">
+      {tags.map((tag) => (
+        <li
+          key={tag.key}
+          title={tag.detail}
+          className={cn(
+            "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
+            TAG_STYLES[tag.key] ?? "border-app-border bg-app-surface-hover text-zinc-300",
+          )}
+        >
+          <span aria-hidden>{tag.emoji}</span>
+          {tag.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /** Renders `[Movie A] -> (Actor) -> [Movie B] -> ...` on a single horizontal rail.
  * Movie cards share one fixed width and the connectors reserve a poster-height
@@ -15,23 +43,31 @@ export default function BridgePathView({
   connections,
   onServerMap,
   onMovieClick,
+  onSwapNode,
+  swapIndex = null,
 }: {
   path: BridgeNode[];
   connections: SharedActorConnection[];
   onServerMap?: Record<number, JellyfinItemSummary>;
   onMovieClick?: (movieId: number) => void;
+  /** Shows a shuffle button on the in-between films; the index is the node's path position. */
+  onSwapNode?: (index: number) => void;
+  swapIndex?: number | null;
 }) {
   return (
     <ol className="flex w-max min-w-full items-start justify-center">
       {path.map((node, index) => {
         const onServer = onServerMap?.[node.movie_id]?.on_server;
         const connection = connections[index];
+        const canSwap =
+          !!onSwapNode && index > 0 && index < path.length - 1 && !!connections[index - 1] && !!connection;
         return (
           <li key={`${node.movie_id}-${index}`} className="flex items-start">
             <div
               className={cn(
                 "flex w-32 shrink-0 flex-col items-center rounded-lg border p-2 text-center",
                 onServer ? onServerCardClass(true) : "border-transparent",
+                swapIndex === index && "border-accent/60 bg-accent/5",
               )}
             >
               <button
@@ -48,6 +84,23 @@ export default function BridgePathView({
               </button>
               <p className="mt-0.5 h-4 text-[11px] text-zinc-500">{node.release_year ?? ""}</p>
               <div className="mt-1 flex min-h-5 flex-col items-center gap-1">
+                {canSwap && (
+                  <button
+                    type="button"
+                    onClick={() => onSwapNode?.(index)}
+                    aria-pressed={swapIndex === index}
+                    title="Swap for another film with the same two actors"
+                    className={cn(
+                      "flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors",
+                      swapIndex === index
+                        ? "border-accent bg-accent/10 text-accent"
+                        : "border-app-border text-zinc-400 hover:border-accent/50 hover:text-accent",
+                    )}
+                  >
+                    <Shuffle className="h-3 w-3" />
+                    Swap
+                  </button>
+                )}
                 <OnServerBadge onServer={onServer} />
                 <AcquisitionControl tmdbId={node.movie_id} title={node.title} onServer={onServer} />
               </div>

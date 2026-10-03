@@ -27,19 +27,22 @@ from sqlmodel import Session, select
 from app.config import get_settings
 from app.models.cache import CachedActor, CachedMovie, CachedMovieCast
 from app.models.curated import CanonMovieBadge
-from app.schemas.engine import BridgeNode, SharedActorConnection
+from app.schemas.engine import SharedActorConnection
 from app.services import cache_repo
+from app.services.bridge_paths import analyze_path_tags, hydrate_movies, make_bridge_node
 from app.services.cache_repo import CacheRepo
 from app.services.graph import FrontierSide, NodeKey, actor_node, movie_node
 from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient
 from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
-from app.utils.dates import parse_release_year
 
 logger = logging.getLogger(__name__)
 
 _SEARCH_SEMAPHORE = asyncio.Semaphore(1)
 _EVENT_FLUSH_SECONDS = 0.25
+# Result post-processing (runtime/country hydration for path tags) always gets
+# this long, even when the solve itself used up its whole time limit.
+_MIN_HYDRATE_SECONDS = 3.0
 
 
 class _SearchStats:
@@ -83,9 +86,16 @@ async def solve_bridge_bipartite(
     min_runtime: int | None = None,
     excluded_movie_ids: set[int] | None = None,
     max_duration_seconds: int | None = None,
+    min_hops: int | None = None,
 ) -> AsyncIterator[dict]:
+    """`min_hops` powers "Search Deeper": meetings whose path is shorter than
+    this are ignored (the caller already has those), so the search keeps going
+    until it can offer genuinely longer routes. Re-expanding the shallow levels
+    is free - they're cache hits - and every new level it reaches is cached."""
     settings = get_settings()
     max_depth = max_depth or settings.pathfinder_max_depth
+    if min_hops:
+        max_depth = max(max_depth, min_hops)
     # `call_budget` is a hard cap only for callers that explicitly pass one
     # (the fast /engine/bridge pre-check). The streamed solve is bounded by
     # depth and the admin-defined time limit instead.
@@ -113,9 +123,8 @@ async def solve_bridge_bipartite(
             last_expanded_forward = False  # alternates on ties so neither side starves
 
             if from_movie_id == to_movie_id:
-                result = await anyio.to_thread.run_sync(
-                    _build_multi_result, session, [[movie_node(from_movie_id)]]
-                )
+                result = await _finish_result(
+                    session, tmdb, [[movie_node(from_movie_id)]], deadline)
                 yield {"type": "result", **result}
                 yield {"type": "done"}
                 return
@@ -180,14 +189,18 @@ async def solve_bridge_bipartite(
                     "elapsed_ms": elapsed_ms,
                 }
 
-                meetings = _find_intersections(
-                    forward.visited, backward.visited, limit=3)
-                if meetings:
+                if min_hops:
+                    candidate_paths = _collect_deeper_paths(
+                        forward, backward, min_hops, limit=3)
+                else:
                     candidate_paths = [
-                        _reconstruct_path(forward, backward, meeting) for meeting in meetings
+                        _reconstruct_path(forward, backward, meeting)
+                        for meeting in _find_intersections(
+                            forward.visited, backward.visited, limit=3)
                     ]
-                    result = await anyio.to_thread.run_sync(
-                        _build_multi_result, session, candidate_paths)
+                if candidate_paths:
+                    result = await _finish_result(
+                        session, tmdb, candidate_paths, deadline)
                     yield {"type": "result", **result}
                     yield {"type": "done"}
                     return
@@ -385,24 +398,54 @@ def _reconstruct_path(forward: FrontierSide, backward: FrontierSide, meeting: No
     return forward_chain + backward_chain
 
 
+def _path_hops(path: list[NodeKey]) -> int:
+    return (len(path) - 1) // 2
+
+
+def _collect_deeper_paths(
+    forward: FrontierSide, backward: FrontierSide, min_hops: int, limit: int = 3
+) -> list[list[NodeKey]]:
+    """Distinct simple paths of at least `min_hops` movie-hops through any node
+    both sides have reached, shortest first. Unlike `_find_intersections` this
+    scans every meeting node: the cheap early meetings are exactly the shallow
+    paths the caller wants to skip."""
+    small, large = (
+        (forward.visited, backward.visited)
+        if len(forward.visited) <= len(backward.visited)
+        else (backward.visited, forward.visited)
+    )
+    found: dict[tuple[int, ...], list[NodeKey]] = {}
+    for node in small:
+        if node not in large:
+            continue
+        path = _reconstruct_path(forward, backward, node)
+        if _path_hops(path) < min_hops or len(set(path)) != len(path):
+            continue  # too shallow, or it doubles back through a node it already used
+        found.setdefault(tuple(n[1] for n in path[0::2]), path)
+    return sorted(found.values(), key=len)[:limit]
+
+
+async def _finish_result(
+    session: Session, tmdb: TMDBClient, candidate_paths: list[list[NodeKey]], deadline: float
+) -> dict:
+    """Hydrates runtime/country detail for the path films (path tags need it),
+    then builds the result off the now-complete cache."""
+    movie_ids = [node[1] for path in candidate_paths for node in path[0::2]]
+    await hydrate_movies(
+        session, tmdb, movie_ids,
+        deadline=max(deadline, time.monotonic() + _MIN_HYDRATE_SECONDS))
+    return await anyio.to_thread.run_sync(_build_multi_result, session, candidate_paths)
+
+
 def _build_result(session: Session, combined_path: list[NodeKey]) -> dict:
     """Sync DB reads only - every node on the path was already cached during the search."""
     movie_ids = [node[1] for node in combined_path[0::2]]
     actor_ids = [node[1] for node in combined_path[1::2]]
 
-    bridge_nodes = []
-    for movie_id in movie_ids:
-        movie = session.get(CachedMovie, movie_id)
-        bridge_nodes.append(
-            BridgeNode(
-                movie_id=movie_id,
-                title=movie.title if movie else str(movie_id),
-                poster_path=movie.poster_path if movie else None,
-                release_year=parse_release_year(
-                    movie.release_date) if movie else None,
-                popularity=movie.popularity if movie else None,
-            )
-        )
+    bridge_nodes = [
+        make_bridge_node(session.get(CachedMovie, movie_id), movie_id)
+        for movie_id in movie_ids
+    ]
 
     connections = []
     for i, actor_id in enumerate(actor_ids):
@@ -424,6 +467,7 @@ def _build_result(session: Session, combined_path: list[NodeKey]) -> dict:
         "path": bridge_nodes,
         "hops": len(movie_ids) - 1,
         "connections": connections,
+        "tags": analyze_path_tags(session, bridge_nodes),
     }
 
 
@@ -444,6 +488,7 @@ def _build_multi_result(session: Session, candidate_paths: list[list[NodeKey]]) 
         "path": primary["path"],
         "hops": primary["hops"],
         "connections": primary["connections"],
+        "tags": primary["tags"],
         "label": labels[0],
         "alternate_paths": alternates,
     }

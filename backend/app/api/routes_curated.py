@@ -1,9 +1,9 @@
 """Curated canon & Letterboxd ingestion endpoints.
 
 Scraping (`app.services.letterboxd`) is entirely synchronous (curl_cffi) and
-MUST run off the event loop - `run_sync_scrape` bridges a sync
-progress-callback function into an async (event_type, payload) stream via a
-worker thread + queue, which the SSE routes below forward as named events.
+MUST run off the event loop. Long scrapes (watchlist, list sync, HQ discovery)
+run as `SystemTask`s on FastAPI BackgroundTasks (see `app.services.task_runner`):
+the POST returns 202 + the task immediately and clients poll /api/tasks.
 """
 
 from __future__ import annotations
@@ -11,9 +11,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
-import queue as queue_module
 import re
-from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
@@ -21,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 import anyio
 from curl_cffi import requests as curl_requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, case, col, func, or_, select
 
@@ -43,44 +41,15 @@ from app.utils.ids import utcnow
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/curated", tags=["curated"])
 
-_SENTINEL = object()
-
-
 def _error_payload(exc: Exception) -> dict[str, Any]:
-    """Structured SSE error body: `message` stays for legacy consumers, `code`
-    (and `status` when known) lets the frontend render a specific warning."""
+    """Structured task error: `message` for display, `code` (and `status`) so the
+    frontend can render a specific warning."""
     if isinstance(exc, letterboxd.WatchlistNotFound):
         return {"code": "watchlist_not_found", "status": 404, "message": str(exc),
                 "username": exc.username}
     if isinstance(exc, letterboxd.CloudflareBlock):
         return {"code": "cloudflare_block", "status": 503, "message": str(exc)}
     return {"code": "scrape_failed", "message": str(exc)}
-
-
-async def run_sync_scrape(fn: Callable[..., dict], *args: Any, **kwargs: Any) -> AsyncIterator[tuple[str, Any]]:
-    """Runs a sync `fn(*args, progress_callback=..., **kwargs)` in a worker
-    thread, yielding ("progress"|"result"|"error", payload) tuples as it goes."""
-    q: queue_module.Queue = queue_module.Queue()
-
-    def progress_callback(payload: dict) -> None:
-        q.put(("progress", payload))
-
-    def worker() -> None:
-        try:
-            result = fn(*args, progress_callback=progress_callback, **kwargs)
-            q.put(("result", result))
-        except Exception as exc:  # noqa: BLE001 - surfaced as a client-facing error event
-            q.put(("error", _error_payload(exc)))
-        finally:
-            q.put((_SENTINEL, None))
-
-    async with anyio.create_task_group() as tg:
-        tg.start_soon(anyio.to_thread.run_sync, worker)
-        while True:
-            kind, payload = await anyio.to_thread.run_sync(q.get)
-            if kind is _SENTINEL:
-                break
-            yield kind, payload
 
 
 def _resolve_tmdb_api_key(session: Session) -> str | None:
@@ -885,48 +854,38 @@ def browse_accounts(
                        pages=max(1, -(-total // page_size)))
 
 
-@router.post("/accounts/discover-hq")
-async def discover_hq(
-    request: Request,
+@router.post("/accounts/discover-hq", status_code=status.HTTP_202_ACCEPTED, response_model=TaskOut)
+def discover_hq(
+    background_tasks: BackgroundTasks,
     target: str | None = None,
     max_pages: int = Query(default=5, ge=1, le=50),
     session: Session = Depends(get_session),
-    _admin: User = Depends(get_current_admin),
-) -> StreamingResponse:
-    """Streams a crawl of the Letterboxd HQ directory (or `target`'s followed HQ
-    accounts) and tracks every account found."""
+    admin: User = Depends(get_current_admin),
+) -> TaskOut:
+    """Starts a background crawl of the Letterboxd HQ directory (or `target`'s
+    followed HQ accounts) that tracks every account found. The task result is
+    `{discovered, new, partial, error}`."""
     if target is not None:
         target = _normalize_username(target)
     _ensure_seed_accounts(session)
 
-    async def event_source():
-        result: dict | None = None
-        async for kind, payload in run_sync_scrape(
-            letterboxd.discover_hq_accounts, target, max_pages=max_pages
-        ):
-            if await request.is_disconnected():
-                break
-            if kind == "progress":
-                yield f"event: progress\ndata: {json.dumps(payload)}\n\n"
-            elif kind == "result":
-                result = payload
-            elif kind == "error":
-                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
-
-        if result is not None:
-            new_accounts = 0
-            for found in result["accounts"]:
-                _, created = _upsert_account(
-                    session, found["username"].lower(), found)
+    def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
+        found = letterboxd.discover_hq_accounts(
+            target, max_pages=max_pages, progress_callback=ctx.progress)
+        new_accounts = 0
+        with ctx.session() as db:
+            for account in found["accounts"]:
+                _, created = _upsert_account(db, account["username"].lower(), account)
                 new_accounts += int(created)
-            yield (
-                "event: result\ndata: "
-                f"{json.dumps({'discovered': len(result['accounts']), 'new': new_accounts, 'partial': result['partial'], 'error': result['error']})}"
-                "\n\n"
-            )
-        yield "event: done\ndata: {}\n\n"
+        return {"discovered": len(found["accounts"]), "new": new_accounts,
+                "partial": found["partial"], "error": found["error"]}
 
-    return StreamingResponse(event_source(), media_type="text/event-stream")
+    task, _ = task_runner.submit_task(
+        background_tasks, session, "discover_hq", work,
+        user_id=admin.id, dedupe_key=f"discover_hq:{target or 'directory'}",
+        label="Discovering HQ accounts" + (f" (via {target})" if target else ""),
+        describe_error=_error_payload)
+    return TaskOut.from_model(task)
 
 
 def _scrape_http_error(exc: Exception) -> HTTPException:

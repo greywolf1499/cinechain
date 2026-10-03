@@ -11,6 +11,7 @@ import {
   Sparkles,
   XCircle,
 } from "lucide-react";
+import Breadcrumbs from "../components/Breadcrumbs";
 import PageHeading from "../components/PageHeading";
 import EmptyState from "../components/EmptyState";
 import MoviePoster from "../components/MoviePoster";
@@ -329,6 +330,7 @@ export default function BridgePage() {
 
   return (
     <div>
+      <Breadcrumbs items={[{ label: "Tools", to: "/tools" }, { label: "Bridge Solver" }]} />
       <PageHeading title="Bridge Solver" subtitle="Find a path between any two films" />
 
       <div className="flex flex-col gap-5">

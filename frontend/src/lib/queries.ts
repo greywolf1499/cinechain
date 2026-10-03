@@ -13,6 +13,7 @@ import type {
 	ListState,
 	Page,
 	DiscoveryCandidate,
+	EngineMeta,
 	MovieDetail,
 	Run,
 	RunDetail,
@@ -58,6 +59,14 @@ export function useRun(runId: string | undefined) {
 		queryKey: queryKeys.run(runId ?? ""),
 		queryFn: () => api.get<RunDetail>(`/runs/${runId}`),
 		enabled: !!runId,
+	});
+}
+
+export function useEngines() {
+	return useQuery({
+		queryKey: ["engines"],
+		queryFn: () => api.get<EngineMeta[]>("/engines"),
+		staleTime: 5 * 60_000,
 	});
 }
 

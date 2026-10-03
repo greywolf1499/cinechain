@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Clapperboard, GitBranch, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import ChainTimeline from "../components/ChainTimeline";
@@ -12,6 +12,7 @@ import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
 import { isoToFlagEmoji } from "../lib/countries";
 import { allowsMovieRepeats } from "../lib/rules";
+import { useActiveRunStore } from "../store/activeRunStore";
 import { useDeleteRun, useDeleteStep, useRun, useRunStats, useUsers } from "../lib/queries";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import type { RulesConfig, RunStats, RunStep } from "../types/api";
@@ -24,6 +25,12 @@ export default function RunDetailPage() {
   const { data: stats } = useRunStats(id);
   const deleteStep = useDeleteStep(id ?? "");
   const deleteRun = useDeleteRun();
+  const setActiveRun = useActiveRunStore((s) => s.setActiveRun);
+
+  // Viewing an in-progress run makes it the "active run" that tools adapt to.
+  useEffect(() => {
+    if (run?.status === "active") setActiveRun(run.id);
+  }, [run?.id, run?.status, setActiveRun]);
 
   const [activeActor, setActiveActor] = useState<ActorClickPayload | null>(null);
   const [confirmDeleteStepId, setConfirmDeleteStepId] = useState<string | null>(null);
@@ -241,7 +248,7 @@ function ActiveFrontierCard({
         </button>
         <button
           type="button"
-          onClick={() => navigate(`/bridge?run_id=${runId}`)}
+          onClick={() => navigate(`/tools/bridge?run_id=${runId}`)}
           className="flex items-center justify-center gap-1.5 rounded-md border border-app-border px-3.5 py-2.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover"
         >
           <GitBranch className="h-4 w-4" />

@@ -847,7 +847,7 @@ function MovieScreenView({
           frontierMovieTitle={frontierMovieTitle}
           wildcardsRemaining={wildcardsRemaining}
           wildcardsExhausted={wildcardsExhausted}
-          onBuildBridge={() => navigate(`/bridge?from=${frontierMovieId}&to=${screen.movieId}`)}
+          onBuildBridge={() => navigate(`/tools/bridge?from=${frontierMovieId}&to=${screen.movieId}`)}
         />
       )}
 

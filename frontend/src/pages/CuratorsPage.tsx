@@ -11,7 +11,7 @@ import Pagination from "../components/Pagination";
 import Toast, { type ToastState } from "../components/Toast";
 import { ApiError } from "../lib/api";
 import { useBrowseAccounts } from "../lib/queries";
-import { postSse } from "../lib/sse";
+import { describeProgress, runTask } from "../lib/tasks";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { useAuthStore } from "../store/authStore";
 import type { AccountKind, AccountSort } from "../types/api";
@@ -35,6 +35,7 @@ export default function CuratorsPage() {
   const [kind, setKind] = useState<AccountKind>("all");
   const [page, setPage] = useState(1);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [discoverProgress, setDiscoverProgress] = useState<string | null>(null);
   const q = useDebouncedValue(search.trim(), 300);
 
   useEffect(() => setPage(1), [q, sort, kind]);
@@ -42,13 +43,16 @@ export default function CuratorsPage() {
   const { data, isLoading, error } = useBrowseAccounts({ q, sort, kind, page });
 
   const discoverHq = useMutation({
-    mutationFn: () => postSse("/curated/accounts/discover-hq?max_pages=5"),
-    onSuccess: (events) => {
-      const result = events.find((e) => e.event === "result")?.data as
-        | { discovered: number; new: number; partial: boolean }
-        | undefined;
-      if (events.some((e) => e.event === "error") && !result) {
-        setToast({ type: "error", message: "HQ discovery failed - see server logs." });
+    mutationFn: () =>
+      runTask<{ discovered: number; new: number; partial: boolean }>(
+        "/curated/accounts/discover-hq?max_pages=5",
+        undefined,
+        (task) => setDiscoverProgress(describeProgress(task, "accounts")),
+      ),
+    onSuccess: (task) => {
+      const result = task.progress_data?.result;
+      if (task.status === "failed" && !result) {
+        setToast({ type: "error", message: `HQ discovery failed: ${task.error ?? "see Tasks & Logs."}` });
         return;
       }
       setToast({
@@ -61,6 +65,7 @@ export default function CuratorsPage() {
     },
     onError: (err) =>
       setToast({ type: "error", message: err instanceof ApiError ? err.message : "HQ discovery failed." }),
+    onSettled: () => setDiscoverProgress(null),
   });
 
   return (
@@ -81,7 +86,7 @@ export default function CuratorsPage() {
               className="flex items-center gap-1.5 rounded-md border border-app-border px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
             >
               {discoverHq.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Compass className="h-3.5 w-3.5" />}
-              Discover HQ Accounts
+              {discoverProgress ? `Discovering... ${discoverProgress}` : "Discover HQ Accounts"}
             </button>
           )}
         </div>

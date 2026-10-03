@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "./api";
 
 export type TaskStatus = "pending" | "running" | "completed" | "failed";
@@ -75,13 +77,54 @@ export async function runTask<R = Record<string, unknown>>(
 }
 
 /** "120/400 films" style progress text for a running task. */
-export function describeProgress(task: SystemTask): string {
+export function describeProgress(task: SystemTask, unit = "films"): string {
 	if (task.status === "pending") return "Queued...";
 	const progress = task.progress_data?.progress;
 	if (progress?.current != null) {
 		return progress.total
-			? `${progress.current}/${progress.total} films`
-			: `${progress.current} films`;
+			? `${progress.current}/${progress.total} ${unit}`
+			: `${progress.current} ${unit}`;
 	}
 	return progress?.message ?? "Working...";
 }
+
+const TASKS_KEY = ["tasks"] as const;
+const HISTORY_LIMIT = 100;
+
+function mergeTask(tasks: SystemTask[], incoming: SystemTask): SystemTask[] {
+	const rest = tasks.filter((t) => t.id !== incoming.id);
+	return [incoming, ...rest]
+		.sort((a, b) => b.created_at.localeCompare(a.created_at))
+		.slice(0, HISTORY_LIMIT);
+}
+
+/** Task list kept live by `GET /api/tasks/stream` (SSE). A slow poll stays on as
+ * a safety net, and `live` tells the UI whether the stream is currently open. */
+export function useLiveTasks() {
+	const queryClient = useQueryClient();
+	const [live, setLive] = useState(false);
+	const query = useQuery({
+		queryKey: TASKS_KEY,
+		queryFn: () => api.get<SystemTask[]>(`/tasks?limit=${HISTORY_LIMIT}`),
+		refetchInterval: 15_000,
+	});
+
+	useEffect(() => {
+		const source = new EventSource("/api/tasks/stream", { withCredentials: true });
+		source.onopen = () => setLive(true);
+		source.onerror = () => setLive(false); // the browser reconnects on its own
+		source.addEventListener("task", (event) => {
+			const task = JSON.parse((event as MessageEvent).data) as SystemTask;
+			queryClient.setQueryData<SystemTask[]>(TASKS_KEY, (old) => mergeTask(old ?? [], task));
+		});
+		return () => source.close();
+	}, [queryClient]);
+
+	return { ...query, live };
+}
+
+export const TASK_TITLES: Record<string, string> = {
+	watchlist_sync: "Letterboxd watchlist sync",
+	curated_list_sync: "Curated list sync",
+	discover_hq: "HQ account discovery",
+};

@@ -231,10 +231,10 @@ def test_discover_hq_persists_accounts_and_requires_admin(client, monkeypatch):
 
     monkeypatch.setattr(letterboxd, "discover_hq_accounts", fake_discover)
 
-    resp = client.post("/api/curated/accounts/discover-hq")
-    assert resp.status_code == 200
-    assert "event: result" in resp.text
-    assert '"new": 1' in resp.text  # criterion was already seeded, neon is new
+    task = _run_task(client, "/api/curated/accounts/discover-hq")
+    assert task["name"] == "discover_hq"
+    result = task["progress_data"]["result"]
+    assert (result["discovered"], result["new"], result["partial"]) == (2, 1, False)  # criterion pre-seeded
     usernames = {a["username"] for a in client.get("/api/curated/accounts").json()}
     assert "neon" in usernames
 

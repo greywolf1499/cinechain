@@ -167,7 +167,7 @@ export default function ForkInTheRoadModal({
 
   function goBuildBridge(movieId: number) {
     if (frontierMovieId === undefined) return;
-    navigate(`/bridge?from=${frontierMovieId}&to=${movieId}`);
+    navigate(`/tools/bridge?from=${frontierMovieId}&to=${movieId}`);
   }
 
   return (

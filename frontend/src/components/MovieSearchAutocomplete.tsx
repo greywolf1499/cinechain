@@ -212,7 +212,7 @@ export default function MovieSearchAutocomplete({
                   {!validation.valid && tailMovieId !== undefined && (
                     <button
                       type="button"
-                      onClick={() => navigate(`/bridge?from=${tailMovieId}&to=${picked.tmdb_id}`)}
+                      onClick={() => navigate(`/tools/bridge?from=${tailMovieId}&to=${picked.tmdb_id}`)}
                       className="flex items-center gap-1 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover"
                     >
                       <GitBranch className="h-3 w-3" /> Build Bridge to Here

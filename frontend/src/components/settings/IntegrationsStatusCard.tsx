@@ -1,98 +1,59 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Clock, HelpCircle, Loader2, Search, XCircle } from "lucide-react";
-import PageHeading from "../components/PageHeading";
-import Toast, { type ToastState } from "../components/Toast";
-import CuratedCanonsCard from "../components/CuratedCanonsCard";
-import { RadarrSettingsCard, SeerrSettingsCard } from "../components/ArrIntegrationCards";
-import { ApiError, api } from "../lib/api";
-import { queryKeys, useCacheStats, useUsers } from "../lib/queries";
-import { useAuthStore } from "../store/authStore";
+import { CheckCircle2, HelpCircle, Loader2, Search, XCircle } from "lucide-react";
+import Toast, { type ToastState } from "../Toast";
+import { SettingsCard, inputClass } from "./shared";
+import { ApiError, api } from "../../lib/api";
+import { useAuthStore } from "../../store/authStore";
 import type {
   ConnectivityTestResult,
   IntegrationConfig,
   IntegrationStatus,
   JellyfinTestLookupResult,
   RequestClientStatus,
-  SolverConfig,
-  User,
-} from "../types/api";
+} from "../../types/api";
 
-const inputClass =
-  "rounded-md border border-app-border bg-app-bg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent focus:outline-none";
-
-export default function SettingsPage() {
+/** Jellyfin/Radarr/Seerr reachability rows, plus (admins) the TMDB/OMDb/Jellyfin credential editor. */
+export default function IntegrationsStatusCard() {
   const currentUser = useAuthStore((s) => s.user);
   const { data, isLoading } = useQuery({
     queryKey: ["integrations", "status"],
     queryFn: () => api.get<IntegrationStatus>("/integrations/status"),
   });
-  const { data: cacheStats, isLoading: cacheLoading } = useCacheStats();
 
   return (
-    <div>
-      <PageHeading title="Settings" subtitle="Homelab integrations and system status" />
-
-      <div className="flex flex-col gap-5">
-        <SettingsCard title="Integrations">
-          {isLoading && <div className="px-5 py-4 text-sm text-zinc-500">Loading...</div>}
-          {data && (
-            <div className="divide-y divide-app-border">
-              <IntegrationRow
-                name="Jellyfin"
-                enabled={data.jellyfin.enabled}
-                detail={
-                  data.jellyfin.enabled
-                    ? data.jellyfin.reachable
-                      ? `Reachable${data.jellyfin.version ? ` (v${data.jellyfin.version})` : ""}`
-                      : "Configured but unreachable"
-                    : "Not configured"
-                }
-                ok={data.jellyfin.enabled && data.jellyfin.reachable}
-              />
-              <IntegrationRow
-                name="Radarr"
-                enabled={data.radarr.enabled}
-                detail={requestServiceDetail(data.radarr)}
-                ok={data.radarr.enabled ? data.radarr.reachable : null}
-              />
-              <IntegrationRow
-                name="Seerr"
-                enabled={data.seerr.enabled}
-                detail={requestServiceDetail(data.seerr)}
-                ok={data.seerr.enabled ? data.seerr.reachable : null}
-              />
-            </div>
-          )}
-          {currentUser?.is_admin && <IntegrationSettingsEditor />}
-        </SettingsCard>
-
-        {currentUser?.is_admin && <RadarrSettingsCard />}
-
-        {currentUser?.is_admin && <SeerrSettingsCard />}
-
-        {currentUser?.is_admin && <SolverSettingsCard />}
-
-        {currentUser?.is_admin && <CuratedCanonsCard />}
-
-        <SettingsCard title="Cache Stats">
-          {cacheLoading && <div className="px-5 py-4 text-sm text-zinc-500">Loading...</div>}
-          {cacheStats && (
-            <div className="grid grid-cols-2 gap-4 px-5 py-4 sm:grid-cols-4">
-              <MiniStat label="Cached Movies" value={cacheStats.cached_movies} />
-              <MiniStat label="Cached Actors" value={cacheStats.cached_actors} />
-              <MiniStat label="Cast Edges" value={cacheStats.cached_cast_edges} />
-              <MiniStat
-                label="DB Size on Disk"
-                value={cacheStats.db_size_bytes != null ? formatBytes(cacheStats.db_size_bytes) : "-"}
-              />
-            </div>
-          )}
-        </SettingsCard>
-
-        <UsersCard />
-      </div>
-    </div>
+    <SettingsCard title="Connections">
+      {isLoading && <div className="px-5 py-4 text-sm text-zinc-500">Loading...</div>}
+      {data && (
+        <div className="divide-y divide-app-border">
+          <IntegrationRow
+            name="Jellyfin"
+            enabled={data.jellyfin.enabled}
+            detail={
+              data.jellyfin.enabled
+                ? data.jellyfin.reachable
+                  ? `Reachable${data.jellyfin.version ? ` (v${data.jellyfin.version})` : ""}`
+                  : "Configured but unreachable"
+                : "Not configured"
+            }
+            ok={data.jellyfin.enabled && data.jellyfin.reachable}
+          />
+          <IntegrationRow
+            name="Radarr"
+            enabled={data.radarr.enabled}
+            detail={requestServiceDetail(data.radarr)}
+            ok={data.radarr.enabled ? data.radarr.reachable : null}
+          />
+          <IntegrationRow
+            name="Seerr"
+            enabled={data.seerr.enabled}
+            detail={requestServiceDetail(data.seerr)}
+            ok={data.seerr.enabled ? data.seerr.reachable : null}
+          />
+        </div>
+      )}
+      {currentUser?.is_admin && <IntegrationSettingsEditor />}
+    </SettingsCard>
   );
 }
 
@@ -100,80 +61,6 @@ function requestServiceDetail(status: RequestClientStatus): string {
   if (!status.enabled) return "Not configured";
   if (!status.reachable) return "Configured but unreachable";
   return `Reachable${status.version ? ` (v${status.version})` : ""}`;
-}
-
-function SettingsCard({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="rounded-xl border border-app-border bg-app-surface">
-      <div className="border-b border-app-border px-5 py-3 text-sm font-medium text-zinc-300">
-        {title}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function SolverSettingsCard() {
-  const queryClient = useQueryClient();
-  const { data: config } = useQuery({
-    queryKey: ["settings", "solver"],
-    queryFn: () => api.get<SolverConfig>("/settings/solver"),
-  });
-  const [value, setValue] = useState<number | null>(null);
-  const [toast, setToast] = useState<ToastState | null>(null);
-
-  useEffect(() => {
-    if (config) setValue(config.bridge_max_duration_seconds);
-  }, [config]);
-
-  const save = useMutation({
-    mutationFn: (seconds: number) =>
-      api.patch<SolverConfig>("/settings/solver", { bridge_max_duration_seconds: seconds }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(["settings", "solver"], updated);
-      setToast({ type: "success", message: "Solver timeout saved." });
-    },
-    onError: (err) => {
-      setToast({
-        type: "error",
-        message: err instanceof ApiError ? err.message : "Failed to save solver settings.",
-      });
-    },
-  });
-
-  return (
-    <SettingsCard title="Bridge Solver">
-      <div className="flex flex-col gap-2 px-5 py-4">
-        <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
-          <Clock className="h-3.5 w-3.5" /> Max Search Duration
-        </p>
-        <p className="text-xs text-zinc-600">
-          How long the bridge solver searches before giving up with a clean timeout message.
-        </p>
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          <input
-            type="number"
-            min={5}
-            max={600}
-            value={value ?? ""}
-            onChange={(e) => setValue(Number(e.target.value))}
-            className={`${inputClass} w-24`}
-          />
-          <span className="text-xs text-zinc-500">seconds</span>
-          <button
-            type="button"
-            disabled={save.isPending || value === null}
-            onClick={() => value !== null && save.mutate(value)}
-            className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {save.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Save
-          </button>
-        </div>
-        <Toast toast={toast} onDismiss={() => setToast(null)} />
-      </div>
-    </SettingsCard>
-  );
 }
 
 function IntegrationSettingsEditor() {
@@ -519,141 +406,6 @@ function JellyfinLookupInspector() {
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div>
-      <p className="text-lg font-semibold text-zinc-100">{value}</p>
-      <p className="mt-0.5 text-xs text-zinc-500">{label}</p>
-    </div>
-  );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
-  let value = bytes / 1024;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  return `${value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-function UsersCard() {
-  const currentUser = useAuthStore((s) => s.user);
-  const { data: users, isLoading } = useUsers();
-  const queryClient = useQueryClient();
-  const [showForm, setShowForm] = useState(false);
-  const [username, setUsername] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const registerUser = useMutation({
-    mutationFn: () =>
-      api.post<User>("/auth/register", {
-        username,
-        password,
-        display_name: displayName,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.users });
-      setUsername("");
-      setDisplayName("");
-      setPassword("");
-      setShowForm(false);
-      setError(null);
-    },
-    onError: (err) => {
-      setError(err instanceof ApiError ? err.message : "Failed to register user.");
-    },
-  });
-
-  return (
-    <SettingsCard title="Users">
-      {isLoading && <div className="px-5 py-4 text-sm text-zinc-500">Loading...</div>}
-      {users && (
-        <div className="divide-y divide-app-border">
-          {users.map((user) => (
-            <div key={user.id} className="px-5 py-3">
-              <p className="text-sm text-zinc-200">{user.display_name}</p>
-              <p className="text-xs text-zinc-500">@{user.username}</p>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {currentUser?.is_admin && (
-        <div className="border-t border-app-border px-5 py-4">
-          {!showForm ? (
-            <button
-              type="button"
-              onClick={() => setShowForm(true)}
-              className="text-sm font-medium text-accent hover:underline"
-            >
-              + Register a new participant
-            </button>
-          ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                registerUser.mutate();
-              }}
-              className="flex flex-col gap-2.5"
-            >
-              <input
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Display name"
-                required
-                className={inputClass}
-              />
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Username"
-                required
-                minLength={3}
-                className={inputClass}
-              />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password (min 8 characters)"
-                required
-                minLength={8}
-                className={inputClass}
-              />
-              {error && <p className="text-xs text-red-400">{error}</p>}
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={registerUser.isPending}
-                  className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
-                >
-                  {registerUser.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Create account
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowForm(false);
-                    setError(null);
-                  }}
-                  className="rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-app-surface-hover"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
-    </SettingsCard>
-  );
-}
 
 function IntegrationRow({
   name,

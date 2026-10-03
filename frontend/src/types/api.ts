@@ -110,6 +110,13 @@ export interface GenreOut {
 
 // --- engine (schemas/engine.py) ---
 
+export interface EngineMeta {
+	game_type: string;
+	display_name: string;
+	description: string;
+	capabilities: string[];
+}
+
 export interface SharedActorConnection {
 	actor_id: number;
 	actor_name: string;
@@ -226,6 +233,18 @@ export interface IntegrationStatus {
 }
 
 // --- system (routes_system.py) ---
+
+export interface CacheFlushResult {
+	max_age_days: number;
+	ratings_removed: number;
+	movies_cast_reset: number;
+	cast_edges_removed: number;
+	actors_marked_stale: number;
+	actors_removed: number;
+	vacuumed: boolean;
+	db_size_before: number | null;
+	db_size_after: number | null;
+}
 
 export interface CacheStats {
 	cached_movies: number;

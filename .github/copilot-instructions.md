@@ -1,22 +1,14 @@
 # CineChain v1.1 Development Instructions
 
-## Project Overview
-CineChain is a self-hosted movie challenge companion tool built for couples/households.
-- Architecture: Single-container monolith (Vite SPA -> FastAPI serving static assets & API on port 8787).
-- Database: SQLite with SQLModel at `/config/cinechain.db` using WAL mode.
-- Pathfinding: Bipartite graph (Movie <-> Actor), iterative bidirectional BFS with live SSE streaming.
-- Host: Arch Linux laptop running 17 Docker containers. Strict idle RAM budget < 60 MiB RSS. Zero persistent background daemons.
-
-## Current State (Phase 15 Complete)
-- 104/104 backend tests passing across `backend/tests/test_*.py`.
-- Run-scoped Bridge Solver with cycle exclusion, active run banner, and multi-bridge candidate paths.
-- Unreleased/cancelled reality filter active (no phantom movies, zero indie/international bias).
-- Mid-run rule mutation (`PATCH /api/runs/{id}/rules`) with safety guards and Delete Run confirmation.
+## Current State (Phase 16 Complete)
+- 194/194 backend tests passing. Radarr/Seerr integrations active.
 
 ## Active Roadmap: v1.1 Enhancements
-- **Phase 15.5 (ACTIVE)**: Complete UX Polish, Solver Pacing, Jellyfin Diagnostics & Curated Canon Engine:
-  1. In-Dialog Breadcrumb Navigation: Eliminate modal stacking; allow drill-down and back navigation inside a single modal shell.
-  2. Bridge Solver Pacing & Timeout: Server-level search timeout setting, adaptive TMDB rate-limiting during BFS.
-  3. Jellyfin Match Diagnostics: Settings inspector tool and robust title/year/TMDB matching for local files.
-  4. Curated Canon & Letterboxd Engine: Port `letterboxd_poc.py` into native on-demand service, store caches in `/config/cache_letterboxd`, add Settings UI for Canons/Watchlists, wire laurel badges (`🏆 SS22`), and activate "The Cinephile Route" in Bridge Solver.
-- **Phase 16**: Real Radarr & Seerr write-integrations (quality profiles, root folders, one-click send).
+- **Phase 16.5 (ACTIVE)**: Live QA Bug-Squash & UX Polish:
+  1. Jellyfin UI & 401s: Make "On Server" highly visible on Discovery grid cards (green tint/badge). Fix the 401 Unauthorized error specifically on the "Lookup Inspector" tool in Settings.
+  2. Bridge Timeout Ceiling: Remove the arbitrary max limit on `bridge_max_duration_seconds` (allow up to 600s).
+  3. TMDB Rate-Limit Fix: Enforce a strict async concurrency limit in the TMDB client to prevent 429 budget exhaustion during deep Bridge searches.
+  4. Missing Overviews: Implement frontend JIT fetch for movie details if descriptions are missing on Bridge/Discovery cards.
+  5. Sync UX & Watchlist Bug: Make "Last Synced" status a prominent, color-coded UI badge. Debug and fix the failing Letterboxd Watchlist Sync endpoint.
+  6. Request Modal Clarity: Explicitly label "Routing via Seerr" vs "Direct to Radarr" and rename server dropdowns.
+  7. HQ UI Clutter & Navigation Stack: Hide the 900 discovered HQs behind a "Manage Curators" modal using an in-dialog navigation stack.

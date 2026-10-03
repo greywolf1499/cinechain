@@ -22,6 +22,44 @@ from app.services.movie_filters import is_reality_eligible, passes_filters
 from app.utils.dates import parse_release_year
 
 
+def compute_run_stats(steps: list[RunStep]) -> RunStats:
+    # Planned-but-not-yet-watched steps haven't actually been experienced,
+    # so they shouldn't count toward cultural-breadth passport stats.
+    watched_steps = [s for s in steps if s.status == "watched"]
+
+    countries: set[str] = set()
+    decades: set[int] = set()
+    actor_counts: Counter[int] = Counter()
+    actor_names: dict[int, str] = {}
+
+    for step in watched_steps:
+        if step.movie_origin_country:
+            countries.update(json.loads(step.movie_origin_country))
+        if step.movie_release_year:
+            decades.add((step.movie_release_year // 10) * 10)
+        if step.transition_metadata:
+            actor_id = step.transition_metadata.get("actor_id")
+            actor_name = step.transition_metadata.get("actor_name")
+            if actor_id is not None:
+                actor_counts[actor_id] += 1
+                if actor_name:
+                    actor_names[actor_id] = actor_name
+
+    keystone_actors = [
+        KeystoneActor(
+            actor_id=actor_id, actor_name=actor_names.get(actor_id, "Unknown"), appearances=count
+        )
+        for actor_id, count in actor_counts.most_common()
+    ]
+
+    return RunStats(
+        total_hops=max(len(watched_steps) - 1, 0),
+        countries=sorted(countries),
+        decades=sorted(decades),
+        keystone_actors=keystone_actors,
+    )
+
+
 class CineChainEngine(BaseChallengeEngine):
     game_type = "cinechain"
     display_name = "CineChain"
@@ -40,7 +78,11 @@ class CineChainEngine(BaseChallengeEngine):
     supports_json_rules = True
 
     async def validate_next_step(
-        self, from_movie_id: int, to_movie_id: int, cast_limit: int | None = None
+        self,
+        from_movie_id: int,
+        to_movie_id: int,
+        cast_limit: int | None = None,
+        rules: dict | None = None,
     ) -> ValidationResult:
         # Note: if a movie's cast was already cached at a lower limit (e.g. the
         # global default of 15), a run requesting a deeper cast_limit (e.g. a
@@ -73,7 +115,11 @@ class CineChainEngine(BaseChallengeEngine):
         return ValidationResult(valid=False, reason="No shared credited cast found", connections=[])
 
     async def get_suggestions(
-        self, current_movie_id: int, exclude_movie_ids: list[int], filters: SuggestionFilters
+        self,
+        current_movie_id: int,
+        exclude_movie_ids: list[int],
+        filters: SuggestionFilters,
+        rules: dict | None = None,
     ) -> list[Suggestion]:
         cast = await cache_repo.get_movie_cast(self.session, self.tmdb, current_movie_id)
         exclude = set(exclude_movie_ids) | {current_movie_id}
@@ -104,6 +150,7 @@ class CineChainEngine(BaseChallengeEngine):
         frontier_movie_id: int,
         mode: str = "or",
         cast_limit: int | None = None,
+        rules: dict | None = None,
     ) -> list[DiscoveryCandidate]:
         """Pools every top-billed cast member's filmography into one set of
         candidates, tracking ALL connecting actors per movie (not just the
@@ -164,41 +211,7 @@ class CineChainEngine(BaseChallengeEngine):
         return results
 
     async def compute_stats(self, steps: list[RunStep]) -> RunStats:
-        # Planned-but-not-yet-watched steps haven't actually been experienced,
-        # so they shouldn't count toward cultural-breadth passport stats.
-        watched_steps = [s for s in steps if s.status == "watched"]
-
-        countries: set[str] = set()
-        decades: set[int] = set()
-        actor_counts: Counter[int] = Counter()
-        actor_names: dict[int, str] = {}
-
-        for step in watched_steps:
-            if step.movie_origin_country:
-                countries.update(json.loads(step.movie_origin_country))
-            if step.movie_release_year:
-                decades.add((step.movie_release_year // 10) * 10)
-            if step.transition_metadata:
-                actor_id = step.transition_metadata.get("actor_id")
-                actor_name = step.transition_metadata.get("actor_name")
-                if actor_id is not None:
-                    actor_counts[actor_id] += 1
-                    if actor_name:
-                        actor_names[actor_id] = actor_name
-
-        keystone_actors = [
-            KeystoneActor(
-                actor_id=actor_id, actor_name=actor_names.get(actor_id, "Unknown"), appearances=count
-            )
-            for actor_id, count in actor_counts.most_common()
-        ]
-
-        return RunStats(
-            total_hops=max(len(watched_steps) - 1, 0),
-            countries=sorted(countries),
-            decades=sorted(decades),
-            keystone_actors=keystone_actors,
-        )
+        return compute_run_stats(steps)
 
     def solve_bridge(
         self,

@@ -53,6 +53,10 @@ class RunStepCreate(BaseModel):
     watched_at: datetime | None = None
 
 
+class StepValidateRequest(BaseModel):
+    movie_id: int
+
+
 class MarkWatchedRequest(BaseModel):
     watched_at: datetime | None = None
     user_notes: str | None = None

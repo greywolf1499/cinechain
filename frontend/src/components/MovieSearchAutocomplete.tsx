@@ -56,22 +56,15 @@ export default function MovieSearchAutocomplete({
 
     if (!runId) return; // plain picker mode (e.g. seed movie) - nothing more to do
 
-    if (tailMovieId === undefined) {
-      // First step in the run - nothing to validate against yet.
-      setValidation({ valid: true, reason: null, connections: [] });
-      return;
-    }
-
     setValidating(true);
     try {
-      const result = await api.post<ValidationResult>("/engine/validate", {
-        game_type: "cinechain",
-        from_movie_id: tailMovieId,
-        to_movie_id: movie.tmdb_id,
+      // Run-scoped pre-flight: the run's own engine + rules, same check logging applies.
+      const result = await api.post<ValidationResult>(`/runs/${runId}/validate`, {
+        movie_id: movie.tmdb_id,
       });
       setValidation(result);
     } catch {
-      setValidation({ valid: false, reason: "Could not validate this pick.", connections: [] });
+      setValidation({ valid: false, reason: "Could not validate this pick.", connections: [], blocked: false });
     } finally {
       setValidating(false);
     }
@@ -137,7 +130,7 @@ export default function MovieSearchAutocomplete({
 
             {runId && validating && (
               <p className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500">
-                <Loader2 className="h-3 w-3 animate-spin" /> Checking for shared cast...
+                <Loader2 className="h-3 w-3 animate-spin" /> Checking this pick against the run's rules...
               </p>
             )}
 
@@ -154,6 +147,11 @@ export default function MovieSearchAutocomplete({
                     {validation.connections.length > 0
                       ? `Connects to Frontier via ${validation.connections.map((c) => c.actor_name).join(", ")}`
                       : "First step - nothing to validate yet."}
+                  </div>
+                ) : validation.blocked ? (
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-red-400">
+                    <Lock className="h-3 w-3 shrink-0" />
+                    {validation.reason ?? "This film isn't allowed in this run."}
                   </div>
                 ) : wildcardsExhausted ? (
                   <div className="flex items-center gap-1.5 text-xs font-medium text-red-400">
@@ -203,13 +201,14 @@ export default function MovieSearchAutocomplete({
                       Log this movie
                     </LogButton>
                   ) : (
+                    !validation.blocked &&
                     !wildcardsExhausted && (
                       <LogButton pending={createStep.isPending} onClick={() => handleLog(true)}>
                         Confirm Wildcard Jump
                       </LogButton>
                     )
                   )}
-                  {!validation.valid && tailMovieId !== undefined && (
+                  {!validation.valid && !validation.blocked && tailMovieId !== undefined && (
                     <button
                       type="button"
                       onClick={() => navigate(`/tools/bridge?from=${tailMovieId}&to=${picked.tmdb_id}`)}

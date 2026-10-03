@@ -19,7 +19,7 @@ from app.models.run import (
 )
 from app.models.user import User
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import RunStats, Suggestion, SuggestionFilters
+from app.schemas.engine import RunStats, Suggestion, SuggestionFilters, ValidationResult
 from app.schemas.runs import (
     MarkWatchedRequest,
     ParticipantAdd,
@@ -32,6 +32,7 @@ from app.schemas.runs import (
     RunStepUpdate,
     RunSummary,
     RunUpdate,
+    StepValidateRequest,
 )
 from app.services import cache_repo
 from app.services.tmdb import TMDBClient
@@ -150,12 +151,23 @@ async def _enforce_run_rules(
         extra_metadata["runtime_flagged"] = True
 
     previous = _last_step(session, run.id)
+    engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if previous is None and engine_class is not None:
+        # Nothing to link from, but run-scoped film rules (canon list, decade)
+        # still apply to the very first film.
+        first = await engine_class(session, tmdb).validate_candidate(movie.tmdb_id, rules)
+        if not first.valid:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=first.model_dump())
     if previous is not None:
         engine = get_engine(run.game_type, session, tmdb)
         result = await engine.validate_next_step(
             previous.movie_id, movie.tmdb_id, cast_limit=rules.get(
-                "max_cast_order")
+                "max_cast_order"), rules=rules
         )
+        if not result.valid and result.blocked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
         if not result.valid:
             if not force:
                 raise HTTPException(
@@ -251,20 +263,26 @@ async def create_run(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found"
             )
 
+    rules_config = payload.rules_config if payload.rules_config is not None else dict(
+        DEFAULT_RULES_CONFIG)
     engine_class = ENGINE_REGISTRY.get(payload.game_type)
-    if engine_class is not None and payload.rules_config is not None:
-        problems = engine_class(session, tmdb).validate_rules_config(
-            payload.rules_config)
+    if engine_class is not None:
+        engine = engine_class(session, tmdb)
+        problems = engine.validate_rules_config(rules_config)
         if problems:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems))
+        if payload.seed_movie_id is not None:
+            seed = await engine.validate_candidate(payload.seed_movie_id, rules_config)
+            if not seed.valid:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Seed movie rejected: {seed.reason}")
 
     run = Run(
         name=payload.name,
         game_type=payload.game_type,
-        rules_config=payload.rules_config if payload.rules_config is not None else dict(
-            DEFAULT_RULES_CONFIG
-        ),
+        rules_config=rules_config,
     )
     session.add(run)
     session.commit()
@@ -520,6 +538,24 @@ def delete_step(
     session.commit()
 
 
+@router.post("/{run_id}/validate", response_model=ValidationResult)
+async def validate_step(
+    payload: StepValidateRequest,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> ValidationResult:
+    """Dry-run of the engine check `create_step` applies (link to the previous
+    film + the run's own film rules), so the UI can pre-flight a pick."""
+    engine = get_engine(run.game_type, session, tmdb)
+    rules = _run_rules(run)
+    previous = _last_step(session, run.id)
+    if previous is None:
+        return await engine.validate_candidate(payload.movie_id, rules)
+    return await engine.validate_next_step(
+        previous.movie_id, payload.movie_id, cast_limit=rules.get("max_cast_order"), rules=rules)
+
+
 @router.get("/{run_id}/suggestions", response_model=list[Suggestion])
 async def get_run_suggestions(
     session: Session = Depends(get_session),
@@ -538,7 +574,8 @@ async def get_run_suggestions(
     engine = get_engine(run.game_type, session, tmdb)
     filters = SuggestionFilters(
         country=country, decade=decade, genre_id=genre_id)
-    return await engine.get_suggestions(current.movie_id, logged_movie_ids, filters)
+    return await engine.get_suggestions(
+        current.movie_id, logged_movie_ids, filters, rules=_run_rules(run))
 
 
 @router.get("/{run_id}/stats", response_model=RunStats)
@@ -578,6 +615,7 @@ async def discover_next_movies(
             frontier_movie_id=frontier_movie_id,
             mode=mode,
             cast_limit=rules.get("max_cast_order"),
+            rules=rules,
         )
     except NotImplementedError:
         raise HTTPException(

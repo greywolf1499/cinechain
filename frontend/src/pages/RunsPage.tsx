@@ -10,7 +10,7 @@ import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
 import RawRulesEditor, { RAW_RULES_EXAMPLE, parseRawRules } from "../components/RawRulesEditor";
 import RulesetFields, { RULE_PRESETS } from "../components/RulesetFields";
 import { api } from "../lib/api";
-import { useCreateRun, useRuns, useUsers } from "../lib/queries";
+import { useCreateRun, useCuratedLists, useRuns, useUsers } from "../lib/queries";
 import { cn } from "../lib/cn";
 import { useAuthStore } from "../store/authStore";
 import type { EngineMeta, MovieSummary, RulesConfig } from "../types/api";
@@ -93,6 +93,7 @@ function NewRunModal({
     queryFn: () => api.get<EngineMeta[]>("/engines"),
   });
   const createRun = useCreateRun();
+  const { data: curatedLists } = useCuratedLists();
   const isAdmin = !!useAuthStore((s) => s.user?.is_admin);
 
   const [name, setName] = useState("");
@@ -100,6 +101,8 @@ function NewRunModal({
   const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [seedMovie, setSeedMovie] = useState<MovieSummary | null>(null);
   const [rules, setRules] = useState<RulesConfig>(RULE_PRESETS.standard);
+  const [canonListId, setCanonListId] = useState("");
+  const [targetDecade, setTargetDecade] = useState(1970);
   const [rawMode, setRawMode] = useState(false);
   const [rawText, setRawText] = useState("");
 
@@ -110,10 +113,25 @@ function NewRunModal({
   const rawEnabled = rawMode && isAdmin && engineSupportsRaw;
   const rawParse = parseRawRules(rawText);
 
+  const selectedEngine = engines?.find((engine) => engine.game_type === gameType);
+  // Modes without Pick Next discovery are SQL trackers rather than cast-graph chains.
+  const isTracker = !!selectedEngine && !selectedEngine.capabilities.includes("discover_candidates");
+  const needsCanonList = gameType === "canon_island";
+  const needsDecade = gameType === "decade_sieve";
+  // A canon list with no synced films would block every pick.
+  const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
+
+  const formRules: RulesConfig = {
+    ...(isTracker ? TRACKER_RULES : rules),
+    ...(needsCanonList ? { allowed_curated_list_id: canonListId } : {}),
+    ...(needsDecade ? { target_decade: targetDecade } : {}),
+  };
+  const missingMode = needsCanonList && !canonListId;
+
   function toggleRawMode() {
     if (!rawMode && !rawText.trim()) {
       // Seed with the form's current values plus an example condition pair.
-      setRawText(JSON.stringify({ ...RAW_RULES_EXAMPLE, ...rules }, null, 2));
+      setRawText(JSON.stringify({ ...RAW_RULES_EXAMPLE, ...formRules }, null, 2));
     }
     setRawMode((v) => !v);
   }
@@ -130,6 +148,8 @@ function NewRunModal({
     setParticipantIds([]);
     setSeedMovie(null);
     setRules(RULE_PRESETS.standard);
+    setCanonListId("");
+    setTargetDecade(1970);
     setRawMode(false);
     setRawText("");
     createRun.reset();
@@ -138,12 +158,13 @@ function NewRunModal({
   async function handleSubmit() {
     if (!name.trim()) return;
     if (rawEnabled && rawParse.error !== null) return;
+    if (missingMode && !rawEnabled) return;
     const run = await createRun.mutateAsync({
       name: name.trim(),
       game_type: gameType,
       participant_user_ids: participantIds,
       seed_movie_id: seedMovie?.tmdb_id ?? null,
-      rules_config: rawEnabled && rawParse.value ? rawParse.value : rules,
+      rules_config: rawEnabled && rawParse.value ? rawParse.value : formRules,
     });
     reset();
     onClose();
@@ -181,7 +202,48 @@ function NewRunModal({
               </option>
             ))}
           </select>
+          {selectedEngine && (
+            <span className="text-[11px] font-normal text-zinc-500">{selectedEngine.description}</span>
+          )}
         </Field>
+
+        {needsCanonList && (
+          <Field label="Canon list (every film must be on it)">
+            <select
+              value={canonListId}
+              onChange={(e) => setCanonListId(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Choose a list...</option>
+              {islandLists.map((list) => (
+                <option key={list.id} value={list.id}>
+                  {list.title} ({list.total_items} films)
+                </option>
+              ))}
+            </select>
+            {islandLists.length === 0 && (
+              <span className="text-[11px] font-normal text-amber-400">
+                No synced lists yet - enable and sync one under Lists first.
+              </span>
+            )}
+          </Field>
+        )}
+
+        {needsDecade && (
+          <Field label="Decade (every film must be released in it)">
+            <select
+              value={targetDecade}
+              onChange={(e) => setTargetDecade(Number(e.target.value))}
+              className={inputClass}
+            >
+              {DECADES.map((decade) => (
+                <option key={decade} value={decade}>
+                  {decade}s
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
 
         <Field label="Participants">
           <div className="flex flex-col gap-1.5 rounded-md border border-app-border bg-app-bg p-2">
@@ -237,7 +299,7 @@ function NewRunModal({
         {rawEnabled ? (
           <RawRulesEditor text={rawText} onChange={setRawText} />
         ) : (
-          <RulesetFields value={rules} onChange={setRules} />
+          !isTracker && <RulesetFields value={rules} onChange={setRules} />
         )}
 
         {createRun.isError && (
@@ -249,7 +311,9 @@ function NewRunModal({
         <button
           type="button"
           disabled={
-            !name.trim() || createRun.isPending || (rawEnabled && rawParse.error !== null)
+            !name.trim() ||
+            createRun.isPending ||
+            (rawEnabled ? rawParse.error !== null : missingMode)
           }
           onClick={handleSubmit}
           className="mt-1 flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
@@ -261,6 +325,19 @@ function NewRunModal({
     </Modal>
   );
 }
+
+// Tracker modes have no shared-cast graph, so the cast-depth / wildcard form doesn't apply.
+const TRACKER_RULES: RulesConfig = {
+  preset: "custom",
+  allow_repeats: "strict",
+  no_consecutive_actor: false,
+  max_cast_order: 15,
+  min_runtime: 0,
+  wildcards_budget: 0,
+};
+
+const LATEST_DECADE = Math.floor(new Date().getFullYear() / 10) * 10;
+const DECADES = Array.from({ length: (LATEST_DECADE - 1890) / 10 + 1 }, (_, i) => LATEST_DECADE - i * 10);
 
 const inputClass =
   "w-full rounded-md border border-app-border bg-app-bg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";

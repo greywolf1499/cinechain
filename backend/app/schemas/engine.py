@@ -13,6 +13,9 @@ class ValidationResult(BaseModel):
     valid: bool
     reason: str | None = None
     connections: list[SharedActorConnection] = []
+    # A hard block (e.g. "not in this run's canon list") can't be bought back
+    # with a wildcard, unlike a plain "no shared cast" miss.
+    blocked: bool = False
 
 
 class SuggestionFilters(BaseModel):
@@ -75,6 +78,24 @@ class SwapCandidate(BaseModel):
 class SwapNodeResult(BaseModel):
     candidates: list[SwapCandidate]
     total: int  # candidates found before the response cap
+
+
+class RouletteMovie(BaseModel):
+    tmdb_id: int
+    title: str
+    poster_path: str | None = None
+    release_year: int | None = None
+    origin_country: str | None = None
+    runtime: int | None = None
+    overview: str | None = None
+    tagline: str | None = None
+    genre_ids: list[int] = []
+    imdb_rating: str | None = None
+
+
+class RouletteSpinResult(BaseModel):
+    movie: RouletteMovie
+    pool_size: int  # how many cached films matched the filters
 
 
 class PathTagsResult(BaseModel):

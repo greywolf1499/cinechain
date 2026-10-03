@@ -37,6 +37,10 @@ export interface RulesConfig {
 	max_cast_order: number;
 	min_runtime: number;
 	wildcards_budget: number; // -1 = unlimited
+	/** Canon-Only Island: the CuratedList every film must belong to. */
+	allowed_curated_list_id?: string;
+	/** Decade Sieve: the decade start (e.g. 1970) every film must fall in. */
+	target_decade?: number;
 	win_condition?: RunCondition | RunCondition[];
 	fail_condition?: RunCondition | RunCondition[];
 }
@@ -142,6 +146,26 @@ export interface ValidationResult {
 	valid: boolean;
 	reason: string | null;
 	connections: SharedActorConnection[];
+	/** A hard rule violation (canon list / decade) - a wildcard can't override it. */
+	blocked?: boolean;
+}
+
+export interface RouletteMovie {
+	tmdb_id: number;
+	title: string;
+	poster_path: string | null;
+	release_year: number | null;
+	origin_country: string | null;
+	runtime: number | null;
+	overview: string | null;
+	tagline: string | null;
+	genre_ids: number[];
+	imdb_rating: string | null;
+}
+
+export interface RouletteSpinResult {
+	movie: RouletteMovie;
+	pool_size: number;
 }
 
 export interface Suggestion {

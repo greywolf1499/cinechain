@@ -10,12 +10,20 @@ from sqlmodel import Session, select
 from app.api.deps import get_current_user, get_tmdb_client
 from app.db import get_session
 from app.engines.registry import ENGINE_REGISTRY, get_engine
+from app.engines.trackers import RouletteEngine, SpinFilters
 from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
 from app.models.user import User
-from app.schemas.engine import PathTagsResult, SwapNodeResult, ValidationResult
+from app.schemas.engine import (
+    PathTagsResult,
+    RouletteMovie,
+    RouletteSpinResult,
+    SwapNodeResult,
+    ValidationResult,
+)
 from app.services import bridge_paths, settings_repo
 from app.services.tmdb import TMDBClient, TMDBError
 from app.services.tmdb_backoff import DeadlineReached
+from app.utils.dates import parse_release_year
 
 router = APIRouter(tags=["engine"])
 
@@ -141,6 +149,53 @@ def _tmdb_unavailable(exc: Exception) -> HTTPException:
             detail="TMDB is rate limiting us right now - try again in a moment")
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TMDB lookup failed: {exc}")
+
+
+@router.get("/engine/roulette/spin", response_model=RouletteSpinResult)
+async def roulette_spin(
+    max_runtime: int | None = Query(default=None, ge=1, le=1000),
+    min_runtime: int | None = Query(default=None, ge=1, le=1000),
+    min_rating: float | None = Query(default=None, ge=0, le=10, description="IMDb rating"),
+    genre: int | None = Query(default=None, description="TMDB genre id"),
+    run_id: str | None = Query(default=None, description="Skip films already in this run"),
+    game_type: str = Query(default="roulette"),
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    current_user: User = Depends(get_current_user),
+) -> RouletteSpinResult:
+    """Movie Night Roulette: one random film from the local cache (`cached_movies`)
+    that matches the filters. Pure SQLite - never calls TMDB."""
+    engine = get_engine(game_type, session, tmdb)
+    if not isinstance(engine, RouletteEngine):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{game_type} doesn't support roulette spins")
+    excluded, _, _ = _run_solve_context(session, run_id, current_user)
+
+    spun = engine.spin(SpinFilters(
+        max_runtime=max_runtime, min_runtime=min_runtime, min_rating=min_rating,
+        genre_id=genre, exclude_movie_ids=sorted(excluded)))
+    if spun is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No cached films match those filters - loosen them, or browse a few "
+                   "lists/actors to grow your local cache")
+    movie, imdb_rating, pool_size = spun
+    return RouletteSpinResult(
+        movie=RouletteMovie(
+            tmdb_id=movie.tmdb_id,
+            title=movie.title,
+            poster_path=movie.poster_path,
+            release_year=parse_release_year(movie.release_date),
+            origin_country=movie.origin_country,
+            runtime=movie.runtime,
+            overview=movie.overview,
+            tagline=movie.tagline or None,
+            genre_ids=movie.genre_ids or [],
+            imdb_rating=imdb_rating if imdb_rating and imdb_rating != "N/A" else None,
+        ),
+        pool_size=pool_size,
+    )
 
 
 @router.get("/engine/bridge/swap-node", response_model=SwapNodeResult)

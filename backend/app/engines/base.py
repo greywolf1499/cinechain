@@ -53,13 +53,28 @@ class BaseChallengeEngine(ABC):
             return None
         return evaluate_conditions(run.rules_config, steps)
 
+    async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
+        """Run-scoped rules about the film *itself* (e.g. canon-only, decade
+        sieve), checked for every step including the first, which has no
+        previous film to link from. Violations are returned `blocked`."""
+        return ValidationResult(valid=True)
+
     @abstractmethod
     async def validate_next_step(self, from_movie_id: int, to_movie_id: int) -> ValidationResult:
-        """Is `to_movie_id` a legal next film after `from_movie_id`?"""
+        """Is `to_movie_id` a legal next film after `from_movie_id`?
+
+        Concrete engines also accept `cast_limit` and `rules` (the run's
+        `rules_config`) keyword arguments; with `rules=None` the run-scoped
+        candidate rules are skipped.
+        """
 
     @abstractmethod
     async def get_suggestions(
-        self, current_movie_id: int, exclude_movie_ids: list[int], filters: SuggestionFilters
+        self,
+        current_movie_id: int,
+        exclude_movie_ids: list[int],
+        filters: SuggestionFilters,
+        rules: dict | None = None,
     ) -> list[Suggestion]:
         """Candidate next films reachable from `current_movie_id`."""
 
@@ -82,6 +97,7 @@ class BaseChallengeEngine(ABC):
         frontier_movie_id: int,
         mode: str = "or",
         cast_limit: int | None = None,
+        rules: dict | None = None,
     ) -> list[DiscoveryCandidate]:
         """Unified cast-aggregation "Pick Next" pool (Phase 13) - an OPTIONAL
         capability, not part of the required Strategy contract (e.g. a future

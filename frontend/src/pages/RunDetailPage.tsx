@@ -21,6 +21,7 @@ import Modal from "../components/Modal";
 import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
 import PickNextHub from "../components/PickNextHub";
+import RouletteSpinner from "../components/RouletteSpinner";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
 import { isoToFlagEmoji } from "../lib/countries";
@@ -28,15 +29,17 @@ import { cn } from "../lib/cn";
 import { allowsMovieRepeats } from "../lib/rules";
 import { useActiveRunStore } from "../store/activeRunStore";
 import {
+  useCuratedLists,
   useDeleteRun,
   useDeleteStep,
+  useEngines,
   useRun,
   useRunStats,
   useUpdateRun,
   useUsers,
 } from "../lib/queries";
 import type { ActorClickPayload } from "../components/actorClickTypes";
-import type { RulesConfig, RunStats, RunStatus, RunStep } from "../types/api";
+import type { CuratedListSummary, RulesConfig, RunStats, RunStatus, RunStep } from "../types/api";
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -44,6 +47,8 @@ export default function RunDetailPage() {
   const { data: run, isLoading } = useRun(id);
   const { data: users } = useUsers();
   const { data: stats } = useRunStats(id);
+  const { data: engines } = useEngines();
+  const { data: curatedLists } = useCuratedLists();
   const deleteStep = useDeleteStep(id ?? "");
   const deleteRun = useDeleteRun();
   const updateRun = useUpdateRun(id ?? "");
@@ -82,6 +87,10 @@ export default function RunDetailPage() {
   }
 
   const locked = run.status !== "active";
+  const engine = engines?.find((e) => e.game_type === run.game_type);
+  // Until /engines loads, assume the classic graph engine can do everything.
+  const capabilities =
+    engine?.capabilities ?? (run.game_type === "cinechain" ? ["discover_candidates", "solve_bridge"] : []);
   const lastStep = run.steps[run.steps.length - 1];
   const participantNames = run.participants
     .map((p) => users?.find((u) => u.id === p.user_id)?.display_name ?? p.user_id)
@@ -116,6 +125,14 @@ export default function RunDetailPage() {
           <div className="flex items-center gap-2.5">
             <h1 className="text-xl font-semibold tracking-tight text-zinc-100">{run.name}</h1>
             <StatusBadge status={run.status} />
+            {run.game_type !== "cinechain" && (
+              <span className="rounded-full border border-accent/40 bg-accent/10 px-2.5 py-0.5 text-xs font-medium text-accent">
+                {engine?.display_name ?? run.game_type}
+                {modeDetail(run.game_type, run.rules_config, curatedLists) && (
+                  <> &middot; {modeDetail(run.game_type, run.rules_config, curatedLists)}</>
+                )}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-sm text-zinc-500">{participantNames || "No participants"}</p>
         </div>
@@ -136,11 +153,27 @@ export default function RunDetailPage() {
       )}
 
       {run.steps.length === 0 ? (
-        <EmptyState
-          icon={Clapperboard}
-          title="No films logged yet"
-          description="Pick the first movie to kick off this run."
-        />
+        <>
+          <EmptyState
+            icon={Clapperboard}
+            title="No films logged yet"
+            description={
+              locked ? "This run ended before any film was logged." : "Pick the first movie to kick off this run."
+            }
+          />
+          {!locked && (
+            <div className="mx-auto mt-2 max-w-md">
+              <ActiveFrontierCard
+                runId={run.id}
+                tailStep={undefined}
+                rulesConfig={run.rules_config}
+                steps={run.steps}
+                locked={locked}
+                capabilities={capabilities}
+              />
+            </div>
+          )}
+        </>
       ) : (
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
           {/* Right rail: renders first (top) on mobile via source order; pinned
@@ -152,6 +185,7 @@ export default function RunDetailPage() {
               rulesConfig={run.rules_config}
               steps={run.steps}
               locked={locked}
+              capabilities={capabilities}
             />
             <MiniPassportWidget stats={stats} rules={run.rules_config} />
             <RulesSummaryCard runId={run.id} rules={run.rules_config} steps={run.steps} />
@@ -163,7 +197,8 @@ export default function RunDetailPage() {
               steps={run.steps}
               keystoneActorIds={keystoneActorIds}
               onActorClick={(actor) => {
-                if (!locked) setActiveActor(actor);
+                // Actor forks assume the unconstrained shared-cast engine.
+                if (!locked && run.game_type === "cinechain") setActiveActor(actor);
               }}
               onRequestDeleteStep={setConfirmDeleteStepId}
               locked={locked}
@@ -279,6 +314,19 @@ export default function RunDetailPage() {
       </Modal>
     </div>
   );
+}
+
+/** Short "what is this run restricted to" label for the header chip. */
+function modeDetail(
+  gameType: string,
+  rules: RulesConfig,
+  lists: CuratedListSummary[] | undefined,
+): string | null {
+  if (gameType === "decade_sieve" && rules.target_decade) return `${rules.target_decade}s`;
+  if (gameType === "canon_island" && rules.allowed_curated_list_id) {
+    return lists?.find((l) => l.id === rules.allowed_curated_list_id)?.title ?? null;
+  }
+  return null;
 }
 
 const OUTCOME_COPY: Record<
@@ -429,21 +477,28 @@ function ActiveFrontierCard({
   rulesConfig,
   steps,
   locked,
+  capabilities,
 }: {
   runId: string;
   tailStep: RunStep | undefined;
   rulesConfig: RulesConfig;
   steps: RunStep[];
   locked: boolean;
+  capabilities: string[];
 }) {
   const navigate = useNavigate();
   const [showHub, setShowHub] = useState(false);
   const [showDirectSearch, setShowDirectSearch] = useState(false);
+  const isRoulette = capabilities.includes("roulette_spin");
+  const canDiscover = capabilities.includes("discover_candidates");
+  const canBridge = capabilities.includes("solve_bridge");
+  // Modes without a "Pick Next" pool log films through search instead.
+  const searchOpen = !canDiscover || showDirectSearch;
 
   return (
     <div className="rounded-xl border border-app-border bg-app-surface p-4">
       <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
-        Active Frontier
+        {isRoulette ? "Movie Night Roulette" : "Active Frontier"}
       </p>
 
       {tailStep ? (
@@ -463,8 +518,11 @@ function ActiveFrontierCard({
           <Lock className="h-4 w-4 shrink-0" />
           This run is over - logging is locked.
         </div>
+      ) : isRoulette ? (
+        <RouletteSpinner runId={runId} />
       ) : (
       <div className="flex flex-col gap-2">
+        {canDiscover && (
         <button
           type="button"
           onClick={() => setShowHub(true)}
@@ -474,6 +532,8 @@ function ActiveFrontierCard({
           <Plus className="h-4 w-4" />
           Pick Next Movie
         </button>
+        )}
+        {canBridge && (
         <button
           type="button"
           onClick={() => navigate(`/tools/bridge?run_id=${runId}`)}
@@ -482,6 +542,8 @@ function ActiveFrontierCard({
           <GitBranch className="h-4 w-4" />
           Bridge Solver
         </button>
+        )}
+        {canDiscover && (
         <button
           type="button"
           onClick={() => setShowDirectSearch((v) => !v)}
@@ -489,11 +551,17 @@ function ActiveFrontierCard({
         >
           Or search for a specific film directly
         </button>
+        )}
       </div>
       )}
 
-      {!locked && showDirectSearch && (
+      {!locked && !isRoulette && searchOpen && (
         <div className="mt-4">
+          {!canDiscover && (
+            <p className="mb-2 text-xs text-zinc-500">
+              Search for a film to log it - this run&apos;s rules are checked as you pick.
+            </p>
+          )}
           <MovieSearchAutocomplete
             runId={runId}
             tailMovieId={tailStep?.movie_id}
@@ -504,7 +572,7 @@ function ActiveFrontierCard({
         </div>
       )}
 
-      {!locked && showHub && tailStep && (
+      {!locked && canDiscover && showHub && tailStep && (
         <PickNextHub
           open={showHub}
           onClose={() => setShowHub(false)}

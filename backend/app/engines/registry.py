@@ -2,11 +2,14 @@ from fastapi import HTTPException, status
 from sqlmodel import Session
 
 from app.engines.base import BaseChallengeEngine
+from app.engines.canon_island import CanonIslandEngine
 from app.engines.cinechain import CineChainEngine
+from app.engines.trackers import DecadeSieveEngine, RouletteEngine
 from app.services.tmdb import TMDBClient
 
 ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
-    CineChainEngine.game_type: CineChainEngine,
+    engine.game_type: engine
+    for engine in (CineChainEngine, CanonIslandEngine, DecadeSieveEngine, RouletteEngine)
 }
 
 

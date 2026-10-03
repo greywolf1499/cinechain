@@ -220,6 +220,17 @@ class TMDBClient:
         data = await self._get(f"/person/{person_id}/movie_credits")
         return [_normalize_person_credit(entry) for entry in data.get("cast", [])]
 
+    async def get_person_directed_credits(self, person_id: int) -> list[TMDBPersonCredit]:
+        """A person's films as *director* (crew entries with job "Director")."""
+        data = await self._get(f"/person/{person_id}/movie_credits")
+        seen: set[int] = set()
+        credits_: list[TMDBPersonCredit] = []
+        for entry in data.get("crew", []):
+            if entry.get("job") == "Director" and entry["id"] not in seen:
+                seen.add(entry["id"])
+                credits_.append(_normalize_person_credit(entry))
+        return credits_
+
     async def get_genres(self) -> list[TMDBGenre]:
         data = await self._get("/genre/movie/list")
         return [TMDBGenre(id=g["id"], name=g["name"]) for g in data.get("genres", [])]

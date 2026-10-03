@@ -126,6 +126,19 @@ def _run_solve_context(
     return excluded, rules.get("max_cast_order"), rules.get("min_runtime")
 
 
+def _tail_connection_type(session: Session, run_id: str | None, from_movie_id: int) -> str | None:
+    """Auteur Relay: the link kind that led into the run's last film, when the
+    bridge starts from it - so the first bridge hop continues the alternation."""
+    if run_id is None:
+        return None
+    tail = session.exec(
+        select(RunStep).where(RunStep.run_id == run_id).order_by(RunStep.logged_at.desc())
+    ).first()
+    if tail is None or tail.movie_id != from_movie_id:
+        return None
+    return (tail.transition_metadata or {}).get("connection_type")
+
+
 def _parse_id_list(raw: str | None, name: str, max_items: int) -> list[int]:
     if not raw:
         return []
@@ -281,6 +294,7 @@ async def bridge_stream(
     engine = get_engine(game_type, session, tmdb)
     excluded_movie_ids, cast_limit, min_runtime = _run_solve_context(
         session, run_id, current_user)
+    start_connection_type = _tail_connection_type(session, run_id, from_movie_id)
 
     overrides = settings_repo.get_overrides(session)
     raw_max_duration = overrides.get("bridge_max_duration_seconds")
@@ -296,6 +310,7 @@ async def bridge_stream(
             excluded_movie_ids=excluded_movie_ids,
             max_duration_seconds=max_duration_seconds,
             min_hops=min_hops,
+            start_connection_type=start_connection_type,
         )
         try:
             async for event in agen:

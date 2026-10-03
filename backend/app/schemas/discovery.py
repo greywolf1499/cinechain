@@ -2,6 +2,7 @@ from pydantic import BaseModel
 
 
 class DiscoveryConnection(BaseModel):
+    kind: str = "actor"  # actor | director (director links carry the director's id/name)
     actor_id: int
     actor_name: str
     profile_path: str | None = None
@@ -22,3 +23,6 @@ class DiscoveryCandidate(BaseModel):
     # 1-based position in the run's step order, when already_in_run - lets the
     # frontend show "Already in Run (Step X)" instead of a generic badge.
     existing_step_number: int | None = None
+    # The run's constraint (e.g. World Passport country) couldn't be checked yet
+    # because the film's details haven't been fetched; logging re-checks it.
+    constraint_unverified: bool = False

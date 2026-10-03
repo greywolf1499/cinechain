@@ -134,7 +134,11 @@ export interface EngineMeta {
 	capabilities: string[];
 }
 
+/** How two films are linked. `kind: "director"` reuses the shape: actor_id/actor_name hold the director. */
+export type ConnectionKind = "actor" | "director";
+
 export interface SharedActorConnection {
+	kind?: ConnectionKind;
 	actor_id: number;
 	actor_name: string;
 	profile_path: string | null;
@@ -142,7 +146,15 @@ export interface SharedActorConnection {
 	character_in_to: string | null;
 }
 
+/** The rule shaping a run's next hop (backend `ConstraintInfo`). */
+export interface ConstraintInfo {
+	kind: "director" | "actor" | "free" | "year" | "country" | (string & {});
+	title: string;
+	detail: string | null;
+}
+
 export interface ValidationResult {
+	connection_type?: ConnectionKind | null;
 	valid: boolean;
 	reason: string | null;
 	connections: SharedActorConnection[];
@@ -261,6 +273,7 @@ export interface EngineMeta {
 // --- discovery (schemas/discovery.py, Phase 13) ---
 
 export interface DiscoveryConnection {
+	kind?: ConnectionKind;
 	actor_id: number;
 	actor_name: string;
 	profile_path: string | null;
@@ -279,6 +292,8 @@ export interface DiscoveryCandidate {
 	connections: DiscoveryConnection[];
 	already_in_run: boolean;
 	existing_step_number: number | null;
+	/** The run's constraint (e.g. country) couldn't be checked yet; logging re-checks it. */
+	constraint_unverified?: boolean;
 }
 
 // --- integrations (schemas/integrations.py) ---

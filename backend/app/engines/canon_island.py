@@ -70,6 +70,7 @@ class CanonIslandEngine(CineChainEngine):
         to_movie_id: int,
         cast_limit: int | None = None,
         rules: dict | None = None,
+        previous_transition: dict | None = None,
     ) -> ValidationResult:
         if rules is not None:
             blocked = await self.validate_candidate(to_movie_id, rules)
@@ -99,6 +100,7 @@ class CanonIslandEngine(CineChainEngine):
         mode: str = "or",
         cast_limit: int | None = None,
         rules: dict | None = None,
+        previous_transition: dict | None = None,
     ) -> list[DiscoveryCandidate]:
         candidates = await super().discover_candidates(frontier_movie_id, mode, cast_limit)
         list_id = (rules or {}).get(ALLOWED_LIST_KEY)

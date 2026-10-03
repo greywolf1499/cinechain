@@ -2,6 +2,11 @@ from pydantic import BaseModel
 
 
 class SharedActorConnection(BaseModel):
+    """A link between two films. Despite the name it also carries a *director*
+    link (`kind="director"`, with `actor_id`/`actor_name` holding the director's
+    id/name) so bridge paths and validation can describe both with one shape."""
+
+    kind: str = "actor"  # actor | director
     actor_id: int
     actor_name: str
     profile_path: str | None = None
@@ -16,6 +21,8 @@ class ValidationResult(BaseModel):
     # A hard block (e.g. "not in this run's canon list") can't be bought back
     # with a wildcard, unlike a plain "no shared cast" miss.
     blocked: bool = False
+    # Auteur Relay: which kind of link this hop is/must be ("actor" | "director").
+    connection_type: str | None = None
 
 
 class SuggestionFilters(BaseModel):
@@ -78,6 +85,14 @@ class SwapCandidate(BaseModel):
 class SwapNodeResult(BaseModel):
     candidates: list[SwapCandidate]
     total: int  # candidates found before the response cap
+
+
+class ConstraintInfo(BaseModel):
+    """The rule currently shaping a run's *next* hop (e.g. "must be a Director")."""
+
+    kind: str  # director | actor | free | year | country
+    title: str
+    detail: str | None = None
 
 
 class RouletteMovie(BaseModel):

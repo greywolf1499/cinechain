@@ -19,7 +19,13 @@ from app.models.run import (
 )
 from app.models.user import User
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import RunStats, Suggestion, SuggestionFilters, ValidationResult
+from app.schemas.engine import (
+    ConstraintInfo,
+    RunStats,
+    Suggestion,
+    SuggestionFilters,
+    ValidationResult,
+)
 from app.schemas.runs import (
     MarkWatchedRequest,
     ParticipantAdd,
@@ -107,13 +113,15 @@ async def _enforce_run_rules(
 ) -> dict:
     """Validates a candidate step against the run's rules_config.
 
-    Returns extra transition_metadata fields to merge in (repeat_penalty,
-    runtime_flagged, wildcard_used). Raises 409 on any violation not covered
-    by `payload.force`.
+    Returns (extra transition_metadata fields to merge in - repeat_penalty,
+    runtime_flagged, wildcard_used - and the engine's own authoritative
+    metadata for the step, or None to keep the client's). Raises 409 on any
+    violation not covered by `payload.force`.
     """
     rules = _run_rules(run)
     force = payload.force
     extra_metadata: dict = {}
+    linked_metadata: dict | None = None
     broke_a_rule = False
 
     already_watched = session.exec(
@@ -152,6 +160,15 @@ async def _enforce_run_rules(
 
     previous = _last_step(session, run.id)
     engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if previous is None:
+        # The very first film has no inbound link; ignore any client-claimed one so it
+        # can't dictate an alternating mode's next hop.
+        claimed = payload.transition_metadata or {}
+        if "connection_type" in claimed:
+            linked_metadata = {
+                k: v for k, v in claimed.items()
+                if k not in ("connection_type", "director_id", "director_name")
+            } or None
     if previous is None and engine_class is not None:
         # Nothing to link from, but run-scoped film rules (canon list, decade)
         # still apply to the very first film.
@@ -163,7 +180,8 @@ async def _enforce_run_rules(
         engine = get_engine(run.game_type, session, tmdb)
         result = await engine.validate_next_step(
             previous.movie_id, movie.tmdb_id, cast_limit=rules.get(
-                "max_cast_order"), rules=rules
+                "max_cast_order"), rules=rules,
+            previous_transition=previous.transition_metadata,
         )
         if not result.valid and result.blocked:
             raise HTTPException(
@@ -173,7 +191,8 @@ async def _enforce_run_rules(
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
             broke_a_rule = True
-        elif rules.get("no_consecutive_actor", True):
+        linked_metadata = engine.link_metadata(result, payload.transition_metadata)
+        if result.valid and rules.get("no_consecutive_actor", True):
             chosen_actor_id = (
                 payload.transition_metadata or {}).get("actor_id")
             previous_actor_id = (
@@ -207,7 +226,7 @@ async def _enforce_run_rules(
             session.add(run)
         extra_metadata["wildcard_used"] = True
 
-    return extra_metadata
+    return extra_metadata, linked_metadata
 
 
 def _to_run_detail(session: Session, run: Run) -> RunDetail:
@@ -427,9 +446,10 @@ async def create_step(
 ):
     _ensure_run_open(run)
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id)
-    extra_metadata = await _enforce_run_rules(session, tmdb, run, movie, payload)
+    extra_metadata, linked_metadata = await _enforce_run_rules(
+        session, tmdb, run, movie, payload)
 
-    transition_metadata = payload.transition_metadata
+    transition_metadata = linked_metadata if linked_metadata is not None else payload.transition_metadata
     if extra_metadata:
         transition_metadata = {**(transition_metadata or {}), **extra_metadata}
 
@@ -553,7 +573,22 @@ async def validate_step(
     if previous is None:
         return await engine.validate_candidate(payload.movie_id, rules)
     return await engine.validate_next_step(
-        previous.movie_id, payload.movie_id, cast_limit=rules.get("max_cast_order"), rules=rules)
+        previous.movie_id, payload.movie_id, cast_limit=rules.get("max_cast_order"), rules=rules,
+        previous_transition=previous.transition_metadata)
+
+
+@router.get("/{run_id}/constraint", response_model=ConstraintInfo | None)
+async def get_run_constraint(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> ConstraintInfo | None:
+    """The rule shaping this run's next hop (e.g. "must be a Director"), or null."""
+    engine = get_engine(run.game_type, session, tmdb)
+    tail = _last_step(session, run.id)
+    return await engine.describe_constraint(
+        tail.movie_id if tail is not None else None,
+        tail.transition_metadata if tail is not None else None)
 
 
 @router.get("/{run_id}/suggestions", response_model=list[Suggestion])
@@ -610,12 +645,16 @@ async def discover_next_movies(
     """
     engine = get_engine(run.game_type, session, tmdb)
     rules = _run_rules(run)
+    previous = _last_step(session, run.id)
     try:
         candidates = await engine.discover_candidates(
             frontier_movie_id=frontier_movie_id,
             mode=mode,
             cast_limit=rules.get("max_cast_order"),
             rules=rules,
+            previous_transition=(
+                previous.transition_metadata if previous is not None
+                and previous.movie_id == frontier_movie_id else None),
         )
     except NotImplementedError:
         raise HTTPException(

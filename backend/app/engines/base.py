@@ -16,7 +16,13 @@ from app.models.run import (
     RunStep,
 )
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import RunStats, Suggestion, SuggestionFilters, ValidationResult
+from app.schemas.engine import (
+    ConstraintInfo,
+    RunStats,
+    Suggestion,
+    SuggestionFilters,
+    ValidationResult,
+)
 from app.services.tmdb import TMDBClient
 
 
@@ -63,9 +69,10 @@ class BaseChallengeEngine(ABC):
     async def validate_next_step(self, from_movie_id: int, to_movie_id: int) -> ValidationResult:
         """Is `to_movie_id` a legal next film after `from_movie_id`?
 
-        Concrete engines also accept `cast_limit` and `rules` (the run's
-        `rules_config`) keyword arguments; with `rules=None` the run-scoped
-        candidate rules are skipped.
+        Concrete engines also accept `cast_limit`, `rules` (the run's
+        `rules_config`) and `previous_transition` (the previous step's
+        `transition_metadata`) keyword arguments; with `rules=None` the
+        run-scoped candidate rules are skipped.
         """
 
     @abstractmethod
@@ -77,6 +84,19 @@ class BaseChallengeEngine(ABC):
         rules: dict | None = None,
     ) -> list[Suggestion]:
         """Candidate next films reachable from `current_movie_id`."""
+
+    async def describe_constraint(
+        self, tail_movie_id: int | None, previous_transition: dict | None
+    ) -> ConstraintInfo | None:
+        """The rule that currently shapes the run's next hop, for the UI. None = unconstrained."""
+        return None
+
+    def link_metadata(
+        self, result: ValidationResult, client_metadata: dict | None
+    ) -> dict | None:
+        """Server-authoritative `transition_metadata` for a step, built from the
+        engine's own validation result. None = keep whatever the client sent."""
+        return None
 
     @abstractmethod
     async def compute_stats(self, steps: list[RunStep]) -> RunStats:
@@ -98,6 +118,7 @@ class BaseChallengeEngine(ABC):
         mode: str = "or",
         cast_limit: int | None = None,
         rules: dict | None = None,
+        previous_transition: dict | None = None,
     ) -> list[DiscoveryCandidate]:
         """Unified cast-aggregation "Pick Next" pool (Phase 13) - an OPTIONAL
         capability, not part of the required Strategy contract (e.g. a future

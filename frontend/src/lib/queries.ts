@@ -19,6 +19,7 @@ import type {
 	Run,
 	RunDetail,
 	RunStats,
+	ConstraintInfo,
 	RawRulesConfig,
 	RunStatus,
 	RulesConfig,
@@ -76,6 +77,16 @@ export function useRunStats(runId: string | undefined) {
 	return useQuery({
 		queryKey: queryKeys.runStats(runId ?? ""),
 		queryFn: () => api.get<RunStats>(`/runs/${runId}/stats`),
+		enabled: !!runId,
+	});
+}
+
+/** The rule shaping the run's next hop (e.g. "must be a Director"), or null. */
+export function useRunConstraint(runId: string | undefined) {
+	return useQuery({
+		// Under the run's key prefix, so every step mutation refreshes it.
+		queryKey: [...queryKeys.run(runId ?? ""), "constraint"],
+		queryFn: () => api.get<ConstraintInfo | null>(`/runs/${runId}/constraint`),
 		enabled: !!runId,
 	});
 }

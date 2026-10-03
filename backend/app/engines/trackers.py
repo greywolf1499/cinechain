@@ -37,6 +37,7 @@ class TrackerEngine(BaseChallengeEngine):
         to_movie_id: int,
         cast_limit: int | None = None,
         rules: dict | None = None,
+        previous_transition: dict | None = None,
     ) -> ValidationResult:
         if rules is None:
             return ValidationResult(valid=True)

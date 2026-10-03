@@ -22,7 +22,8 @@ import BridgePathView, { PathTagChips } from "../components/BridgePathView";
 import BridgeSwapPanel, { type SwapState } from "../components/BridgeSwapPanel";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
-import { useCreateStep, useRun, useRuns } from "../lib/queries";
+import { connectionMetadata } from "../lib/connections";
+import { useCreateStep, useEngines, useRun, useRuns } from "../lib/queries";
 import type {
   BridgeResult,
   BridgeRoute,
@@ -56,7 +57,8 @@ interface TimeoutEvent {
 }
 
 interface ExhaustedEvent {
-  reason: "budget_exceeded" | "max_depth_reached";
+  reason: "budget_exceeded" | "max_depth_reached" | "constraint_impossible";
+  message?: string;
   tmdb_calls: number;
   elapsed_ms: number;
 }
@@ -99,9 +101,17 @@ export default function BridgePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { data: activeRuns } = useRuns("active");
+  const { data: engines } = useEngines();
   const [selectedRunId, setSelectedRunId] = useState("");
   const { data: selectedRun } = useRun(selectedRunId || undefined);
   const createStep = useCreateStep(selectedRunId);
+  const runIdFromQuery = searchParams.get("run_id");
+  // A run-scoped solve (?run_id=) follows that run's own rules: Chrono Climb, World
+  // Passport and Auteur Relay constrain the search. Engines without a Bridge Solver
+  // (and free-form solves) use the classic one.
+  const runEngine = runIdFromQuery ? engines?.find((e) => e.game_type === selectedRun?.game_type) : undefined;
+  const solveGameType = runEngine?.capabilities.includes("solve_bridge") ? runEngine.game_type : "cinechain";
+  const solveEngine = engines?.find((e) => e.game_type === solveGameType);
 
   const [startMovie, setStartMovie] = useState<MovieSummary | null>(null);
   const [targetMovie, setTargetMovie] = useState<MovieSummary | null>(null);
@@ -133,7 +143,6 @@ export default function BridgePage() {
   const swapRequestRef = useRef(0);
   const lookedUpRef = useRef<Set<number>>(new Set());
 
-  const runIdFromQuery = searchParams.get("run_id");
 
   // A ?run_id= query param scopes the whole solve to that run - takes over
   // the run picker entirely (no free choice of "queue to a different run").
@@ -258,7 +267,7 @@ export default function BridgePage() {
     const params = new URLSearchParams({
       from_movie_id: String(startMovie.tmdb_id),
       to_movie_id: String(targetMovie.tmdb_id),
-      game_type: "cinechain",
+      game_type: solveGameType,
       max_depth: String(depth),
     });
     if (runIdFromQuery) params.set("run_id", runIdFromQuery);
@@ -371,7 +380,7 @@ export default function BridgePage() {
       actor_in_id: String(connectionIn.actor_id),
       actor_out_id: String(connectionOut.actor_id),
       exclude_movie_ids: activePath.path.map((node) => node.movie_id).join(","),
-      game_type: "cinechain",
+      game_type: solveGameType,
     });
     if (runIdFromQuery) params.set("run_id", runIdFromQuery);
     try {
@@ -442,7 +451,7 @@ export default function BridgePage() {
     const params = new URLSearchParams({
       from_movie_id: String(startMovie.tmdb_id),
       to_movie_id: String(targetMovie.tmdb_id),
-      game_type: "cinechain",
+      game_type: solveGameType,
       max_depth: String(target),
       min_hops: String(target),
     });
@@ -528,11 +537,10 @@ export default function BridgePage() {
           status: "planned",
           force: true,
           transition_metadata: connection
-            ? {
-                actor_id: connection.actor_id,
-                actor_name: connection.actor_name,
-                profile_path: connection.profile_path,
-              }
+            ? connectionMetadata(connection, {
+                from: connection.character_in_from,
+                to: connection.character_in_to,
+              })
             : null,
         });
       }
@@ -701,11 +709,13 @@ export default function BridgePage() {
           <div className="flex flex-col gap-3 rounded-xl border border-amber-900/50 bg-amber-950/20 px-5 py-4">
             <div className="flex items-center gap-2.5 text-sm text-amber-300">
               <AlertTriangle className="h-4 w-4 shrink-0" />
-              {exhausted.reason === "max_depth_reached"
-                ? `No path found within ${maxDepth} hops.`
-                : "TMDB call budget exhausted before a path was found."}
+              {exhausted.reason === "constraint_impossible"
+                ? (exhausted.message ?? "This run's rules make that bridge impossible.")
+                : exhausted.reason === "max_depth_reached"
+                  ? `No path found within ${maxDepth} hops.`
+                  : "TMDB call budget exhausted before a path was found."}
             </div>
-            {maxDepth < MAX_DEPTH ? (
+            {exhausted.reason === "constraint_impossible" ? null : maxDepth < MAX_DEPTH ? (
               <button
                 type="button"
                 onClick={retryWithHigherDepth}
@@ -783,7 +793,7 @@ export default function BridgePage() {
                 connections={activePath?.connections ?? result.connections}
                 onServerMap={onServerMap}
                 onMovieClick={setPreviewMovieId}
-                onSwapNode={handleSwap}
+                onSwapNode={solveEngine?.capabilities.includes("bridge_swap") ? handleSwap : undefined}
                 swapIndex={swap?.index ?? null}
               />
             </div>

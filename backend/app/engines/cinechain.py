@@ -83,6 +83,7 @@ class CineChainEngine(BaseChallengeEngine):
         to_movie_id: int,
         cast_limit: int | None = None,
         rules: dict | None = None,
+        previous_transition: dict | None = None,
     ) -> ValidationResult:
         # Note: if a movie's cast was already cached at a lower limit (e.g. the
         # global default of 15), a run requesting a deeper cast_limit (e.g. a
@@ -151,6 +152,7 @@ class CineChainEngine(BaseChallengeEngine):
         mode: str = "or",
         cast_limit: int | None = None,
         rules: dict | None = None,
+        previous_transition: dict | None = None,
     ) -> list[DiscoveryCandidate]:
         """Pools every top-billed cast member's filmography into one set of
         candidates, tracking ALL connecting actors per movie (not just the
@@ -224,6 +226,8 @@ class CineChainEngine(BaseChallengeEngine):
         excluded_movie_ids: set[int] | None = None,
         max_duration_seconds: int | None = None,
         min_hops: int | None = None,
+        rules: dict | None = None,
+        start_connection_type: str | None = None,
     ):
         return pathfinder.solve_bridge_bipartite(
             self.session,

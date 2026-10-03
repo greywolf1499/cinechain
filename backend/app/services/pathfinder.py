@@ -25,13 +25,20 @@ import anyio
 from sqlmodel import Session, select
 
 from app.config import get_settings
-from app.models.cache import CachedActor, CachedMovie, CachedMovieCast
+from app.models.cache import CachedActor, CachedMovie, CachedMovieCast, CachedMovieDirector
 from app.models.curated import CanonMovieBadge
 from app.schemas.engine import SharedActorConnection
 from app.services import cache_repo
 from app.services.bridge_paths import analyze_path_tags, hydrate_movies, make_bridge_node
 from app.services.cache_repo import CacheRepo
-from app.services.graph import FrontierSide, NodeKey, actor_node, movie_node
+from app.services.graph import (
+    DIRECTOR_NODE,
+    FrontierSide,
+    NodeKey,
+    PathConstraints,
+    actor_node,
+    movie_node,
+)
 from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient
 from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
@@ -87,11 +94,28 @@ async def solve_bridge_bipartite(
     excluded_movie_ids: set[int] | None = None,
     max_duration_seconds: int | None = None,
     min_hops: int | None = None,
+    constraints: PathConstraints | None = None,
 ) -> AsyncIterator[dict]:
-    """`min_hops` powers "Search Deeper": meetings whose path is shorter than
+    """`constraints` (graph-mutator modes) hands the whole search to the
+    movie-level constrained solver, because their rules depend on the previous
+    hop - see `constrained_pathfinder`.
+
+    `min_hops` powers "Search Deeper": meetings whose path is shorter than
     this are ignored (the caller already has those), so the search keeps going
     until it can offer genuinely longer routes. Re-expanding the shallow levels
     is free - they're cache hits - and every new level it reaches is cached."""
+    if constraints is not None:
+        from app.services import constrained_pathfinder  # local: it imports this module
+
+        async for event in constrained_pathfinder.solve_constrained(
+            session, tmdb, from_movie_id, to_movie_id, constraints,
+            max_depth=max_depth, call_budget=call_budget, cast_limit=cast_limit,
+            min_runtime=min_runtime, excluded_movie_ids=excluded_movie_ids,
+            max_duration_seconds=max_duration_seconds, min_hops=min_hops,
+        ):
+            yield event
+        return
+
     settings = get_settings()
     max_depth = max_depth or settings.pathfinder_max_depth
     if min_hops:
@@ -440,7 +464,7 @@ async def _finish_result(
 def _build_result(session: Session, combined_path: list[NodeKey]) -> dict:
     """Sync DB reads only - every node on the path was already cached during the search."""
     movie_ids = [node[1] for node in combined_path[0::2]]
-    actor_ids = [node[1] for node in combined_path[1::2]]
+    link_nodes = combined_path[1::2]
 
     bridge_nodes = [
         make_bridge_node(session.get(CachedMovie, movie_id), movie_id)
@@ -448,15 +472,26 @@ def _build_result(session: Session, combined_path: list[NodeKey]) -> dict:
     ]
 
     connections = []
-    for i, actor_id in enumerate(actor_ids):
+    for i, (kind, person_id) in enumerate(link_nodes):
         from_id, to_id = movie_ids[i], movie_ids[i + 1]
-        actor = session.get(CachedActor, actor_id)
-        cast_from = session.get(CachedMovieCast, (from_id, actor_id))
-        cast_to = session.get(CachedMovieCast, (to_id, actor_id))
+        if kind == DIRECTOR_NODE:
+            director_row = session.get(CachedMovieDirector, (from_id, person_id)) or session.get(
+                CachedMovieDirector, (to_id, person_id))
+            connections.append(
+                SharedActorConnection(
+                    kind=DIRECTOR_NODE,
+                    actor_id=person_id,
+                    actor_name=director_row.name if director_row else str(person_id),
+                )
+            )
+            continue
+        actor = session.get(CachedActor, person_id)
+        cast_from = session.get(CachedMovieCast, (from_id, person_id))
+        cast_to = session.get(CachedMovieCast, (to_id, person_id))
         connections.append(
             SharedActorConnection(
-                actor_id=actor_id,
-                actor_name=actor.name if actor else str(actor_id),
+                actor_id=person_id,
+                actor_name=actor.name if actor else str(person_id),
                 profile_path=actor.profile_path if actor else None,
                 character_in_from=cast_from.character_name if cast_from else None,
                 character_in_to=cast_to.character_name if cast_to else None,

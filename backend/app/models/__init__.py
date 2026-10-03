@@ -1,5 +1,6 @@
 from app.models.cache import (
     CachedActor,
+    CachedDirector,
     CachedGenre,
     CachedMovie,
     CachedMovieCast,
@@ -11,6 +12,7 @@ from app.models.user import User
 
 __all__ = [
     "CachedActor",
+    "CachedDirector",
     "CachedGenre",
     "CachedMovie",
     "CachedMovieCast",

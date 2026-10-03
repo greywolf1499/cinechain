@@ -5,6 +5,7 @@ import { AlertTriangle, GitBranch, Loader2, Lock, Search, X } from "lucide-react
 import { api } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
+import { connectionMetadata } from "../lib/connections";
 import { useCreateStep } from "../lib/queries";
 import MoviePoster from "./MoviePoster";
 import type { MovieSummary, RulesConfig, RunStep, ValidationResult } from "../types/api";
@@ -79,13 +80,10 @@ export default function MovieSearchAutocomplete({
       status: watchStatus,
       watched_at: watchStatus === "watched" ? new Date(watchedDate).toISOString() : null,
       transition_metadata: connection
-        ? {
-            actor_id: connection.actor_id,
-            actor_name: connection.actor_name,
-            profile_path: connection.profile_path,
-            character_in_from: connection.character_in_from,
-            character_in_to: connection.character_in_to,
-          }
+        ? connectionMetadata(connection, {
+            from: connection.character_in_from,
+            to: connection.character_in_to,
+          })
         : null,
     });
     reset();
@@ -145,7 +143,9 @@ export default function MovieSearchAutocomplete({
                 {validation.valid ? (
                   <div className="text-xs text-emerald-400">
                     {validation.connections.length > 0
-                      ? `Connects to Frontier via ${validation.connections.map((c) => c.actor_name).join(", ")}`
+                      ? `Connects to Frontier via ${validation.connections
+                          .map((c) => (c.kind === "director" ? `${c.actor_name} (director)` : c.actor_name))
+                          .join(", ")}`
                       : "First step - nothing to validate yet."}
                   </div>
                 ) : validation.blocked ? (

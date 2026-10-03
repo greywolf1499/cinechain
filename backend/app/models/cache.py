@@ -74,6 +74,17 @@ class CachedMovieRating(SQLModel, table=True):
     fetched_at: datetime = Field(default_factory=utcnow)
 
 
+class CachedDirector(SQLModel, table=True):
+    """A director whose *directed* filmography has been fetched (Auteur Relay):
+    NULL `credits_fetched_at` is never a row, so presence = "filmography cached"."""
+
+    __tablename__ = "cached_directors"
+
+    person_id: int = Field(primary_key=True)
+    name: str
+    credits_fetched_at: datetime = Field(default_factory=utcnow)
+
+
 class CachedMovieDirector(SQLModel, table=True):
     """A movie's director(s), from the TMDB credits crew list (Passport "top directors")."""
 

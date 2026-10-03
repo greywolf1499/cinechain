@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  Calendar,
   Clapperboard,
   Flag,
   GitBranch,
+  Globe,
+  Link2,
   Loader2,
   Lock,
   MoreHorizontal,
@@ -13,6 +16,7 @@ import {
   Skull,
   Trash2,
   Trophy,
+  User,
 } from "lucide-react";
 import ChainTimeline from "../components/ChainTimeline";
 import EditRulesModal from "../components/EditRulesModal";
@@ -34,6 +38,7 @@ import {
   useDeleteStep,
   useEngines,
   useRun,
+  useRunConstraint,
   useRunStats,
   useUpdateRun,
   useUsers,
@@ -489,6 +494,7 @@ function ActiveFrontierCard({
   const navigate = useNavigate();
   const [showHub, setShowHub] = useState(false);
   const [showDirectSearch, setShowDirectSearch] = useState(false);
+  const { data: constraint } = useRunConstraint(runId);
   const isRoulette = capabilities.includes("roulette_spin");
   const canDiscover = capabilities.includes("discover_candidates");
   const canBridge = capabilities.includes("solve_bridge");
@@ -511,6 +517,16 @@ function ActiveFrontierCard({
         </div>
       ) : (
         <p className="mb-4 text-sm text-zinc-500">No films logged yet.</p>
+      )}
+
+      {constraint && !locked && (
+        <div role="note" className="mb-3 rounded-md border border-accent/30 bg-accent/5 px-3 py-2">
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-accent">
+            <ConstraintIcon kind={constraint.kind} />
+            {constraint.title}
+          </p>
+          {constraint.detail && <p className="mt-0.5 text-[11px] text-zinc-500">{constraint.detail}</p>}
+        </div>
       )}
 
       {locked ? (
@@ -584,6 +600,22 @@ function ActiveFrontierCard({
       )}
     </div>
   );
+}
+
+function ConstraintIcon({ kind }: { kind: string }) {
+  const className = "h-3.5 w-3.5 shrink-0";
+  switch (kind) {
+    case "director":
+      return <Clapperboard className={className} />;
+    case "actor":
+      return <User className={className} />;
+    case "year":
+      return <Calendar className={className} />;
+    case "country":
+      return <Globe className={className} />;
+    default:
+      return <Link2 className={className} />;
+  }
 }
 
 function MiniPassportWidget({ stats, rules }: { stats: RunStats | undefined; rules: RulesConfig }) {

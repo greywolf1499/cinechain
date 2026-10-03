@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowUpAZ,
   Check,
+  Clapperboard,
   GitBranch,
   Loader2,
   Lock,
@@ -24,6 +25,7 @@ import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { profileUrl } from "../lib/tmdbImage";
+import { connectionMetadata } from "../lib/connections";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
 import { useCanonBadgesBulk, useCreateStep, useDiscoverCandidates, useMovieDetail } from "../lib/queries";
 import type {
@@ -339,13 +341,10 @@ function DiscoveryGrid({
         status: watched ? "watched" : "planned",
         watched_at: watched ? new Date().toISOString() : null,
         transition_metadata: connection
-          ? {
-              actor_id: connection.actor_id,
-              actor_name: connection.actor_name,
-              profile_path: connection.profile_path,
-              character_in_from: connection.character_in_frontier,
-              character_in_to: connection.character_in_candidate,
-            }
+          ? connectionMetadata(connection, {
+              from: connection.character_in_frontier,
+              to: connection.character_in_candidate,
+            })
           : null,
       });
       onClose();
@@ -604,6 +603,14 @@ function CandidateCard({
         </div>
 
         <ConnectionBadge connections={candidate.connections} />
+        {candidate.constraint_unverified && (
+          <span
+            title="This run's rule couldn't be checked for this film yet - logging will check it."
+            className="w-fit rounded-full bg-amber-950 px-2 py-0.5 text-[9px] font-medium text-amber-400"
+          >
+            Rule unverified
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -645,14 +652,22 @@ function CandidateCard({
   );
 }
 
+function sharedLabel(connections: DiscoveryConnection[]): string {
+  if (connections.every((c) => c.kind === "director")) return "Directors";
+  return connections.some((c) => c.kind === "director") ? "Links" : "Actors";
+}
+
 function ConnectionBadge({ connections }: { connections: DiscoveryConnection[] }) {
   if (connections.length === 0) return null;
 
   if (connections.length === 1) {
     const connection = connections[0];
+    const isDirector = connection.kind === "director";
     return (
       <div className="flex items-center gap-1.5 rounded-md bg-app-bg px-2 py-1">
-        {connection.profile_path ? (
+        {isDirector ? (
+          <Clapperboard className="h-4 w-4 shrink-0 text-accent" />
+        ) : connection.profile_path ? (
           <img
             src={profileUrl(connection.profile_path) ?? undefined}
             alt={connection.actor_name}
@@ -662,7 +677,10 @@ function ConnectionBadge({ connections }: { connections: DiscoveryConnection[] }
           <User className="h-4 w-4 shrink-0 text-zinc-500" />
         )}
         <div className="min-w-0">
-          <p className="truncate text-[10px] font-medium text-zinc-300">{connection.actor_name}</p>
+          <p className="truncate text-[10px] font-medium text-zinc-300">
+            {connection.actor_name}
+            {isDirector && <span className="ml-1 text-accent">(Director)</span>}
+          </p>
           {connection.character_in_candidate && (
             <p className="truncate text-[9px] text-zinc-500">as {connection.character_in_candidate}</p>
           )}
@@ -676,7 +694,7 @@ function ConnectionBadge({ connections }: { connections: DiscoveryConnection[] }
       className="rounded-md bg-accent/10 px-2 py-1 text-[10px] font-medium text-accent"
       title={connections.map((c) => c.actor_name).join(", ")}
     >
-      {connections.length} Shared Actors: {connections.map((c) => c.actor_name).join(" & ")}
+      {`${connections.length} Shared ${sharedLabel(connections)}: ${connections.map((c) => c.actor_name).join(" & ")}`}
     </div>
   );
 }
@@ -743,19 +761,16 @@ function MovieScreenView({
       status: watched ? "watched" : "planned",
       watched_at: watched ? new Date().toISOString() : null,
       transition_metadata: connection
-        ? {
-            actor_id: connection.actor_id,
-            actor_name: connection.actor_name,
-            profile_path: connection.profile_path,
-            character_in_from:
+        ? connectionMetadata(connection, {
+            from:
               "character_in_frontier" in connection
                 ? connection.character_in_frontier
                 : connection.character_in_from,
-            character_in_to:
+            to:
               "character_in_candidate" in connection
                 ? connection.character_in_candidate
                 : connection.character_in_to,
-          }
+          })
         : null,
     });
     onClose();

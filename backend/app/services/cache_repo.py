@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.integrations.omdb import OMDbClient, OMDbRatings
 from app.models.cache import (
     CachedActor,
+    CachedDirector,
     CachedGenre,
     CachedMovie,
     CachedMovieCast,
@@ -146,6 +147,40 @@ class CacheRepo:
         self.session.add(movie)
         self.session.commit()
         return rows
+
+    def get_cached_director_credits(self, person_id: int) -> list[CachedMovie] | None:
+        """A director's directed filmography; None = never fetched."""
+        if self.session.get(CachedDirector, person_id) is None:
+            return None
+        statement = (
+            select(CachedMovie)
+            .join(CachedMovieDirector, CachedMovieDirector.movie_id == CachedMovie.tmdb_id)
+            .where(CachedMovieDirector.person_id == person_id)
+        )
+        return list(self.session.exec(statement).all())
+
+    def upsert_director_credits(
+        self, person_id: int, name: str, credits: list[TMDBPersonCredit]
+    ) -> list[CachedMovie]:
+        """Stores a director's filmography as (movie, director) rows. A stub movie
+        gains a partial director row without `directors_fetched_at`, so its full
+        director list is still fetched (and replaces the row) when needed."""
+        director = self.session.get(CachedDirector, person_id)
+        if director is None:
+            director = CachedDirector(person_id=person_id, name=name)
+        director.name = name or director.name
+        director.credits_fetched_at = utcnow()
+        self.session.add(director)
+
+        movies: list[CachedMovie] = []
+        for credit in credits:
+            movie = self.upsert_movie_stub(credit)
+            movies.append(movie)
+            if self.session.get(CachedMovieDirector, (movie.tmdb_id, person_id)) is None:
+                self.session.add(CachedMovieDirector(
+                    movie_id=movie.tmdb_id, person_id=person_id, name=name))
+        self.session.commit()
+        return movies
 
     # --- cast (top-N billing for a given movie) ---
 
@@ -402,6 +437,18 @@ async def get_movie_directors(
         return cached
     directors = await tmdb.get_movie_directors(tmdb_id)
     return await anyio.to_thread.run_sync(repo.upsert_directors, tmdb_id, directors)
+
+
+async def get_director_credits(
+    session: Session, tmdb: TMDBClient, person_id: int, name: str = ""
+) -> list[CachedMovie]:
+    """Read-through "films this person directed" (one TMDB call on a miss)."""
+    repo = CacheRepo(session)
+    cached = await anyio.to_thread.run_sync(repo.get_cached_director_credits, person_id)
+    if cached is not None:
+        return cached
+    credits_ = await tmdb.get_person_directed_credits(person_id)
+    return await anyio.to_thread.run_sync(repo.upsert_director_credits, person_id, name, credits_)
 
 
 async def get_movie_ratings(

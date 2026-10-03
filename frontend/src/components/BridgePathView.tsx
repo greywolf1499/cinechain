@@ -1,4 +1,4 @@
-import { ArrowRight, Shuffle, User } from "lucide-react";
+import { ArrowRight, Clapperboard, Shuffle, User } from "lucide-react";
 import AcquisitionControl from "./AcquisitionControl";
 import MoviePoster from "./MoviePoster";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
@@ -113,7 +113,11 @@ export default function BridgePathView({
                   <div className="flex w-full items-center text-zinc-600">
                     <span className="h-px flex-1 bg-current" />
                     {connection &&
-                      (connection.profile_path ? (
+                      (connection.kind === "director" ? (
+                        <span className="mx-1.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent ring-1 ring-accent/40">
+                          <Clapperboard className="h-5 w-5" />
+                        </span>
+                      ) : connection.profile_path ? (
                         <img
                           src={profileUrl(connection.profile_path) ?? undefined}
                           alt={connection.actor_name}
@@ -134,6 +138,7 @@ export default function BridgePathView({
                       className="line-clamp-2 w-full break-words text-center text-[11px] font-medium leading-tight text-zinc-400"
                     >
                       {connection.actor_name}
+                      {connection.kind === "director" && <span className="block text-[10px] text-accent">Director</span>}
                     </p>
                   )}
                 </div>

@@ -5,7 +5,7 @@ from app.api.deps import get_current_user, get_tmdb_client, run_participant_guar
 from app.db import get_session
 from app.engines.registry import get_engine
 from app.models.cache import CachedMovie
-from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
+from app.models.run import DEFAULT_RULES_CONFIG, IMPORT_GAME_TYPE, Run, RunParticipant, RunStep
 from app.models.user import User
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import RunStats, Suggestion, SuggestionFilters
@@ -182,7 +182,7 @@ def list_runs(
     statement = (
         select(Run)
         .join(RunParticipant, RunParticipant.run_id == Run.id)
-        .where(RunParticipant.user_id == current_user.id)
+        .where(RunParticipant.user_id == current_user.id, Run.game_type != IMPORT_GAME_TYPE)
     )
     if status_filter is not None:
         statement = statement.where(Run.status == status_filter)
@@ -197,6 +197,10 @@ async def create_run(
     current_user: User = Depends(get_current_user),
     tmdb: TMDBClient = Depends(get_tmdb_client),
 ) -> RunDetail:
+    if payload.game_type == IMPORT_GAME_TYPE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'import' is reserved for imported history")
     participant_ids = {current_user.id, *payload.participant_user_ids}
     for user_id in participant_ids:
         if session.get(User, user_id) is None:

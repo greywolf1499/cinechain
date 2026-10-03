@@ -560,7 +560,7 @@ def test_scrape_user_diary_history_keeps_repeat_watches(tmp_path, monkeypatch):
 
 
 RSS_XML = """<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:letterboxd="https://letterboxd.com">
+<rss version="2.0" xmlns:letterboxd="https://letterboxd.com" xmlns:tmdb="https://themoviedb.org">
  <channel>
   <item>
    <title>Parasite, 2019 - 4.5 stars</title>
@@ -571,7 +571,7 @@ RSS_XML = """<?xml version="1.0" encoding="utf-8"?>
    <letterboxd:filmTitle>Parasite</letterboxd:filmTitle>
    <letterboxd:filmYear>2019</letterboxd:filmYear>
    <letterboxd:memberRating>4.5</letterboxd:memberRating>
-   <letterboxd:movieId>496243</letterboxd:movieId>
+   <tmdb:movieId>496243</tmdb:movieId>
   </item>
  </channel>
 </rss>"""

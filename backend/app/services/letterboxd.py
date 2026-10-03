@@ -408,6 +408,49 @@ def _match_fields(cand: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+MIN_TITLE_MATCH_RATIO = 0.88
+
+
+def rank_candidates(
+    results: list[dict[str, Any]], clean_q: str, year: int | None
+) -> list[dict[str, Any]]:
+    """Pure scoring step shared by the sync (scrape) and async (diary import)
+    resolvers: fuzzy title match >= 0.88, release year within +-2, best first."""
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for cand in results[:10]:
+        cand_title = cand.get("title") or cand.get("original_title") or ""
+        if not cand_title:
+            continue
+        cand_year = parse_year(str(cand.get("release_date") or "")[:4])
+        ratio = difflib.SequenceMatcher(
+            None, clean_q.lower(), clean_title_str(cand_title).lower()).ratio()
+        if ratio < MIN_TITLE_MATCH_RATIO:
+            continue
+        if year and cand_year and abs(cand_year - year) > 2:
+            continue
+        ranked.append((ratio, cand))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [cand for _, cand in ranked]
+
+
+def search_year_order(year: int | None) -> list[int]:
+    """Exact year first, then +-1 (Letterboxd and TMDB disagree on festival-year releases)."""
+    if year is None:
+        return []
+    return [year, year - 1, year + 1]
+
+
+def slug_search_query(slug: str | None, clean_q: str) -> str | None:
+    """Last-resort query from the Letterboxd slug (handles non-Latin titles);
+    None when it would just repeat the title search."""
+    if not slug:
+        return None
+    cleaned_slug = slug.strip('/').split('/')[-1]
+    cleaned_slug = re.sub(r'-(?:18|19|20)\d{2}$', '', cleaned_slug)
+    slug_query = cleaned_slug.replace('-', ' ').strip()
+    return slug_query if slug_query and slug_query.lower() != clean_q.lower() else None
+
+
 def resolve_tmdb_multipass(
     client: curl_requests.Session, title: str, year: int | None, directors: list[str],
     api_key: str, slug: str | None = None,
@@ -421,41 +464,20 @@ def resolve_tmdb_multipass(
         return None
 
     def best_candidate(results: list[dict[str, Any]]) -> dict[str, Any] | None:
-        candidates: list[tuple[float, dict[str, Any]]] = []
-        for cand in results[:10]:
-            cand_title = cand.get("title") or cand.get("original_title") or ""
-            if not cand_title:
-                continue
-            cand_year = parse_year(str(cand.get("release_date") or "")[:4])
-            ratio = difflib.SequenceMatcher(
-                None, clean_q.lower(), clean_title_str(cand_title).lower()).ratio()
-            if ratio < 0.88:
-                continue
-            if year and cand_year and abs(cand_year - year) > 2:
-                continue
-            candidates.append((ratio, cand))
+        candidates = rank_candidates(results, clean_q, year)
         if not candidates:
             return None
-        candidates.sort(key=lambda x: x[0], reverse=True)
         if directors and len(candidates) > 1:
-            for _, cand in candidates:
+            for cand in candidates:
                 for cand_director in fetch_tmdb_directors(client, cand["id"], api_key):
                     for target in directors:
                         if difflib.SequenceMatcher(
                             None, target.lower(), cand_director.lower()
                         ).ratio() > 0.8:
                             return cand
-        return candidates[0][1]
+        return candidates[0]
 
-    search_years: list[int] = []
-    if year is not None:
-        search_years.append(year)
-        for offset in (-1, 1):
-            candidate_year = year + offset
-            if candidate_year not in search_years:
-                search_years.append(candidate_year)
-
-    for search_year in search_years:
+    for search_year in search_year_order(year):
         match = best_candidate(tmdb_search(
             client, clean_q, headers, base_params, search_year))
         if match:
@@ -465,18 +487,15 @@ def resolve_tmdb_multipass(
     if match:
         return _match_fields(match)
 
-    if slug:
-        cleaned_slug = slug.strip('/').split('/')[-1]
-        cleaned_slug = re.sub(r'-(?:18|19|20)\d{2}$', '', cleaned_slug)
-        slug_query = cleaned_slug.replace('-', ' ').strip()
-        if slug_query and slug_query.lower() != clean_q.lower():
-            slug_results = (
-                tmdb_search(client, slug_query, headers, base_params, year)
-                or tmdb_search(client, slug_query, headers, base_params)
-            )
-            match = best_candidate(slug_results)
-            if match:
-                return _match_fields(match)
+    slug_query = slug_search_query(slug, clean_q)
+    if slug_query:
+        slug_results = (
+            tmdb_search(client, slug_query, headers, base_params, year)
+            or tmdb_search(client, slug_query, headers, base_params)
+        )
+        match = best_candidate(slug_results)
+        if match:
+            return _match_fields(match)
 
     return None
 
@@ -1060,7 +1079,7 @@ def ingest_rss_diary(username: str) -> dict[str, Any]:
         raw_feed = resp.text
 
     root = SafeET.fromstring(raw_feed)
-    ns = {'letterboxd': 'https://letterboxd.com'}
+    ns = {'letterboxd': 'https://letterboxd.com', 'tmdb': 'https://themoviedb.org'}
     entries: list[dict[str, Any]] = []
 
     for item in root.findall('./channel/item'):
@@ -1086,7 +1105,8 @@ def ingest_rss_diary(username: str) -> dict[str, Any]:
         date_node = item.find('letterboxd:watchedDate', ns)
         rating_node = item.find('letterboxd:memberRating', ns)
         rewatch_node = item.find('letterboxd:rewatch', ns)
-        tmdb_node = item.find('letterboxd:movieId', ns)
+        # The feed carries the TMDB id as <tmdb:movieId> (films) or <tmdb:tvId> (TV).
+        tmdb_node = item.find('tmdb:movieId', ns)
 
         desc_node = item.find('description')
         desc = ""

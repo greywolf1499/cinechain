@@ -26,9 +26,17 @@ from app.models.cache import (
     CachedGenre,
     CachedMovie,
     CachedMovieCast,
+    CachedMovieDirector,
     CachedMovieRating,
 )
-from app.services.tmdb import TMDBCastMember, TMDBClient, TMDBGenre, TMDBMovie, TMDBPersonCredit
+from app.services.tmdb import (
+    TMDBCastMember,
+    TMDBClient,
+    TMDBDirector,
+    TMDBGenre,
+    TMDBMovie,
+    TMDBPersonCredit,
+)
 from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
 
@@ -106,6 +114,38 @@ class CacheRepo:
         self.session.commit()
         self.session.refresh(row)
         return row
+
+    # --- directors ---
+
+    def get_cached_directors(self, movie_id: int) -> list[CachedMovieDirector] | None:
+        """None = never fetched; an empty list = fetched, TMDB lists no director."""
+        movie = self.session.get(CachedMovie, movie_id)
+        if movie is None or movie.directors_fetched_at is None:
+            return None
+        return list(self.session.exec(
+            select(CachedMovieDirector).where(CachedMovieDirector.movie_id == movie_id)
+        ).all())
+
+    def upsert_directors(
+        self, movie_id: int, directors: list[TMDBDirector]
+    ) -> list[CachedMovieDirector]:
+        movie = self.session.get(CachedMovie, movie_id)
+        if movie is None:
+            raise ValueError(f"Movie {movie_id} must be cached before its directors")
+        for existing in self.session.exec(
+            select(CachedMovieDirector).where(CachedMovieDirector.movie_id == movie_id)
+        ).all():
+            self.session.delete(existing)
+        self.session.flush()
+        rows = [
+            CachedMovieDirector(movie_id=movie_id, person_id=d["id"], name=d["name"])
+            for d in directors
+        ]
+        self.session.add_all(rows)
+        movie.directors_fetched_at = utcnow()
+        self.session.add(movie)
+        self.session.commit()
+        return rows
 
     # --- cast (top-N billing for a given movie) ---
 
@@ -349,6 +389,19 @@ async def get_cast_entry(session: Session, movie_id: int, actor_id: int) -> Cast
     has already populated cached_movie_cast for this pair. Never calls TMDB."""
     repo = CacheRepo(session)
     return await anyio.to_thread.run_sync(repo.get_cast_entry, movie_id, actor_id)
+
+
+async def get_movie_directors(
+    session: Session, tmdb: TMDBClient, tmdb_id: int
+) -> list[CachedMovieDirector]:
+    """Read-through director lookup (one TMDB credits call on a miss)."""
+    repo = CacheRepo(session)
+    await get_movie(session, tmdb, tmdb_id)  # director rows FK to a cached movie
+    cached = await anyio.to_thread.run_sync(repo.get_cached_directors, tmdb_id)
+    if cached is not None:
+        return cached
+    directors = await tmdb.get_movie_directors(tmdb_id)
+    return await anyio.to_thread.run_sync(repo.upsert_directors, tmdb_id, directors)
 
 
 async def get_movie_ratings(

@@ -27,6 +27,8 @@ class CachedMovie(SQLModel, table=True):
     status: str | None = None
     # Completeness flags: distinguish "no cast" from "cast not yet fetched".
     cast_fetched_at: datetime | None = None
+    # Same idea for directors: NULL = never fetched, set + no rows = "no directors".
+    directors_fetched_at: datetime | None = None
 
 
 class CachedActor(SQLModel, table=True):
@@ -70,3 +72,13 @@ class CachedMovieRating(SQLModel, table=True):
     rotten_tomatoes: str | None = None
     metacritic: str | None = None
     fetched_at: datetime = Field(default_factory=utcnow)
+
+
+class CachedMovieDirector(SQLModel, table=True):
+    """A movie's director(s), from the TMDB credits crew list (Passport "top directors")."""
+
+    __tablename__ = "cached_movie_directors"
+
+    movie_id: int = Field(foreign_key="cached_movies.tmdb_id", primary_key=True)
+    person_id: int = Field(primary_key=True, index=True)
+    name: str

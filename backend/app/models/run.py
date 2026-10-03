@@ -7,6 +7,10 @@ from app.utils.ids import new_id, utcnow
 
 # Baked into new runs via Run.rules_config's default_factory; also used as a
 # fallback wherever a legacy/null rules_config is read.
+# Reserved game type of the hidden per-user run that holds imported history
+# (Letterboxd diary); it has no engine and never shows up in run lists.
+IMPORT_GAME_TYPE = "import"
+
 DEFAULT_RULES_CONFIG: dict[str, Any] = {
     "preset": "standard",
     "allow_repeats": "strict",  # strict | penalty | allowed

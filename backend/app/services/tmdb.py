@@ -21,13 +21,17 @@ RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 class TMDBError(RuntimeError):
     """Raised when a TMDB request fails after exhausting retries."""
 
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class TMDBRateLimitError(TMDBError):
     """TMDB kept answering 429 after the client's own retries; callers that can
     afford to wait (e.g. the bridge solver) should pause and try again."""
 
     def __init__(self, message: str, retry_after: float | None = None) -> None:
-        super().__init__(message)
+        super().__init__(message, status_code=429)
         self.retry_after = retry_after
 
 
@@ -56,6 +60,11 @@ class TMDBCastMember(TypedDict):
     profile_path: str | None
     character: str | None
     order: int
+
+
+class TMDBDirector(TypedDict):
+    id: int
+    name: str
 
 
 class TMDBPersonCredit(TypedDict, total=False):
@@ -165,13 +174,19 @@ class TMDBClient:
                     retry_after = None
                 raise TMDBRateLimitError(message, retry_after)
             if response.status_code == 404:
-                raise TMDBNotFoundError(message)
-            raise TMDBError(message)
+                raise TMDBNotFoundError(message, status_code=404)
+            raise TMDBError(message, status_code=response.status_code)
         return response.json()
 
-    async def search_movies(self, query: str, page: int = 1) -> dict[str, Any]:
-        """Raw TMDB search results - no popularity/vote/language filters applied."""
-        return await self._get("/search/movie", params={"query": query, "page": page})
+    async def search_movies(
+        self, query: str, page: int = 1, year: int | None = None
+    ) -> dict[str, Any]:
+        """Raw TMDB search results - no popularity/vote/language filters applied.
+        `year` narrows to that primary release year (used by the diary resolver)."""
+        params: dict[str, Any] = {"query": query, "page": page}
+        if year is not None:
+            params["primary_release_year"] = year
+        return await self._get("/search/movie", params=params)
 
     async def get_movie(self, tmdb_id: int) -> TMDBMovie:
         data = await self._get(f"/movie/{tmdb_id}")
@@ -189,6 +204,17 @@ class TMDBClient:
             )
             for member in data.get("cast", [])
         ]
+
+    async def get_movie_directors(self, tmdb_id: int) -> list[TMDBDirector]:
+        """Crew members with job "Director" (the credits payload carries cast and crew)."""
+        data = await self._get(f"/movie/{tmdb_id}/credits")
+        seen: set[int] = set()
+        directors: list[TMDBDirector] = []
+        for member in data.get("crew", []):
+            if member.get("job") == "Director" and member["id"] not in seen:
+                seen.add(member["id"])
+                directors.append(TMDBDirector(id=member["id"], name=member.get("name", "")))
+        return directors
 
     async def get_person_movie_credits(self, person_id: int) -> list[TMDBPersonCredit]:
         data = await self._get(f"/person/{person_id}/movie_credits")

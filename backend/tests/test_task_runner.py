@@ -1,5 +1,6 @@
 """Zero-daemon task runner: BackgroundTasks + SQLite row lifecycle (no broker)."""
 
+import asyncio
 import time
 from datetime import timedelta
 
@@ -173,3 +174,55 @@ async def test_worker_slots_cap_concurrency(engine, monkeypatch):
 def _all_tasks(engine):
     with Session(engine) as session:
         return list(session.exec(select(SystemTask)).all())
+
+
+async def test_async_work_runs_on_the_event_loop_and_reports_progress(engine):
+    async def work(ctx):
+        await ctx.aprogress({"stage": "x", "current": 1, "total": 2})
+        await asyncio.sleep(0)
+        return {"ok": True}
+
+    background = BackgroundTasks()
+    with Session(engine) as session:
+        task, _ = task_runner.submit_task(background, session, "demo", work)
+    assert background.tasks[0].func is task_runner._execute_async
+
+    await background()
+
+    done = _status(engine, task.id)
+    assert done.status == "completed"
+    assert done.progress_data["result"] == {"ok": True}
+    assert done.progress_data["progress"]["current"] == 1
+
+
+async def test_async_failure_is_recorded_not_raised(engine):
+    async def work(ctx):
+        raise RuntimeError("async boom")
+
+    background = BackgroundTasks()
+    with Session(engine) as session:
+        task, _ = task_runner.submit_task(background, session, "demo", work)
+
+    await background()
+
+    failed = _status(engine, task.id)
+    assert (failed.status, failed.error) == ("failed", "async boom")
+
+
+async def test_backoff_honors_a_zero_retry_after_instead_of_defaulting_to_two_seconds():
+    import time
+
+    from app.services.tmdb import TMDBRateLimitError
+    from app.services.tmdb_backoff import fetch_with_backoff
+
+    attempts = {"n": 0}
+
+    async def fetch():
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise TMDBRateLimitError("slow down", retry_after=0.0)
+        return "ok"
+
+    start = time.monotonic()
+    assert await fetch_with_backoff(fetch, time.monotonic() + 30) == "ok"
+    assert time.monotonic() - start < 1.0

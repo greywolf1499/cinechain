@@ -13,13 +13,16 @@ marks such orphans `failed` (`fail_interrupted_tasks`) instead of leaving them
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
+import anyio
 from fastapi import BackgroundTasks
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, col, delete, select
@@ -40,7 +43,7 @@ RETENTION = timedelta(days=7)
 
 _slots = threading.BoundedSemaphore(MAX_CONCURRENT_TASKS)
 
-TaskWork = Callable[["TaskContext"], dict[str, Any] | None]
+TaskWork = Callable[["TaskContext"], dict[str, Any] | None | Awaitable[dict[str, Any] | None]]
 ErrorDescriber = Callable[[Exception], dict[str, Any]]
 
 
@@ -58,6 +61,10 @@ class TaskContext:
         self._last_flush = 0.0
         self._lock = threading.Lock()
 
+    @property
+    def engine(self) -> Engine:
+        return self._engine
+
     def session(self) -> Session:
         return Session(self._engine)
 
@@ -72,6 +79,10 @@ class TaskContext:
     def flush(self, **fields: Any) -> None:
         with self._lock:
             self._write(**fields)
+
+    async def aprogress(self, payload: dict[str, Any]) -> None:
+        """`progress` for async jobs: the (throttled) SQLite write runs off the event loop."""
+        await anyio.to_thread.run_sync(self.progress, payload)
 
     def set(self, key: str, value: Any) -> None:
         with self._lock:
@@ -127,34 +138,75 @@ def submit_task(
     session.commit()
     session.refresh(task)
 
-    # Sync callable on purpose: Starlette runs it in a worker thread, so blocking
-    # scrapers never stall the event loop.
-    background_tasks.add_task(_execute, session.get_bind(), task.id, work, describe_error)
+    # A sync `work` runs in a Starlette worker thread, so blocking scrapers never
+    # stall the event loop. An `async def` work runs on the event loop itself - it
+    # is for jobs that share the app's async clients (e.g. TMDBClient) and must
+    # `await` (and use `ctx.aprogress`) rather than block.
+    runner = _execute_async if inspect.iscoroutinefunction(work) else _execute
+    background_tasks.add_task(runner, session.get_bind(), task.id, work, describe_error)
     return task, True
+
+
+def _load_context(engine: Engine, task_id: str) -> tuple[str, TaskContext] | None:
+    with Session(engine) as session:
+        task = session.get(SystemTask, task_id)
+        if task is None:
+            return None
+        return task.name, TaskContext(engine, task_id, task.progress_data)
+
+
+def _record_failure(
+    ctx: TaskContext, name: str, exc: Exception, describe_error: ErrorDescriber | None
+) -> None:
+    logger.error("Task %s (%s) failed", ctx.task_id, name, exc_info=exc)
+    described = describe_error(exc) if describe_error else {}
+    ctx.set("error", {"code": "task_failed", "message": str(exc), **described})
+    ctx.flush(status=FAILED, error=str(exc))
+
+
+def _record_success(ctx: TaskContext, result: dict[str, Any] | None) -> None:
+    if result is not None:
+        ctx.set("result", result)
+    ctx.flush(status=COMPLETED)
 
 
 def _execute(
     engine: Engine, task_id: str, work: TaskWork, describe_error: ErrorDescriber | None
 ) -> None:
-    with Session(engine) as session:
-        task = session.get(SystemTask, task_id)
-        if task is None:
-            return
-        name, initial = task.name, task.progress_data
-    ctx = TaskContext(engine, task_id, initial)
+    loaded = _load_context(engine, task_id)
+    if loaded is None:
+        return
+    name, ctx = loaded
     with _slots:  # waits (status stays "pending") until a worker slot frees up
         ctx.flush(status=RUNNING)
         try:
             result = work(ctx)
-        except Exception as exc:
-            logger.exception("Task %s (%s) failed", task_id, name)
-            described = describe_error(exc) if describe_error else {}
-            ctx.set("error", {"code": "task_failed", "message": str(exc), **described})
-            ctx.flush(status=FAILED, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - recorded on the task row, never raised into the worker
+            _record_failure(ctx, name, exc, describe_error)
         else:
-            if result is not None:
-                ctx.set("result", result)
-            ctx.flush(status=COMPLETED)
+            _record_success(ctx, result)  # type: ignore[arg-type]
+
+
+async def _execute_async(
+    engine: Engine, task_id: str, work: TaskWork, describe_error: ErrorDescriber | None
+) -> None:
+    loaded = await anyio.to_thread.run_sync(_load_context, engine, task_id)
+    if loaded is None:
+        return
+    name, ctx = loaded
+    # Poll for a slot instead of blocking a thread on the semaphore while queued.
+    while not _slots.acquire(blocking=False):
+        await asyncio.sleep(0.5)
+    try:
+        await anyio.to_thread.run_sync(lambda: ctx.flush(status=RUNNING))
+        try:
+            result = await work(ctx)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001 - recorded on the task row
+            await anyio.to_thread.run_sync(_record_failure, ctx, name, exc, describe_error)
+        else:
+            await anyio.to_thread.run_sync(_record_success, ctx, result)
+    finally:
+        _slots.release()
 
 
 def fail_interrupted_tasks(engine: Engine) -> int:

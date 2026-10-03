@@ -1,4 +1,4 @@
 # CineChain Project State
-**Current Phase:** Phase 18b: Frontend Restructuring (Settings & Tools Hub)
-**Current Task:** Building the Tools Hub, redesigning the Settings layout, and building the Tasks UI.
-**Next Steps:** Phase 18b complete and committed. Await human confirmation to begin Phase 18c.
+**Current Phase:** Phase 19a: History Ingestion & Passport Aggregation
+**Current Task:** Building the Letterboxd Diary CSV/RSS import tasks and the Global Passport aggregation endpoint.
+**Next Steps:** Phase 19a complete and committed. Await human confirmation to begin Phase 19b (Passport UI).

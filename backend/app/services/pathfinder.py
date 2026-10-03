@@ -32,13 +32,13 @@ from app.services import cache_repo
 from app.services.cache_repo import CacheRepo
 from app.services.graph import FrontierSide, NodeKey, actor_node, movie_node
 from app.services.movie_filters import is_reality_eligible
-from app.services.tmdb import TMDBClient, TMDBNotFoundError, TMDBRateLimitError
+from app.services.tmdb import TMDBClient
+from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
 from app.utils.dates import parse_release_year
 
 logger = logging.getLogger(__name__)
 
 _SEARCH_SEMAPHORE = asyncio.Semaphore(1)
-_MAX_RATE_LIMIT_PAUSE_SECONDS = 30.0
 _EVENT_FLUSH_SECONDS = 0.25
 
 
@@ -53,36 +53,23 @@ class _SearchStats:
         self.pending_events: list[dict] = []
 
 
-class _DeadlineReached(Exception):
-    """Internal: the solver's time limit expired while waiting on TMDB."""
+_DeadlineReached = DeadlineReached
 
 
 async def _fetch_with_backoff[T](
     fetch: Callable[[], Awaitable[T]], stats: _SearchStats, deadline: float
 ) -> T | None:
-    """Runs one uncached TMDB fetch. On a 429 the solver pauses (escalating,
-    honoring Retry-After) and retries instead of failing the search; it only
-    gives up when the admin-defined deadline passes. A 404 (node deleted from
-    TMDB) skips that node, returning None."""
-    pause = 2.0
-    while True:
-        if time.monotonic() >= deadline:
-            raise _DeadlineReached
-        try:
-            return await fetch()
-        except TMDBRateLimitError as exc:
-            stats.rate_limit_pauses += 1
-            wait = min(exc.retry_after or pause, _MAX_RATE_LIMIT_PAUSE_SECONDS)
-            logger.warning("TMDB rate limit hit; pausing bridge search %.1fs", wait)
-            stats.pending_events.append({
-                "type": "rate_limited",
-                "wait_seconds": round(wait, 1),
-                "rate_limit_pauses": stats.rate_limit_pauses,
-            })
-            await asyncio.sleep(max(0.0, min(wait, deadline - time.monotonic())))
-            pause = min(pause * 2, _MAX_RATE_LIMIT_PAUSE_SECONDS)
-        except TMDBNotFoundError:
-            return None
+    """Shared 429 backoff (see `tmdb_backoff`), plus the solver's progress bookkeeping."""
+
+    def on_pause(wait: float) -> None:
+        stats.rate_limit_pauses += 1
+        stats.pending_events.append({
+            "type": "rate_limited",
+            "wait_seconds": round(wait, 1),
+            "rate_limit_pauses": stats.rate_limit_pauses,
+        })
+
+    return await fetch_with_backoff(fetch, deadline, on_pause)
 
 
 async def solve_bridge_bipartite(

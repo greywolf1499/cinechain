@@ -27,6 +27,7 @@ def client(config_dir):
 
     app.dependency_overrides[get_session] = override_get_session
     with TestClient(app) as test_client:
+        test_client.db_engine = engine
         yield test_client
     app.dependency_overrides.clear()
 
@@ -421,3 +422,191 @@ def test_watchlist_sync_404_emits_structured_error(client, monkeypatch):
     assert body["username"] == "ghost_user"
     assert "private" in body["message"]
     assert "event: result" not in resp.text
+
+
+def test_image_proxy_requires_login_and_blocks_foreign_hosts(client):
+    assert client.get("/api/images/proxy", params={"url": "https://a.ltrbxd.com/x.jpg"}).status_code == 401
+    _register_and_login(client)
+    blocked = client.get("/api/images/proxy", params={"url": "https://169.254.169.254/latest/meta-data"})
+    assert blocked.status_code == 400
+
+
+def test_image_proxy_fetches_once_and_returns_file(client, config_dir):
+    import httpx
+    import respx
+
+    _register_and_login(client)
+    url = "https://a.ltrbxd.com/resized/poster.jpg"
+    with respx.mock:
+        route = respx.get(url).mock(return_value=httpx.Response(
+            200, content=b"\xff\xd8\xff\xe0jpegbytes", headers={"content-type": "image/jpeg"}))
+        first = client.get("/api/images/proxy", params={"url": url})
+        second = client.get("/api/images/proxy", params={"url": url})
+
+    assert first.status_code == second.status_code == 200
+    assert first.headers["content-type"] == "image/jpeg"
+    assert first.content == b"\xff\xd8\xff\xe0jpegbytes"
+    assert route.call_count == 1
+    assert list((config_dir / "cache_images").glob("*.img"))
+
+
+def _seed_curator(client, username="criterion"):
+    from app.models.curated import CuratedSourceAccount
+
+    with Session(client.db_engine) as session:
+        session.add(CuratedSourceAccount(
+            username=username, display_name=username.title(), is_hq=True))
+        session.commit()
+
+
+def test_custom_url_from_known_curator_is_linked_and_gets_slug(client, monkeypatch):
+    monkeypatch.setattr(
+        letterboxd, "discover_user_lists",
+        lambda username, max_pages=None, no_cache=False, progress_callback=None: {
+            "lists": [], "partial": False, "error": None})
+    _register_and_login(client)
+    _seed_curator(client, "criterion")
+
+    resp = client.post("/api/curated/custom", json={
+        "url": "https://letterboxd.com/criterion/list/the-collection/", "title": "The Collection"})
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["account_username"] == "criterion"
+    assert body["slug"] == "the-collection"
+    profile = client.get("/api/curated/accounts/criterion/lists").json()
+    assert [row["title"] for row in profile["lists"]] == ["The Collection"]
+
+    other = client.post("/api/curated/custom", json={
+        "url": "https://letterboxd.com/nobody_known/list/the-collection/"}).json()
+    assert other["account_username"] is None
+    assert other["slug"] == "the-collection-2"
+
+
+def test_patch_customizes_preset_and_custom_lists(client):
+    _register_and_login(client)
+    preset = next(r for r in client.get("/api/curated/lists").json() if r["preset_key"] == "sight-and-sound-2022")
+
+    resp = client.patch(f"/api/curated/lists/{preset['id']}", json={
+        "badge_emoji": "🏆", "slug": "ss-greatest", "badge_color": "#112233",
+        "image_url": "/api/images/proxy?url=https%3A%2F%2Fa.ltrbxd.com%2Fp%2F1.jpg"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert (body["badge_emoji"], body["slug"], body["badge_color"]) == ("🏆", "ss-greatest", "#112233")
+    assert body["image_url"] == "https://a.ltrbxd.com/p/1.jpg"  # proxy wrapper unwrapped
+
+    # Addressable by slug, and slugs are unique.
+    again = client.patch("/api/curated/lists/ss-greatest", json={"badge_emoji": ""})
+    assert again.status_code == 200 and again.json()["badge_emoji"] is None
+    custom = client.post("/api/curated/custom", json={"url": "https://letterboxd.com/x/list/y/"}).json()
+    clash = client.patch(f"/api/curated/lists/{custom['id']}", json={"slug": "ss-greatest"})
+    assert clash.status_code == 409
+    assert client.patch(f"/api/curated/lists/{custom['id']}", json={"slug": "Bad Slug!"}).status_code == 422
+    assert client.patch(f"/api/curated/lists/{custom['id']}",
+                        json={"image_url": "https://evil.example.com/x.jpg"}).status_code == 422
+
+
+def test_list_image_upload_serve_and_clear(client, config_dir):
+    _register_and_login(client)
+    custom = client.post("/api/curated/custom", json={"url": "https://letterboxd.com/x/list/y/"}).json()
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+
+    assert client.put(f"/api/curated/lists/{custom['id']}/image", content=b"not an image").status_code == 415
+    too_big = png + b"0" * (2 * 1024 * 1024)
+    assert client.put(f"/api/curated/lists/{custom['id']}/image", content=too_big).status_code == 413
+
+    resp = client.put(f"/api/curated/lists/{custom['id']}/image", content=png)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_custom_image"] is True
+    assert body["image_url"].startswith(f"/api/curated/lists/{custom['id']}/image?v=")
+    served = client.get(f"/api/curated/lists/{custom['id']}/image")
+    assert served.status_code == 200 and served.content == png
+    assert served.headers["content-type"] == "image/png"
+
+    cleared = client.patch(f"/api/curated/lists/{custom['id']}", json={"clear_image": True}).json()
+    assert cleared["has_custom_image"] is False and cleared["image_url"] is None
+    assert not list((config_dir / "list_images").glob("*"))
+    assert client.get(f"/api/curated/lists/{custom['id']}/image").status_code == 404
+
+
+def test_browse_lists_search_sort_filter_and_paginate(client):
+    _register_and_login(client)
+    for slug, title in (("a", "Alpha Noir"), ("b", "Beta Noir"), ("c", "Gamma Westerns")):
+        created = client.post("/api/curated/custom", json={
+            "url": f"https://letterboxd.com/u/list/{slug}/", "title": title}).json()
+        client.patch(f"/api/curated/lists/{created['id']}", json={"is_enabled": slug != "c"})
+
+    everything = client.get("/api/curated/lists/browse", params={"page_size": 100}).json()
+    assert everything["total"] == 7  # 4 presets + 3 custom
+    assert everything["pages"] == 1
+
+    noir = client.get("/api/curated/lists/browse", params={"q": "noir", "sort": "name"}).json()
+    assert [r["title"] for r in noir["items"]] == ["Alpha Noir", "Beta Noir"]
+    assert client.get("/api/curated/lists/browse", params={"q": "100%"}).json()["total"] == 0
+
+    disabled = client.get("/api/curated/lists/browse", params={"state": "disabled"}).json()
+    assert [r["title"] for r in disabled["items"]] == ["Gamma Westerns"]
+    enabled = client.get("/api/curated/lists/browse", params={"state": "enabled", "page_size": 100}).json()
+    assert enabled["total"] == 6
+
+    page_two = client.get("/api/curated/lists/browse",
+                          params={"sort": "name", "page_size": 3, "page": 2}).json()
+    assert page_two["pages"] == 3 and len(page_two["items"]) == 3
+    assert client.get("/api/curated/lists/browse", params={"sort": "bogus"}).status_code == 422
+
+
+def test_browse_lists_popularity_counts_watched_films(client):
+    from app.models.curated import CanonMovieBadge
+    from app.models.run import Run, RunStep
+
+    _register_and_login(client)
+    first = client.post("/api/curated/custom", json={"url": "https://letterboxd.com/u/list/one/", "title": "One"}).json()
+    second = client.post("/api/curated/custom", json={"url": "https://letterboxd.com/u/list/two/", "title": "Two"}).json()
+    with Session(client.db_engine) as session:
+        run = Run(name="Watch")
+        session.add(run)
+        session.commit()
+        for movie_id, status_ in ((1, "watched"), (2, "watched"), (4, "planned")):
+            session.add(RunStep(run_id=run.id, movie_id=movie_id, movie_title=f"M{movie_id}", status=status_))
+        for list_id, movies in ((first["id"], (1, 2, 3)), (second["id"], (3, 4))):
+            for movie_id in movies:
+                session.add(CanonMovieBadge(curated_list_id=list_id, movie_id=movie_id, badge_label="X"))
+        session.commit()
+
+    items = client.get("/api/curated/lists/browse", params={"sort": "popularity", "page_size": 2}).json()["items"]
+    assert (items[0]["title"], items[0]["watched_count"]) == ("One", 2)
+    assert items[1]["watched_count"] == 0
+
+
+def test_browse_accounts_paginates_and_filters(client):
+    _register_and_login(client)
+    for name in ("amc", "mubi_extra"):
+        _seed_curator(client, name)
+
+    page = client.get("/api/curated/accounts/browse", params={"q": "mu"}).json()
+    assert [a["username"] for a in page["items"]] == ["mubi", "mubi_extra"]
+    small = client.get("/api/curated/accounts/browse", params={"page_size": 2, "kind": "hq"}).json()
+    assert len(small["items"]) == 2 and small["pages"] >= 2
+
+
+def test_account_enabled_counts_are_real_numbers_not_booleans(client):
+    from app.models.curated import CuratedList, CuratedSourceAccount
+
+    _register_and_login(client)
+    _seed_curator(client, "countme")
+    with Session(client.db_engine) as session:
+        account = session.exec(
+            __import__("sqlmodel").select(CuratedSourceAccount).where(CuratedSourceAccount.username == "countme")
+        ).one()
+        for index in range(3):
+            session.add(CuratedList(title=f"L{index}", url=f"https://letterboxd.com/countme/list/l{index}/",
+                                    badge_prefix="L", is_enabled=index != 2, source_account_id=account.id,
+                                    slug=f"countme-{index}"))
+        session.commit()
+
+    browsed = client.get("/api/curated/accounts/browse", params={"q": "countme"}).json()["items"][0]
+    listed = next(a for a in client.get("/api/curated/accounts").json() if a["username"] == "countme")
+    assert (browsed["discovered_lists"], browsed["enabled_lists"]) == (3, 2)
+    assert (listed["discovered_lists"], listed["enabled_lists"]) == (3, 2)

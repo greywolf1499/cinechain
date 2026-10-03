@@ -361,7 +361,27 @@ export interface CuratedListSummary {
 	source_account_id: string | null;
 	last_synced_at: string | null;
 	last_sync_error: string | null;
+	slug: string | null;
+	badge_emoji: string | null;
+	image_url: string | null;
+	has_custom_image: boolean;
+	account_username: string | null;
+	account_display_name: string | null;
+	watched_count: number;
 }
+
+export interface Page<T> {
+	items: T[];
+	total: number;
+	page: number;
+	page_size: number;
+	pages: number;
+}
+
+export type ListSort = "name" | "film_count" | "popularity" | "synced";
+export type ListState = "all" | "enabled" | "disabled";
+export type AccountSort = "name" | "lists" | "enabled";
+export type AccountKind = "all" | "hq" | "other";
 
 export interface CuratedAccount {
 	username: string;
@@ -388,4 +408,5 @@ export interface CuratedAccountLists {
 export interface CanonBadge {
 	badge_label: string;
 	badge_color: string;
+	badge_emoji?: string | null;
 }

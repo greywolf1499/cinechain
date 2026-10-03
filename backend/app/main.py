@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes_auth import router as auth_router
 from app.api.routes_curated import router as curated_router
 from app.api.routes_engine import router as engine_router
+from app.api.routes_images import router as images_router
 from app.api.routes_integrations import router as integrations_router
 from app.api.routes_movies import router as movies_router
 from app.api.routes_runs import router as runs_router
@@ -50,6 +51,7 @@ app.include_router(integrations_router, prefix=api_router_prefix)
 app.include_router(movies_router, prefix=api_router_prefix)
 app.include_router(settings_router, prefix=api_router_prefix)
 app.include_router(curated_router, prefix=api_router_prefix)
+app.include_router(images_router, prefix=api_router_prefix)
 
 # Serve built frontend assets (JS/CSS/images) under /assets.
 assets_dir = STATIC_DIR / "assets"

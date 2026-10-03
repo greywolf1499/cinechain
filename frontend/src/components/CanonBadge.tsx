@@ -16,7 +16,7 @@ export default function CanonBadge({ badge }: { badge: CanonBadgeType }) {
       style={{ backgroundColor: `${badge.badge_color}26`, color: badge.badge_color }}
       title={badge.badge_label}
     >
-      {iconFor(badge.badge_label)} {badge.badge_label}
+      {badge.badge_emoji || iconFor(badge.badge_label)} {badge.badge_label}
     </span>
   );
 }

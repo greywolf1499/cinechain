@@ -1,12 +1,15 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Download, Loader2, XCircle } from "lucide-react";
 import Toast, { type ToastState } from "./Toast";
-import CuratorBrowser from "./CuratorBrowser";
 import SyncBadge from "./SyncBadge";
 import { useCuratedLists } from "../lib/queries";
 import { postSse } from "../lib/sse";
 import type { CuratedListSummary } from "../types/api";
+
+const linkButtonClass =
+  "rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover";
 
 const inputClass =
   "rounded-md border border-app-border bg-app-bg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent focus:outline-none";
@@ -161,7 +164,19 @@ export default function CuratedCanonsCard() {
           </div>
         )}
 
-        <CuratorBrowser onToast={setToast} />
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-app-border pt-3">
+          <p className="text-xs text-zinc-500">
+            Browse, search and enable lists from every curator on their own pages.
+          </p>
+          <div className="flex gap-2">
+            <Link to="/lists" className={linkButtonClass}>
+              Browse Lists
+            </Link>
+            <Link to="/curators" className={linkButtonClass}>
+              Manage Curators
+            </Link>
+          </div>
+        </div>
 
         <div className="border-t border-app-border pt-3">
           <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">

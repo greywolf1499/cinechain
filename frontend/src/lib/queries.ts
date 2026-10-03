@@ -4,8 +4,14 @@ import type {
 	AcquisitionStatus,
 	CacheStats,
 	CanonBadge,
+	AccountKind,
+	AccountSort,
 	CuratedAccount,
+	CuratedAccountLists,
 	CuratedListSummary,
+	ListSort,
+	ListState,
+	Page,
 	DiscoveryCandidate,
 	MovieDetail,
 	Run,
@@ -74,6 +80,62 @@ export function useCuratedLists() {
 	return useQuery({
 		queryKey: queryKeys.curatedLists,
 		queryFn: () => api.get<CuratedListSummary[]>("/curated/lists"),
+	});
+}
+
+export interface ListBrowseParams {
+	q: string;
+	sort: ListSort;
+	state: ListState;
+	account?: string;
+	page: number;
+	pageSize?: number;
+}
+
+export function useBrowseLists(params: ListBrowseParams) {
+	const query = new URLSearchParams({
+		q: params.q,
+		sort: params.sort,
+		state: params.state,
+		page: String(params.page),
+		page_size: String(params.pageSize ?? 20),
+	});
+	if (params.account) query.set("account", params.account);
+	return useQuery({
+		queryKey: ["curated", "lists", "browse", query.toString()],
+		queryFn: () => api.get<Page<CuratedListSummary>>(`/curated/lists/browse?${query}`),
+		placeholderData: (previous) => previous,
+	});
+}
+
+export interface AccountBrowseParams {
+	q: string;
+	sort: AccountSort;
+	kind: AccountKind;
+	page: number;
+	pageSize?: number;
+}
+
+export function useBrowseAccounts(params: AccountBrowseParams) {
+	const query = new URLSearchParams({
+		q: params.q,
+		sort: params.sort,
+		kind: params.kind,
+		page: String(params.page),
+		page_size: String(params.pageSize ?? 24),
+	});
+	return useQuery({
+		queryKey: ["curated", "accounts", "browse", query.toString()],
+		queryFn: () => api.get<Page<CuratedAccount>>(`/curated/accounts/browse?${query}`),
+		placeholderData: (previous) => previous,
+	});
+}
+
+export function useCuratorProfile(username: string) {
+	return useQuery({
+		queryKey: ["curated", "accounts", "profile", username],
+		queryFn: () => api.get<CuratedAccountLists>(`/curated/accounts/${username}/lists`),
+		retry: false,
 	});
 }
 

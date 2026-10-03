@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Film, GitBranch, BookUser, Settings, LogOut, Menu, X } from "lucide-react";
+import { Film, GitBranch, BookUser, ListChecks, Users, Settings, LogOut, Menu, X } from "lucide-react";
 import { useAuthStore } from "../store/authStore";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -9,6 +9,8 @@ const NAV_ITEMS = [
   { to: "/runs", label: "Runs", icon: Film },
   { to: "/bridge", label: "Bridge Solver", icon: GitBranch },
   { to: "/passport", label: "Passport", icon: BookUser },
+  { to: "/lists", label: "Lists", icon: ListChecks },
+  { to: "/curators", label: "Curators", icon: Users },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

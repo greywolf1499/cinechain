@@ -49,6 +49,12 @@ class CuratedList(SQLModel, table=True):
     film_count: int = 0
     description: str | None = None
     preview_posters: str = "[]"  # JSON-encoded list of poster URLs
+    # Unified customization (all lists, preset or custom).
+    slug: str | None = Field(default=None, unique=True, index=True)
+    badge_emoji: str | None = None  # overrides the heuristic badge icon
+    image_url: str | None = None  # chosen remote logo (served through the image proxy)
+    image_filename: str | None = None  # uploaded logo under config_dir/list_images
+    image_updated_at: datetime | None = None
     last_synced_at: datetime | None = None
     last_sync_error: str | None = None
     created_at: datetime = Field(default_factory=utcnow)

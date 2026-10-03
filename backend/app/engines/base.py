@@ -8,7 +8,13 @@ from typing import ClassVar
 
 from sqlmodel import Session
 
-from app.models.run import RunStep
+from app.engines.conditions import RunOutcome, evaluate_conditions, validate_conditions
+from app.models.run import (
+    LEGACY_ENGINE_VERSION,
+    RUN_STATUS_ACTIVE,
+    Run,
+    RunStep,
+)
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import RunStats, Suggestion, SuggestionFilters, ValidationResult
 from app.services.tmdb import TMDBClient
@@ -21,10 +27,31 @@ class BaseChallengeEngine(ABC):
     display_name: str
     description: str
     capabilities: ClassVar[list[str]]
+    # Graph-style engines honour opt-in win/fail conditions in `rules_config`;
+    # rigid trackers leave this False and ignore them.
+    supports_json_rules: ClassVar[bool] = False
 
     def __init__(self, session: Session, tmdb: TMDBClient) -> None:
         self.session = session
         self.tmdb = tmdb
+
+    def validate_rules_config(self, rules: dict | None) -> list[str]:
+        """Problems with a V2 `rules_config` payload (empty list = valid)."""
+        return validate_conditions(rules) if self.supports_json_rules else []
+
+    def evaluate_run_outcome(self, run: Run, steps: list[RunStep]) -> RunOutcome | None:
+        """Win/loss check, run after a step is logged. None = keep playing.
+
+        Legacy (engine_version 1) runs never evaluate: the strict V2 rules must
+        not retroactively end a run that was started under the old ones.
+        """
+        if (
+            not self.supports_json_rules
+            or run.engine_version <= LEGACY_ENGINE_VERSION
+            or run.status != RUN_STATUS_ACTIVE
+        ):
+            return None
+        return evaluate_conditions(run.rules_config, steps)
 
     @abstractmethod
     async def validate_next_step(self, from_movie_id: int, to_movie_id: int) -> ValidationResult:

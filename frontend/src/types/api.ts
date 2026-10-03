@@ -19,10 +19,16 @@ export interface UserSummary {
 
 // --- runs (schemas/runs.py) ---
 
-export type RunStatus = "active" | "completed" | "abandoned";
+export type RunStatus = "active" | "completed" | "forfeited" | "failed";
 export type StepStatus = "watched" | "planned";
 export type RepeatPolicy = "strict" | "penalty" | "allowed";
 export type RulesPreset = "standard" | "purist" | "casual" | "custom";
+
+/** Opt-in Engine V2 conditions; a win/fail fires once the metric reaches / exceeds `count`. */
+export interface RunCondition {
+	type: string;
+	count: number;
+}
 
 export interface RulesConfig {
 	preset: RulesPreset;
@@ -31,7 +37,12 @@ export interface RulesConfig {
 	max_cast_order: number;
 	min_runtime: number;
 	wildcards_budget: number; // -1 = unlimited
+	win_condition?: RunCondition | RunCondition[];
+	fail_condition?: RunCondition | RunCondition[];
 }
+
+/** A hand-written "Super-Unlock" payload: any JSON object, sent to the backend as-is. */
+export type RawRulesConfig = Record<string, unknown>;
 
 export interface RunParticipant {
 	user_id: string;
@@ -60,6 +71,8 @@ export interface Run {
 	name: string;
 	game_type: string;
 	status: RunStatus;
+	engine_version: number; // 1 = legacy run, 2 = Challenge Engine V2
+	status_reason: string | null;
 	rules_config: RulesConfig;
 	created_at: string;
 	completed_at: string | null;

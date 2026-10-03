@@ -34,7 +34,9 @@ class CineChainEngine(BaseChallengeEngine):
         "compute_stats",
         "solve_bridge",
         "discover_candidates",
+        "json_rules",
     ]
+    supports_json_rules = True
 
     async def validate_next_step(
         self, from_movie_id: int, to_movie_id: int, cast_limit: int | None = None

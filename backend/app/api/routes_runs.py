@@ -3,9 +3,20 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
 from app.db import get_session
-from app.engines.registry import get_engine
+from app.engines.registry import ENGINE_REGISTRY, get_engine
 from app.models.cache import CachedMovie
-from app.models.run import DEFAULT_RULES_CONFIG, IMPORT_GAME_TYPE, Run, RunParticipant, RunStep
+from app.models.run import (
+    DEFAULT_RULES_CONFIG,
+    IMPORT_GAME_TYPE,
+    LEGACY_ENGINE_VERSION,
+    RUN_STATUS_ACTIVE,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FORFEITED,
+    TERMINAL_RUN_STATUSES,
+    Run,
+    RunParticipant,
+    RunStep,
+)
 from app.models.user import User
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import RunStats, Suggestion, SuggestionFilters
@@ -29,7 +40,10 @@ from app.utils.ids import utcnow
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
-VALID_STATUSES = {"active", "completed", "abandoned"}
+MANUAL_STATUS_REASONS = {
+    RUN_STATUS_COMPLETED: "Marked as completed",
+    RUN_STATUS_FORFEITED: "Forfeited by a participant",
+}
 
 
 def _step_fields_from_movie(movie: CachedMovie) -> dict:
@@ -56,6 +70,35 @@ def _run_rules(run: Run) -> dict:
 def _count_wildcards_consumed(session: Session, run_id: str) -> int:
     steps = session.exec(select(RunStep).where(RunStep.run_id == run_id)).all()
     return sum(1 for step in steps if (step.transition_metadata or {}).get("wildcard_used"))
+
+
+def _ensure_run_open(run: Run) -> None:
+    """V2 runs are locked once finished. Legacy runs (engine_version 1) were
+    never locked, so they keep accepting steps regardless of status."""
+    if run.engine_version > LEGACY_ENGINE_VERSION and run.status in TERMINAL_RUN_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "valid": False,
+                "reason": f"This run is {run.status} and can no longer be played",
+                "connections": [],
+            },
+        )
+
+
+def _apply_run_outcome(session: Session, tmdb: TMDBClient, run: Run) -> None:
+    """Evaluates the run's win/fail conditions and, if one fired, moves the run
+    to its terminal status. Caller commits."""
+    engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if engine_class is None:
+        return
+    steps = session.exec(select(RunStep).where(RunStep.run_id == run.id)).all()
+    outcome = engine_class(session, tmdb).evaluate_run_outcome(run, list(steps))
+    if outcome is not None:
+        run.status = outcome.status
+        run.status_reason = outcome.reason
+        run.completed_at = utcnow()
+        session.add(run)
 
 
 async def _enforce_run_rules(
@@ -208,6 +251,14 @@ async def create_run(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found"
             )
 
+    engine_class = ENGINE_REGISTRY.get(payload.game_type)
+    if engine_class is not None and payload.rules_config is not None:
+        problems = engine_class(session, tmdb).validate_rules_config(
+            payload.rules_config)
+        if problems:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems))
+
     run = Run(
         name=payload.name,
         game_type=payload.game_type,
@@ -253,12 +304,13 @@ def update_run(
     if payload.name is not None:
         run.name = payload.name
     if payload.status is not None:
-        if payload.status not in VALID_STATUSES:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status"
-            )
         run.status = payload.status
-        run.completed_at = utcnow() if payload.status == "completed" else None
+        if payload.status == RUN_STATUS_ACTIVE:
+            run.completed_at = None
+            run.status_reason = None
+        else:
+            run.completed_at = utcnow()
+            run.status_reason = MANUAL_STATUS_REASONS.get(payload.status)
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -281,7 +333,9 @@ def update_run_rules(
                     f"{consumed} wildcard(s) have already been used this run."
                 ),
             )
-    run.rules_config = payload.model_dump()
+    # Merge instead of replace so V2 keys the form doesn't know about
+    # (win_condition, fail_condition, raw JSON overrides) survive an edit.
+    run.rules_config = {**(run.rules_config or {}), **payload.model_dump()}
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -353,6 +407,7 @@ async def create_step(
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
 ):
+    _ensure_run_open(run)
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id)
     extra_metadata = await _enforce_run_rules(session, tmdb, run, movie, payload)
 
@@ -374,6 +429,8 @@ async def create_step(
         **_step_fields_from_movie(movie),
     )
     session.add(step)
+    session.flush()
+    _apply_run_outcome(session, tmdb, run)
     session.commit()
     session.refresh(step)
     return step
@@ -385,7 +442,9 @@ def mark_step_watched(
     payload: MarkWatchedRequest,
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ):
+    _ensure_run_open(run)
     step = session.get(RunStep, step_id)
     if step is None or step.run_id != run.id:
         raise HTTPException(
@@ -399,6 +458,8 @@ def mark_step_watched(
     if payload.user_notes is not None:
         step.user_notes = payload.user_notes
     session.add(step)
+    session.flush()
+    _apply_run_outcome(session, tmdb, run)
     session.commit()
     session.refresh(step)
     return step
@@ -410,11 +471,14 @@ def update_step(
     payload: RunStepUpdate,
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ):
     step = session.get(RunStep, step_id)
     if step is None or step.run_id != run.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
+    if payload.watched_at is not None and step.status == "planned":
+        _ensure_run_open(run)
     if payload.user_notes is not None:
         step.user_notes = payload.user_notes
     if payload.transition_metadata is not None:
@@ -427,6 +491,8 @@ def update_step(
         if step.status == "planned":
             step.status = "watched"
     session.add(step)
+    session.flush()
+    _apply_run_outcome(session, tmdb, run)
     session.commit()
     session.refresh(step)
     return step

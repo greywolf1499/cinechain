@@ -1,6 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Clapperboard, GitBranch, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Clapperboard,
+  Flag,
+  GitBranch,
+  Loader2,
+  Lock,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Skull,
+  Trash2,
+  Trophy,
+} from "lucide-react";
 import ChainTimeline from "../components/ChainTimeline";
 import EditRulesModal from "../components/EditRulesModal";
 import ForkInTheRoadModal from "../components/ForkInTheRoadModal";
@@ -11,11 +24,19 @@ import PickNextHub from "../components/PickNextHub";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
 import { isoToFlagEmoji } from "../lib/countries";
+import { cn } from "../lib/cn";
 import { allowsMovieRepeats } from "../lib/rules";
 import { useActiveRunStore } from "../store/activeRunStore";
-import { useDeleteRun, useDeleteStep, useRun, useRunStats, useUsers } from "../lib/queries";
+import {
+  useDeleteRun,
+  useDeleteStep,
+  useRun,
+  useRunStats,
+  useUpdateRun,
+  useUsers,
+} from "../lib/queries";
 import type { ActorClickPayload } from "../components/actorClickTypes";
-import type { RulesConfig, RunStats, RunStep } from "../types/api";
+import type { RulesConfig, RunStats, RunStatus, RunStep } from "../types/api";
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -25,16 +46,22 @@ export default function RunDetailPage() {
   const { data: stats } = useRunStats(id);
   const deleteStep = useDeleteStep(id ?? "");
   const deleteRun = useDeleteRun();
+  const updateRun = useUpdateRun(id ?? "");
   const setActiveRun = useActiveRunStore((s) => s.setActiveRun);
+  const activeRunId = useActiveRunStore((s) => s.activeRunId);
 
-  // Viewing an in-progress run makes it the "active run" that tools adapt to.
+  // Viewing an in-progress run makes it the "active run" that tools adapt to;
+  // a finished run must stop being one so tools can't add films to it.
   useEffect(() => {
-    if (run?.status === "active") setActiveRun(run.id);
-  }, [run?.id, run?.status, setActiveRun]);
+    if (!run) return;
+    if (run.status === "active") setActiveRun(run.id);
+    else if (activeRunId === run.id) setActiveRun(null);
+  }, [run?.id, run?.status, activeRunId, setActiveRun]);
 
   const [activeActor, setActiveActor] = useState<ActorClickPayload | null>(null);
   const [confirmDeleteStepId, setConfirmDeleteStepId] = useState<string | null>(null);
   const [confirmDeleteRun, setConfirmDeleteRun] = useState(false);
+  const [confirmForfeit, setConfirmForfeit] = useState(false);
 
   if (isLoading) {
     return (
@@ -54,6 +81,7 @@ export default function RunDetailPage() {
     );
   }
 
+  const locked = run.status !== "active";
   const lastStep = run.steps[run.steps.length - 1];
   const participantNames = run.participants
     .map((p) => users?.find((u) => u.id === p.user_id)?.display_name ?? p.user_id)
@@ -68,6 +96,11 @@ export default function RunDetailPage() {
     if (!confirmDeleteStepId) return;
     await deleteStep.mutateAsync(confirmDeleteStepId);
     setConfirmDeleteStepId(null);
+  }
+
+  async function handleSetStatus(status: RunStatus) {
+    await updateRun.mutateAsync({ status });
+    setConfirmForfeit(false);
   }
 
   async function handleDeleteRun() {
@@ -86,15 +119,21 @@ export default function RunDetailPage() {
           </div>
           <p className="mt-1 text-sm text-zinc-500">{participantNames || "No participants"}</p>
         </div>
-        <button
-          type="button"
-          onClick={() => setConfirmDeleteRun(true)}
-          className="flex items-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:border-red-900 hover:text-red-400"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          Delete Run
-        </button>
+        <RunActionsMenu
+          canForfeit={!locked}
+          onForfeit={() => setConfirmForfeit(true)}
+          onDelete={() => setConfirmDeleteRun(true)}
+        />
       </div>
+
+      {locked && (
+        <RunOutcomeBanner
+          status={run.status}
+          reason={run.status_reason}
+          reopening={updateRun.isPending}
+          onReopen={() => handleSetStatus("active")}
+        />
+      )}
 
       {run.steps.length === 0 ? (
         <EmptyState
@@ -107,7 +146,13 @@ export default function RunDetailPage() {
           {/* Right rail: renders first (top) on mobile via source order; pinned
               to the right column on desktop via explicit grid placement. */}
           <div className="order-1 flex flex-col gap-5 lg:order-2 lg:col-span-5 lg:col-start-8 lg:sticky lg:top-20 lg:self-start xl:col-span-4 xl:col-start-9">
-            <ActiveFrontierCard runId={run.id} tailStep={lastStep} rulesConfig={run.rules_config} steps={run.steps} />
+            <ActiveFrontierCard
+              runId={run.id}
+              tailStep={lastStep}
+              rulesConfig={run.rules_config}
+              steps={run.steps}
+              locked={locked}
+            />
             <MiniPassportWidget stats={stats} rules={run.rules_config} />
             <RulesSummaryCard runId={run.id} rules={run.rules_config} steps={run.steps} />
           </div>
@@ -117,14 +162,17 @@ export default function RunDetailPage() {
               runId={run.id}
               steps={run.steps}
               keystoneActorIds={keystoneActorIds}
-              onActorClick={setActiveActor}
+              onActorClick={(actor) => {
+                if (!locked) setActiveActor(actor);
+              }}
               onRequestDeleteStep={setConfirmDeleteStepId}
+              locked={locked}
             />
           </div>
         </div>
       )}
 
-      {activeActor && (
+      {activeActor && !locked && (
         <ForkInTheRoadModal
           open={!!activeActor}
           onClose={() => setActiveActor(null)}
@@ -171,6 +219,36 @@ export default function RunDetailPage() {
       </Modal>
 
       <Modal
+        open={confirmForfeit}
+        onClose={() => setConfirmForfeit(false)}
+        title="Forfeit this run?"
+        widthClassName="max-w-sm"
+      >
+        <p className="text-sm text-zinc-400">
+          Concede this run as a dead end. Your chain is kept as-is, but no more films can be
+          logged unless you reopen it later.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setConfirmForfeit(false)}
+            className="rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-app-surface-hover"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={updateRun.isPending}
+            onClick={() => handleSetStatus("forfeited")}
+            className="flex items-center gap-1.5 rounded-md bg-amber-950 px-3 py-1.5 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-900 disabled:opacity-60"
+          >
+            {updateRun.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Forfeit Run
+          </button>
+        </div>
+      </Modal>
+
+      <Modal
         open={confirmDeleteRun}
         onClose={() => setConfirmDeleteRun(false)}
         title="Delete this run?"
@@ -203,16 +281,160 @@ export default function RunDetailPage() {
   );
 }
 
+const OUTCOME_COPY: Record<
+  Exclude<RunStatus, "active">,
+  { title: string; fallback: string; icon: typeof Trophy; className: string }
+> = {
+  completed: {
+    title: "Victory!",
+    fallback: "This run is complete.",
+    icon: Trophy,
+    className: "border-emerald-900 bg-emerald-950/60 text-emerald-300",
+  },
+  failed: {
+    title: "Game Over",
+    fallback: "This run hit a fail condition.",
+    icon: Skull,
+    className: "border-red-900 bg-red-950/60 text-red-300",
+  },
+  forfeited: {
+    title: "Run Forfeited",
+    fallback: "You conceded this run. Your chain is preserved.",
+    icon: Flag,
+    className: "border-amber-900 bg-amber-950/50 text-amber-300",
+  },
+};
+
+function RunOutcomeBanner({
+  status,
+  reason,
+  reopening,
+  onReopen,
+}: {
+  status: RunStatus;
+  reason: string | null;
+  reopening: boolean;
+  onReopen: () => void;
+}) {
+  if (status === "active") return null;
+  const copy = OUTCOME_COPY[status];
+  const Icon = copy.icon;
+
+  return (
+    <div
+      role="status"
+      className={cn("mb-5 flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3", copy.className)}
+    >
+      <Icon className="h-6 w-6 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className="text-base font-semibold">{copy.title}</p>
+        <p className="text-sm opacity-80">{reason ?? copy.fallback}</p>
+      </div>
+      <button
+        type="button"
+        disabled={reopening}
+        onClick={onReopen}
+        className="flex items-center gap-1.5 rounded-md border border-current/30 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-white/5 disabled:opacity-60"
+      >
+        {reopening ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+        Reopen Run
+      </button>
+    </div>
+  );
+}
+
+function RunActionsMenu({
+  canForfeit,
+  onForfeit,
+  onDelete,
+}: {
+  canForfeit: boolean;
+  onForfeit: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: PointerEvent) {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const itemClass =
+    "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-app-surface-hover";
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Run actions"
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-8 w-8 items-center justify-center rounded-md border border-app-border text-zinc-400 transition-colors hover:bg-app-surface-hover hover:text-zinc-200"
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 z-20 mt-1.5 w-44 overflow-hidden rounded-lg border border-app-border bg-app-surface py-1 shadow-xl"
+        >
+          {canForfeit && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onForfeit();
+              }}
+              className={cn(itemClass, "text-amber-300")}
+            >
+              <Flag className="h-3.5 w-3.5" />
+              Forfeit Run
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            className={cn(itemClass, "text-red-400")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete Run
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActiveFrontierCard({
   runId,
   tailStep,
   rulesConfig,
   steps,
+  locked,
 }: {
   runId: string;
   tailStep: RunStep | undefined;
   rulesConfig: RulesConfig;
   steps: RunStep[];
+  locked: boolean;
 }) {
   const navigate = useNavigate();
   const [showHub, setShowHub] = useState(false);
@@ -236,6 +458,12 @@ function ActiveFrontierCard({
         <p className="mb-4 text-sm text-zinc-500">No films logged yet.</p>
       )}
 
+      {locked ? (
+        <div className="flex items-center gap-2 rounded-md border border-app-border bg-app-bg px-3 py-2.5 text-sm text-zinc-500">
+          <Lock className="h-4 w-4 shrink-0" />
+          This run is over - logging is locked.
+        </div>
+      ) : (
       <div className="flex flex-col gap-2">
         <button
           type="button"
@@ -262,8 +490,9 @@ function ActiveFrontierCard({
           Or search for a specific film directly
         </button>
       </div>
+      )}
 
-      {showDirectSearch && (
+      {!locked && showDirectSearch && (
         <div className="mt-4">
           <MovieSearchAutocomplete
             runId={runId}
@@ -275,7 +504,7 @@ function ActiveFrontierCard({
         </div>
       )}
 
-      {showHub && tailStep && (
+      {!locked && showHub && tailStep && (
         <PickNextHub
           open={showHub}
           onClose={() => setShowHub(false)}
@@ -371,7 +600,9 @@ function RulesSummaryCard({
         </div>
         <div className="flex items-center justify-between">
           <span className="text-zinc-400">Cast Depth</span>
-          <span className="text-zinc-200">Top {rules.max_cast_order}</span>
+          <span className="text-zinc-200">
+            {rules.max_cast_order != null ? `Top ${rules.max_cast_order}` : "—"}
+          </span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-zinc-400">Repeat Movies</span>

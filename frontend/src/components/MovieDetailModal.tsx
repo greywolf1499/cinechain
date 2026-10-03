@@ -33,6 +33,7 @@ export default function MovieDetailModal({
   onActorClick,
   onRequestMarkWatched,
   onRequestDelete,
+  locked = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -42,6 +43,7 @@ export default function MovieDetailModal({
   onActorClick: (actor: ActorClickPayload) => void;
   onRequestMarkWatched: () => void;
   onRequestDelete: () => void;
+  locked?: boolean;
 }) {
   const { movie, isHydrating } = useMovieDetail(step.movie_id, open);
   const { data: genres } = useQuery({
@@ -180,7 +182,7 @@ export default function MovieDetailModal({
                 className="rounded-md border border-app-border bg-app-bg px-3 py-2 text-sm text-zinc-100 focus:border-accent focus:outline-none"
               />
             </label>
-          ) : (
+          ) : locked ? null : (
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -228,7 +230,7 @@ export default function MovieDetailModal({
             </button>
             {saved && <span className="text-xs text-emerald-400">Saved.</span>}
 
-            {isTailStep && (
+            {isTailStep && !locked && (
               <button
                 type="button"
                 onClick={onRequestDelete}

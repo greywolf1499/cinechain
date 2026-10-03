@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlmodel import JSON, Column, Field, SQLModel
+from sqlmodel import JSON, Column, Field, Integer, SQLModel
 
 from app.utils.ids import new_id, utcnow
 
@@ -10,6 +10,20 @@ from app.utils.ids import new_id, utcnow
 # Reserved game type of the hidden per-user run that holds imported history
 # (Letterboxd diary); it has no engine and never shows up in run lists.
 IMPORT_GAME_TYPE = "import"
+
+# Engine generations. Runs created before Phase 20a are tagged 1 by the
+# migration and keep their original (permissive) behaviour; the strict V2 rules
+# (locked terminal runs, rules_config condition validation, win/loss
+# evaluation) only apply to engine_version >= 2.
+LEGACY_ENGINE_VERSION = 1
+CURRENT_ENGINE_VERSION = 2
+
+RUN_STATUS_ACTIVE = "active"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_FORFEITED = "forfeited"
+RUN_STATUS_FAILED = "failed"
+RUN_STATUSES = (RUN_STATUS_ACTIVE, RUN_STATUS_COMPLETED, RUN_STATUS_FORFEITED, RUN_STATUS_FAILED)
+TERMINAL_RUN_STATUSES = frozenset({RUN_STATUS_COMPLETED, RUN_STATUS_FORFEITED, RUN_STATUS_FAILED})
 
 DEFAULT_RULES_CONFIG: dict[str, Any] = {
     "preset": "standard",
@@ -27,12 +41,19 @@ class Run(SQLModel, table=True):
     id: str = Field(default_factory=new_id, primary_key=True)
     name: str
     game_type: str = Field(default="cinechain", index=True)
-    # active | completed | abandoned
-    status: str = Field(default="active", index=True)
+    # active | completed | forfeited | failed (see RUN_STATUSES)
+    status: str = Field(default=RUN_STATUS_ACTIVE, index=True)
+    engine_version: int = Field(
+        default=CURRENT_ENGINE_VERSION,
+        sa_column=Column(Integer, nullable=False, server_default=str(CURRENT_ENGINE_VERSION)),
+    )
+    # Why a terminal status was reached (e.g. which win/fail condition fired).
+    status_reason: str | None = None
     rules_config: dict[str, Any] = Field(
         default_factory=lambda: dict(DEFAULT_RULES_CONFIG), sa_column=Column(JSON)
     )
     created_at: datetime = Field(default_factory=utcnow)
+    # When the run reached any terminal status (completed/forfeited/failed).
     completed_at: datetime | None = None
 
 

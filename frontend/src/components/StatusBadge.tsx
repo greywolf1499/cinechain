@@ -4,7 +4,8 @@ import type { RunStatus } from "../types/api";
 const STYLES: Record<RunStatus, string> = {
   active: "bg-emerald-950 text-emerald-400",
   completed: "bg-app-surface-hover text-accent",
-  abandoned: "bg-app-surface-hover text-zinc-500",
+  forfeited: "bg-app-surface-hover text-zinc-500",
+  failed: "bg-red-950 text-red-400",
 };
 
 export default function StatusBadge({ status }: { status: RunStatus }) {

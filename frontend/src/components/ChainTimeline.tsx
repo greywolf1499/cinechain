@@ -46,12 +46,15 @@ export default function ChainTimeline({
   keystoneActorIds,
   onActorClick,
   onRequestDeleteStep,
+  locked = false,
 }: {
   runId: string;
   steps: RunStep[];
   keystoneActorIds: Set<number>;
   onActorClick: (actor: ActorClickPayload) => void;
   onRequestDeleteStep: (stepId: string) => void;
+  /** Finished runs (completed/failed/forfeited) can't log or alter the chain. */
+  locked?: boolean;
 }) {
   const [order, setOrder] = useState<Order>(() => {
     if (typeof window === "undefined") return "story";
@@ -109,6 +112,7 @@ export default function ChainTimeline({
               onQuickMarkWatched={() =>
                 quickMarkWatched.mutate({ stepId: row.step.id, watched_at: new Date().toISOString() })
               }
+              locked={locked}
               quickMarkWatchedPending={
                 quickMarkWatched.isPending && quickMarkWatched.variables?.stepId === row.step.id
               }
@@ -130,6 +134,7 @@ export default function ChainTimeline({
           runId={runId}
           step={selectedStep}
           isTailStep={selectedStep.id === tailStepId}
+          locked={locked}
           onActorClick={onActorClick}
           onRequestMarkWatched={() => {
             setMarkWatchedStep(selectedStep);
@@ -161,12 +166,14 @@ function StationRow({
   onOpen,
   onQuickMarkWatched,
   quickMarkWatchedPending,
+  locked,
 }: {
   step: RunStep;
   badges: CanonBadge[] | undefined;
   onOpen: () => void;
   onQuickMarkWatched: () => void;
   quickMarkWatchedPending: boolean;
+  locked: boolean;
 }) {
   const decade = step.movie_release_year ? Math.floor(step.movie_release_year / 10) * 10 : null;
   const countries = parseOriginCountries(step.movie_origin_country);
@@ -241,7 +248,7 @@ function StationRow({
           </div>
         </button>
 
-        {isPlanned && (
+        {isPlanned && !locked && (
           <button
             type="button"
             onClick={onQuickMarkWatched}

@@ -1,9 +1,11 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.run import DEFAULT_RULES_CONFIG
+
+RunStatusLiteral = Literal["active", "completed", "forfeited", "failed"]
 
 
 class ParticipantAdd(BaseModel):
@@ -29,7 +31,7 @@ class RunCreate(BaseModel):
 
 class RunUpdate(BaseModel):
     name: str | None = None
-    status: str | None = None  # active | completed | abandoned
+    status: RunStatusLiteral | None = None
 
 
 class RunRulesUpdate(BaseModel):
@@ -86,7 +88,10 @@ class RunSummary(BaseModel):
     id: str
     name: str
     game_type: str
-    status: str
+    status: RunStatusLiteral
+    # 1 = legacy run (V2 rules bypassed), 2 = Challenge Engine V2.
+    engine_version: int = 1
+    status_reason: str | None = None
     rules_config: dict[str, Any] = Field(
         default_factory=lambda: dict(DEFAULT_RULES_CONFIG))
     created_at: datetime

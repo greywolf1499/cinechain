@@ -19,6 +19,7 @@ import type {
 	Run,
 	RunDetail,
 	RunStats,
+	RawRulesConfig,
 	RunStatus,
 	RulesConfig,
 	RequestConfig,
@@ -243,7 +244,7 @@ export function useCreateRun() {
 			game_type: string;
 			participant_user_ids: string[];
 			seed_movie_id?: number | null;
-			rules_config?: RulesConfig;
+			rules_config?: RulesConfig | RawRulesConfig;
 		}) => api.post<RunDetail>("/runs", payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -298,6 +299,8 @@ export function useCreateStep(runId: string) {
 		}) => api.post(`/runs/${runId}/steps`, payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+			// A logged step can end the run (win/fail), which changes the list badge.
+			queryClient.invalidateQueries({ queryKey: ["runs"] });
 		},
 	});
 }
@@ -315,6 +318,8 @@ export function useMarkStepWatched(runId: string) {
 		}) => api.patch(`/runs/${runId}/steps/${stepId}/mark-watched`, payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+			// A logged step can end the run (win/fail), which changes the list badge.
+			queryClient.invalidateQueries({ queryKey: ["runs"] });
 		},
 	});
 }
@@ -332,6 +337,8 @@ export function useUpdateStep(runId: string) {
 		}) => api.patch(`/runs/${runId}/steps/${stepId}`, payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+			// A logged step can end the run (win/fail), which changes the list badge.
+			queryClient.invalidateQueries({ queryKey: ["runs"] });
 		},
 	});
 }

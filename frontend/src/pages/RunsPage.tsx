@@ -7,9 +7,12 @@ import EmptyState from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import Modal from "../components/Modal";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
+import RawRulesEditor, { RAW_RULES_EXAMPLE, parseRawRules } from "../components/RawRulesEditor";
 import RulesetFields, { RULE_PRESETS } from "../components/RulesetFields";
 import { api } from "../lib/api";
 import { useCreateRun, useRuns, useUsers } from "../lib/queries";
+import { cn } from "../lib/cn";
+import { useAuthStore } from "../store/authStore";
 import type { EngineMeta, MovieSummary, RulesConfig } from "../types/api";
 
 export default function RunsPage() {
@@ -90,12 +93,30 @@ function NewRunModal({
     queryFn: () => api.get<EngineMeta[]>("/engines"),
   });
   const createRun = useCreateRun();
+  const isAdmin = !!useAuthStore((s) => s.user?.is_admin);
 
   const [name, setName] = useState("");
   const [gameType, setGameType] = useState("cinechain");
   const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [seedMovie, setSeedMovie] = useState<MovieSummary | null>(null);
   const [rules, setRules] = useState<RulesConfig>(RULE_PRESETS.standard);
+  const [rawMode, setRawMode] = useState(false);
+  const [rawText, setRawText] = useState("");
+
+  // Admin-only "Super-Unlock", and only for engines that honour JSON rulesets.
+  const engineSupportsRaw =
+    engines?.find((engine) => engine.game_type === gameType)?.capabilities.includes("json_rules") ??
+    gameType === "cinechain";
+  const rawEnabled = rawMode && isAdmin && engineSupportsRaw;
+  const rawParse = parseRawRules(rawText);
+
+  function toggleRawMode() {
+    if (!rawMode && !rawText.trim()) {
+      // Seed with the form's current values plus an example condition pair.
+      setRawText(JSON.stringify({ ...RAW_RULES_EXAMPLE, ...rules }, null, 2));
+    }
+    setRawMode((v) => !v);
+  }
 
   function toggleParticipant(userId: string) {
     setParticipantIds((prev) =>
@@ -109,16 +130,20 @@ function NewRunModal({
     setParticipantIds([]);
     setSeedMovie(null);
     setRules(RULE_PRESETS.standard);
+    setRawMode(false);
+    setRawText("");
+    createRun.reset();
   }
 
   async function handleSubmit() {
     if (!name.trim()) return;
+    if (rawEnabled && rawParse.error !== null) return;
     const run = await createRun.mutateAsync({
       name: name.trim(),
       game_type: gameType,
       participant_user_ids: participantIds,
       seed_movie_id: seedMovie?.tmdb_id ?? null,
-      rules_config: rules,
+      rules_config: rawEnabled && rawParse.value ? rawParse.value : rules,
     });
     reset();
     onClose();
@@ -181,11 +206,51 @@ function NewRunModal({
           <MovieSearchAutocomplete onSelect={setSeedMovie} placeholder="Search for a starting film..." />
         </Field>
 
-        <RulesetFields value={rules} onChange={setRules} />
+        {isAdmin && engineSupportsRaw && (
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-app-border px-3 py-2">
+            <span className="flex flex-col">
+              <span className="text-xs font-medium text-zinc-300">Raw JSON Override</span>
+              <span className="text-[11px] text-zinc-500">
+                Bypass the form and paste a full ruleset payload.
+              </span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={rawMode}
+              onClick={toggleRawMode}
+              className={cn(
+                "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                rawMode ? "bg-accent" : "bg-app-surface-hover",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-0.5 h-4 w-4 rounded-full bg-zinc-100 transition-all",
+                  rawMode ? "left-[18px]" : "left-0.5",
+                )}
+              />
+            </button>
+          </label>
+        )}
+
+        {rawEnabled ? (
+          <RawRulesEditor text={rawText} onChange={setRawText} />
+        ) : (
+          <RulesetFields value={rules} onChange={setRules} />
+        )}
+
+        {createRun.isError && (
+          <p role="alert" className="text-xs text-red-400">
+            {createRun.error instanceof Error ? createRun.error.message : "Couldn't create the run."}
+          </p>
+        )}
 
         <button
           type="button"
-          disabled={!name.trim() || createRun.isPending}
+          disabled={
+            !name.trim() || createRun.isPending || (rawEnabled && rawParse.error !== null)
+          }
           onClick={handleSubmit}
           className="mt-1 flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
         >

@@ -21,6 +21,7 @@ router = APIRouter(tags=["engine"])
 # deeper is expected to go through the SSE stream instead.
 FAST_MAX_DEPTH = 2
 FAST_CALL_BUDGET = 20
+FAST_MAX_DURATION_SECONDS = 15
 
 
 class EngineMeta(BaseModel):
@@ -75,13 +76,14 @@ async def bridge_fast(
 ) -> dict:
     engine = get_engine(payload.game_type, session, tmdb)
     agen = engine.solve_bridge(
-        payload.from_movie_id, payload.to_movie_id, FAST_MAX_DEPTH, call_budget=FAST_CALL_BUDGET
+        payload.from_movie_id, payload.to_movie_id, FAST_MAX_DEPTH,
+        call_budget=FAST_CALL_BUDGET, max_duration_seconds=FAST_MAX_DURATION_SECONDS,
     )
     try:
         async for event in agen:
             if event["type"] == "result":
                 return {"status": "solved", **jsonable_encoder({k: v for k, v in event.items() if k != "type"})}
-            if event["type"] in ("exhausted", "error"):
+            if event["type"] in ("exhausted", "timeout", "error"):
                 return {"status": "exceeded_fast_budget"}
     finally:
         await agen.aclose()

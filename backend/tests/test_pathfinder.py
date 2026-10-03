@@ -557,3 +557,67 @@ async def test_canon_badged_alternate_is_labeled_cinephile_route(config_dir):
     assert result["label"] == "Shortest"
     assert len(result["alternate_paths"]) == 1
     assert result["alternate_paths"][0]["label"] == "The Cinephile Route"
+
+
+async def test_rate_limit_pauses_then_search_still_succeeds(config_dir, monkeypatch):
+    """A 429 on a person's filmography must pause (not crash) the BFS loop and
+    the search must finish once TMDB recovers."""
+    sleeps: list[float] = []
+    real_sleep = pathfinder.asyncio.sleep
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr(pathfinder.asyncio, "sleep", fake_sleep)
+
+    with _session(config_dir) as session, respx.mock:
+        _mock_movie_and_credits(60, "Movie R", [_cast_member(600, "Actor R")])
+        _mock_movie_and_credits(61, "Movie S", [_cast_member(601, "Actor S")])
+        respx.get(f"{TMDB_BASE}/person/600/movie_credits").mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "0"}, json={}),
+                httpx.Response(429, headers={"Retry-After": "0"}, json={}),
+                _person_credits_response(
+                    [_person_credit(60, "Movie R"), _person_credit(62, "Movie Bridge")]),
+            ]
+        )
+        respx.get(f"{TMDB_BASE}/person/601/movie_credits").mock(
+            return_value=_person_credits_response(
+                [_person_credit(61, "Movie S"), _person_credit(62, "Movie Bridge")])
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client, max_retries=2)
+            events = await _collect(
+                pathfinder.solve_bridge_bipartite(session, tmdb, 60, 61, max_depth=5))
+
+    assert not any(e["type"] == "error" for e in events)
+    result = next(e for e in events if e["type"] == "result")
+    assert [n.movie_id for n in result["path"]] == [60, 62, 61]
+    assert any(e.get("rate_limit_pauses", 0) >= 1 for e in events if e["type"] == "progress")
+    assert sleeps
+    rate_limited = [e for e in events if e["type"] == "rate_limited"]
+    assert rate_limited and rate_limited[0]["wait_seconds"] >= 0
+
+
+async def test_persistent_rate_limit_ends_with_timeout_not_error(config_dir):
+    """If TMDB never recovers the loop must stop at the admin time limit with a
+    clean timeout event instead of raising."""
+    with _session(config_dir) as session, respx.mock:
+        _mock_movie_and_credits(70, "Movie T", [_cast_member(700, "Actor T")])
+        _mock_movie_and_credits(71, "Movie U", [_cast_member(701, "Actor U")])
+        respx.get(f"{TMDB_BASE}/person/700/movie_credits").mock(
+            return_value=httpx.Response(429, headers={"Retry-After": "0"}, json={}))
+        respx.get(f"{TMDB_BASE}/person/701/movie_credits").mock(
+            return_value=httpx.Response(429, headers={"Retry-After": "0"}, json={}))
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client, max_retries=2)
+            events = await _collect(
+                pathfinder.solve_bridge_bipartite(
+                    session, tmdb, 70, 71, max_depth=5, max_duration_seconds=1))
+
+    assert not any(e["type"] == "error" for e in events)
+    assert any(e["type"] == "timeout" for e in events)
+    assert events[-1]["type"] == "done"

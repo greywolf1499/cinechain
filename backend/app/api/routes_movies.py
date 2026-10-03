@@ -49,6 +49,7 @@ def _movie_to_detail(movie: CachedMovie, ratings: MovieRatings | None = None) ->
     return MovieDetail(
         **_movie_to_summary(movie).model_dump(),
         overview=movie.overview,
+        tagline=movie.tagline,
         runtime=movie.runtime,
         original_language=movie.original_language,
         genre_ids=movie.genre_ids or [],
@@ -113,8 +114,9 @@ async def get_movie(
     _current_user: User = Depends(get_current_user),
 ) -> MovieDetail:
     movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=refresh)
-    if movie.overview is None and not refresh:
-        # NULL overview marks a stub cached from a lightweight TMDB payload.
+    if (movie.overview is None or movie.tagline is None) and not refresh:
+        # NULL overview marks a stub cached from a lightweight TMDB payload; NULL
+        # tagline marks a detail row cached before taglines were stored (JIT backfill).
         movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=True)
     rating_row = await cache_repo.get_movie_ratings(session, tmdb, omdb, tmdb_id)
     ratings = (

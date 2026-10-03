@@ -6,6 +6,7 @@ import MoviePoster from "./MoviePoster";
 import MovieCastStrip from "./MovieCastStrip";
 import RatingBadges from "./RatingBadges";
 import AcquisitionControl from "./AcquisitionControl";
+import MovieTagline from "./MovieTagline";
 import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
@@ -127,9 +128,12 @@ export default function MovieDetailModal({
               ))}
             </div>
             {movie ? (
+              <>
+              <MovieTagline tagline={movie.tagline} />
               <p className="mt-2 line-clamp-4 text-xs text-zinc-500">
                 {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
               </p>
+              </>
             ) : (
               <div className="mt-2 flex items-center gap-1.5 text-xs text-zinc-600">
                 <Loader2 className="h-3 w-3 animate-spin" /> Loading details...

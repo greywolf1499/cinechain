@@ -3,6 +3,8 @@ sync persistence (via a monkeypatched scraper - no real network), and the
 bulk badges lookup used by movie cards across the app.
 """
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
@@ -392,3 +394,30 @@ def test_watchlist_sync_tolerates_missing_title_and_duplicates(client, monkeypat
     assert resp.status_code == 200
     assert "event: error" not in resp.text
     assert '"matched": 1' in resp.text
+
+
+def test_watchlist_sync_404_emits_structured_error(client, monkeypatch):
+    import types
+
+    from curl_cffi import requests as curl_requests
+
+    _register_and_login(client)
+
+    def not_found(*args, **kwargs):
+        raise curl_requests.exceptions.HTTPError(
+            "404", response=types.SimpleNamespace(status_code=404))
+
+    monkeypatch.setattr(letterboxd, "fetch_html", not_found)
+
+    resp = client.post("/api/curated/watchlist/sync",
+                       json={"letterboxd_username": "ghost_user"})
+
+    assert resp.status_code == 200
+    error_line = next(line for line in resp.text.splitlines()
+                      if line.startswith("data: ") and "watchlist_not_found" in line)
+    body = json.loads(error_line.removeprefix("data: "))
+    assert body["code"] == "watchlist_not_found"
+    assert body["status"] == 404
+    assert body["username"] == "ghost_user"
+    assert "private" in body["message"]
+    assert "event: result" not in resp.text

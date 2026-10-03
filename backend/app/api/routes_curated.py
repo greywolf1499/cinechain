@@ -41,6 +41,17 @@ router = APIRouter(prefix="/curated", tags=["curated"])
 _SENTINEL = object()
 
 
+def _error_payload(exc: Exception) -> dict[str, Any]:
+    """Structured SSE error body: `message` stays for legacy consumers, `code`
+    (and `status` when known) lets the frontend render a specific warning."""
+    if isinstance(exc, letterboxd.WatchlistNotFound):
+        return {"code": "watchlist_not_found", "status": 404, "message": str(exc),
+                "username": exc.username}
+    if isinstance(exc, letterboxd.CloudflareBlock):
+        return {"code": "cloudflare_block", "status": 503, "message": str(exc)}
+    return {"code": "scrape_failed", "message": str(exc)}
+
+
 async def run_sync_scrape(fn: Callable[..., dict], *args: Any, **kwargs: Any) -> AsyncIterator[tuple[str, Any]]:
     """Runs a sync `fn(*args, progress_callback=..., **kwargs)` in a worker
     thread, yielding ("progress"|"result"|"error", payload) tuples as it goes."""
@@ -54,7 +65,7 @@ async def run_sync_scrape(fn: Callable[..., dict], *args: Any, **kwargs: Any) ->
             result = fn(*args, progress_callback=progress_callback, **kwargs)
             q.put(("result", result))
         except Exception as exc:  # noqa: BLE001 - surfaced as a client-facing error event
-            q.put(("error", str(exc)))
+            q.put(("error", _error_payload(exc)))
         finally:
             q.put((_SENTINEL, None))
 
@@ -233,10 +244,10 @@ async def sync_curated_list(
                 elif kind == "result":
                     result = payload
                 elif kind == "error":
-                    curated_list.last_sync_error = str(payload)
+                    curated_list.last_sync_error = payload["message"]
                     session.add(curated_list)
                     session.commit()
-                    yield f"event: error\ndata: {json.dumps({'message': str(payload)})}\n\n"
+                    yield f"event: error\ndata: {json.dumps(payload)}\n\n"
         finally:
             pass
 
@@ -320,7 +331,7 @@ async def sync_watchlist(
             elif kind == "result":
                 result = event_payload
             elif kind == "error":
-                yield f"event: error\ndata: {json.dumps({'message': str(event_payload)})}\n\n"
+                yield f"event: error\ndata: {json.dumps(event_payload)}\n\n"
 
         if result is not None:
             try:
@@ -331,7 +342,8 @@ async def sync_watchlist(
                 logger.exception(
                     "Watchlist persistence failed for %s", username)
                 message = f"Failed to save watchlist: {exc.__class__.__name__}"
-                yield f"event: error\ndata: {json.dumps({'message': message})}\n\n"
+                error = {"code": "persist_failed", "message": message}
+                yield f"event: error\ndata: {json.dumps(error)}\n\n"
             else:
                 yield (
                     "event: result\ndata: "
@@ -554,7 +566,7 @@ async def discover_hq(
             elif kind == "result":
                 result = payload
             elif kind == "error":
-                yield f"event: error\ndata: {json.dumps({'message': str(payload)})}\n\n"
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
 
         if result is not None:
             new_accounts = 0

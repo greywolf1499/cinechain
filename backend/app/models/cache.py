@@ -13,6 +13,8 @@ class CachedMovie(SQLModel, table=True):
     release_date: str | None = None
     poster_path: str | None = None
     overview: str | None = None
+    # NULL = detail never fetched (or cached before taglines existed); "" = TMDB has none.
+    tagline: str | None = None
     origin_country: str | None = None  # JSON array of ISO country codes
     original_language: str | None = None
     runtime: int | None = None

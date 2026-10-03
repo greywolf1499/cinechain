@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Download, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Loader2, XCircle } from "lucide-react";
 import Toast, { type ToastState } from "./Toast";
 import CuratorBrowser from "./CuratorBrowser";
 import SyncBadge from "./SyncBadge";
@@ -23,16 +23,25 @@ export default function CuratedCanonsCard() {
 
   const [watchlistUsername, setWatchlistUsername] = useState("");
   const [watchlistSyncedAt, setWatchlistSyncedAt] = useState<string | null>(null);
+  const [watchlistWarning, setWatchlistWarning] = useState<string | null>(null);
   const syncWatchlist = useMutation({
     mutationFn: () => postSse("/curated/watchlist/sync", { letterboxd_username: watchlistUsername }),
+    onMutate: () => setWatchlistWarning(null),
     onSuccess: (events) => {
       const result = events.find((e) => e.event === "result")?.data as
         | { matched: number; total_films: number }
         | undefined;
       const errorEvent = events.find((e) => e.event === "error");
       if (errorEvent) {
-        const detail = (errorEvent.data as { message?: string } | null)?.message;
-        setToast({ type: "error", message: `Watchlist sync failed${detail ? `: ${detail}` : "."}` });
+        const error = errorEvent.data as { code?: string; message?: string } | null;
+        if (error?.code === "watchlist_not_found") {
+          setWatchlistWarning(
+            "Watchlist not found or private. Check the username, and make sure the watchlist is public on Letterboxd.",
+          );
+        } else {
+          const detail = error?.message;
+          setToast({ type: "error", message: `Watchlist sync failed${detail ? `: ${detail}` : "."}` });
+        }
       } else {
         setWatchlistSyncedAt(new Date().toISOString());
         setToast({
@@ -215,6 +224,15 @@ export default function CuratedCanonsCard() {
               Sync Watchlist
             </button>
           </div>
+          {watchlistWarning && (
+            <p
+              role="alert"
+              className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs font-medium text-amber-300"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {watchlistWarning}
+            </p>
+          )}
         </div>
 
         <Toast toast={toast} onDismiss={() => setToast(null)} />

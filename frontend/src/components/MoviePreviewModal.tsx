@@ -4,6 +4,7 @@ import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import RatingBadges from "./RatingBadges";
 import AcquisitionControl from "./AcquisitionControl";
+import MovieTagline from "./MovieTagline";
 import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
@@ -87,6 +88,7 @@ export default function MoviePreviewModal({
                   </span>
                 ))}
               </div>
+              <MovieTagline tagline={movie.tagline} />
               <p className="mt-2 line-clamp-6 text-xs text-zinc-500">
                 {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
               </p>

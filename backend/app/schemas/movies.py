@@ -17,6 +17,7 @@ class MovieRatings(BaseModel):
 
 class MovieDetail(MovieSummary):
     overview: str | None = None
+    tagline: str | None = None
     runtime: int | None = None
     original_language: str | None = None
     genre_ids: list[int] = []

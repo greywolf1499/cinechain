@@ -17,8 +17,9 @@ single-worker service, not a multi-tenant one.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import anyio
 from sqlmodel import Session, select
@@ -31,18 +32,57 @@ from app.services import cache_repo
 from app.services.cache_repo import CacheRepo
 from app.services.graph import FrontierSide, NodeKey, actor_node, movie_node
 from app.services.movie_filters import is_reality_eligible
-from app.services.tmdb import TMDBClient
+from app.services.tmdb import TMDBClient, TMDBNotFoundError, TMDBRateLimitError
 from app.utils.dates import parse_release_year
 
+logger = logging.getLogger(__name__)
+
 _SEARCH_SEMAPHORE = asyncio.Semaphore(1)
+_MAX_RATE_LIMIT_PAUSE_SECONDS = 30.0
+_EVENT_FLUSH_SECONDS = 0.25
 
 
 class _SearchStats:
-    __slots__ = ("cache_hits", "tmdb_calls")
+    __slots__ = ("cache_hits", "pending_events", "rate_limit_pauses", "tmdb_calls")
 
     def __init__(self) -> None:
         self.tmdb_calls = 0
         self.cache_hits = 0
+        self.rate_limit_pauses = 0
+        # Events raised mid-round (e.g. a 429 pause) that the solve loop flushes to the stream.
+        self.pending_events: list[dict] = []
+
+
+class _DeadlineReached(Exception):
+    """Internal: the solver's time limit expired while waiting on TMDB."""
+
+
+async def _fetch_with_backoff[T](
+    fetch: Callable[[], Awaitable[T]], stats: _SearchStats, deadline: float
+) -> T | None:
+    """Runs one uncached TMDB fetch. On a 429 the solver pauses (escalating,
+    honoring Retry-After) and retries instead of failing the search; it only
+    gives up when the admin-defined deadline passes. A 404 (node deleted from
+    TMDB) skips that node, returning None."""
+    pause = 2.0
+    while True:
+        if time.monotonic() >= deadline:
+            raise _DeadlineReached
+        try:
+            return await fetch()
+        except TMDBRateLimitError as exc:
+            stats.rate_limit_pauses += 1
+            wait = min(exc.retry_after or pause, _MAX_RATE_LIMIT_PAUSE_SECONDS)
+            logger.warning("TMDB rate limit hit; pausing bridge search %.1fs", wait)
+            stats.pending_events.append({
+                "type": "rate_limited",
+                "wait_seconds": round(wait, 1),
+                "rate_limit_pauses": stats.rate_limit_pauses,
+            })
+            await asyncio.sleep(max(0.0, min(wait, deadline - time.monotonic())))
+            pause = min(pause * 2, _MAX_RATE_LIMIT_PAUSE_SECONDS)
+        except TMDBNotFoundError:
+            return None
 
 
 async def solve_bridge_bipartite(
@@ -59,7 +99,9 @@ async def solve_bridge_bipartite(
 ) -> AsyncIterator[dict]:
     settings = get_settings()
     max_depth = max_depth or settings.pathfinder_max_depth
-    call_budget = call_budget or settings.pathfinder_call_budget
+    # `call_budget` is a hard cap only for callers that explicitly pass one
+    # (the fast /engine/bridge pre-check). The streamed solve is bounded by
+    # depth and the admin-defined time limit instead.
     # A run's own `max_cast_order` rule overrides the global default depth,
     # same "optional extra kwarg" pattern as validate_next_step's cast_limit.
     cast_limit = cast_limit or settings.pathfinder_cast_limit
@@ -74,6 +116,7 @@ async def solve_bridge_bipartite(
 
     async with _SEARCH_SEMAPHORE:
         start = time.monotonic()
+        deadline = start + max_duration_seconds
         repo = CacheRepo(session)
         stats = _SearchStats()
 
@@ -100,12 +143,11 @@ async def solve_bridge_bipartite(
                 last_expanded_forward = pick_forward
 
                 if side.next_type == "movie":
-                    new_nodes = await _expand_movie_side(
-                        session, tmdb, repo, side, cast_limit, stats, call_budget
-                    )
-                    side.next_type = "actor"
+                    expansion = asyncio.ensure_future(_expand_movie_side(
+                        session, tmdb, repo, side, cast_limit, stats, call_budget, deadline
+                    ))
                 else:
-                    new_nodes = await _expand_actor_side(
+                    expansion = asyncio.ensure_future(_expand_actor_side(
                         session,
                         tmdb,
                         repo,
@@ -113,9 +155,23 @@ async def solve_bridge_bipartite(
                         actor_cap,
                         stats,
                         call_budget,
+                        deadline,
                         excluded_movie_ids,
                         min_runtime,
-                    )
+                    ))
+                try:
+                    # Wake periodically so a 429 pause can be streamed to the client live.
+                    while not expansion.done():
+                        await asyncio.wait({expansion}, timeout=_EVENT_FLUSH_SECONDS)
+                        while stats.pending_events:
+                            yield stats.pending_events.pop(0)
+                finally:
+                    if not expansion.done():
+                        expansion.cancel()
+                new_nodes = expansion.result()
+                if side.next_type == "movie":
+                    side.next_type = "actor"
+                else:
                     side.next_type = "movie"
                     side.hops += 1
 
@@ -133,6 +189,7 @@ async def solve_bridge_bipartite(
                     "frontier_backward": len(backward.frontier),
                     "tmdb_calls": stats.tmdb_calls,
                     "cache_hits": stats.cache_hits,
+                    "rate_limit_pauses": stats.rate_limit_pauses,
                     "elapsed_ms": elapsed_ms,
                 }
 
@@ -148,7 +205,7 @@ async def solve_bridge_bipartite(
                     yield {"type": "done"}
                     return
 
-                if stats.tmdb_calls >= call_budget:
+                if call_budget is not None and stats.tmdb_calls >= call_budget:
                     yield {
                         "type": "exhausted",
                         "reason": "budget_exceeded",
@@ -195,7 +252,8 @@ async def _expand_movie_side(
     side: FrontierSide,
     cast_limit: int,
     stats: _SearchStats,
-    call_budget: int,
+    call_budget: int | None,
+    deadline: float,
 ) -> dict[NodeKey, NodeKey]:
     movie_ids = [node[1] for node in side.frontier]
 
@@ -217,12 +275,20 @@ async def _expand_movie_side(
             new_nodes.setdefault(actor_node(member["actor_id"]), parent)
 
     for movie_id in uncached:
-        if stats.tmdb_calls >= call_budget:
+        if call_budget is not None and stats.tmdb_calls >= call_budget:
             break
         if stats.tmdb_calls > 0:
             await asyncio.sleep(tmdb.pacing_delay_seconds)
-        cast = await cache_repo.get_movie_cast(session, tmdb, movie_id, cast_limit)
+        try:
+            cast = await _fetch_with_backoff(
+                lambda movie_id=movie_id: cache_repo.get_movie_cast(
+                    session, tmdb, movie_id, cast_limit),
+                stats, deadline)
+        except _DeadlineReached:
+            break  # the main loop reports the timeout
         stats.tmdb_calls += 1
+        if cast is None:
+            continue
         parent = movie_node(movie_id)
         for member in cast:
             new_nodes.setdefault(actor_node(member["actor_id"]), parent)
@@ -237,7 +303,8 @@ async def _expand_actor_side(
     side: FrontierSide,
     actor_cap: int,
     stats: _SearchStats,
-    call_budget: int,
+    call_budget: int | None,
+    deadline: float,
     excluded_movie_ids: set[int],
     min_runtime: int | None,
 ) -> dict[NodeKey, NodeKey]:
@@ -263,12 +330,20 @@ async def _expand_actor_side(
     for actor_id, credits_ in ordered:
         parent = actor_node(actor_id)
         if credits_ is None:
-            if stats.tmdb_calls >= call_budget:
+            if call_budget is not None and stats.tmdb_calls >= call_budget:
                 continue
             if stats.tmdb_calls > 0:
                 await asyncio.sleep(tmdb.pacing_delay_seconds)
-            credits_ = await cache_repo.get_actor_credits(session, tmdb, actor_id)
+            try:
+                credits_ = await _fetch_with_backoff(
+                    lambda actor_id=actor_id: cache_repo.get_actor_credits(
+                        session, tmdb, actor_id),
+                    stats, deadline)
+            except _DeadlineReached:
+                break  # the main loop reports the timeout
             stats.tmdb_calls += 1
+            if credits_ is None:
+                continue
         else:
             stats.cache_hits += 1
         for movie in credits_:

@@ -17,6 +17,7 @@ import {
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import AcquisitionControl from "./AcquisitionControl";
+import MovieTagline from "./MovieTagline";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import RatingBadges from "./RatingBadges";
 import { CanonBadgeList } from "./CanonBadge";
@@ -821,9 +822,12 @@ function MovieScreenView({
             </div>
           )}
           {movie && (
-            <p className="mt-2 line-clamp-3 text-xs text-zinc-500">
-              {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
-            </p>
+            <>
+              <MovieTagline tagline={movie.tagline} />
+              <p className="mt-2 line-clamp-3 text-xs text-zinc-500">
+                {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
+              </p>
+            </>
           )}
         </div>
       </div>

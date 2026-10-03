@@ -82,6 +82,7 @@ export interface MovieSummary {
 
 export interface MovieDetail extends MovieSummary {
 	overview: string | null;
+	tagline: string | null;
 	runtime: number | null;
 	original_language: string | null;
 	genre_ids: number[];

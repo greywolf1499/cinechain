@@ -107,6 +107,16 @@ class CloudflareBlock(Exception):
     pass
 
 
+class WatchlistNotFound(Exception):
+    """The user's watchlist page 404'd (private, renamed or deleted account)."""
+
+    def __init__(self, username: str):
+        self.username = username
+        super().__init__(
+            f"Letterboxd watchlist for '{username}' was not found. The account may be "
+            "private, renamed or deleted.")
+
+
 ProgressCallback = Callable[[dict[str, Any]], None] | None
 
 
@@ -880,10 +890,16 @@ def scrape_letterboxd_watchlist(
     username: str, tmdb_api_key: str | None = None, max_pages: int | None = None,
     no_cache: bool = False, progress_callback: ProgressCallback = None, deep: bool = False,
 ) -> dict[str, Any]:
-    url = f"{BASE_URL}/{clean_username(username)}/watchlist/"
-    return scrape_letterboxd_list(url, tmdb_api_key=tmdb_api_key, max_pages=max_pages,
-                                  no_cache=no_cache, progress_callback=progress_callback,
-                                  deep=deep)
+    username = clean_username(username)
+    url = f"{BASE_URL}/{username}/watchlist/"
+    try:
+        return scrape_letterboxd_list(url, tmdb_api_key=tmdb_api_key, max_pages=max_pages,
+                                      no_cache=no_cache, progress_callback=progress_callback,
+                                      deep=deep)
+    except curl_requests.exceptions.HTTPError as exc:
+        if is_not_found(exc):
+            raise WatchlistNotFound(username) from exc
+        raise
 
 
 # ---------------------------------------------------------

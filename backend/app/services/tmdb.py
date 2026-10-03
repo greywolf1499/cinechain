@@ -22,12 +22,26 @@ class TMDBError(RuntimeError):
     """Raised when a TMDB request fails after exhausting retries."""
 
 
+class TMDBRateLimitError(TMDBError):
+    """TMDB kept answering 429 after the client's own retries; callers that can
+    afford to wait (e.g. the bridge solver) should pause and try again."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class TMDBNotFoundError(TMDBError):
+    """TMDB has no such resource (HTTP 404)."""
+
+
 class TMDBMovie(TypedDict, total=False):
     id: int
     title: str
     release_date: str | None
     poster_path: str | None
     overview: str | None
+    tagline: str | None
     origin_country: list[str]
     original_language: str
     runtime: int | None
@@ -142,9 +156,17 @@ class TMDBClient:
             )
 
         if response.status_code >= 400:
-            raise TMDBError(
-                f"TMDB request to {path} failed with {response.status_code}: {response.text}"
-            )
+            message = f"TMDB request to {path} failed with {response.status_code}: {response.text}"
+            if response.status_code == 429:
+                raw_retry_after = response.headers.get("Retry-After")
+                try:
+                    retry_after = float(raw_retry_after) if raw_retry_after else None
+                except ValueError:
+                    retry_after = None
+                raise TMDBRateLimitError(message, retry_after)
+            if response.status_code == 404:
+                raise TMDBNotFoundError(message)
+            raise TMDBError(message)
         return response.json()
 
     async def search_movies(self, query: str, page: int = 1) -> dict[str, Any]:
@@ -183,7 +205,8 @@ def _normalize_movie_detail(data: dict[str, Any]) -> TMDBMovie:
         title=data["title"],
         release_date=data.get("release_date") or None,
         poster_path=data.get("poster_path"),
-        overview=data.get("overview"),
+        overview=(data.get("overview") or "").strip(),
+        tagline=(data.get("tagline") or "").strip(),
         origin_country=data.get("origin_country", []),
         original_language=data.get("original_language", ""),
         runtime=data.get("runtime"),

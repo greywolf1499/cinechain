@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     pathfinder_max_depth: int = 5
     pathfinder_cast_limit: int = 15
     pathfinder_actor_credit_limit: int = 120
+    # No longer enforced on the streamed solve (bounded by depth + bridge_max_duration_seconds);
+    # kept so existing env files still load.
     pathfinder_call_budget: int = 150
     # --- Bridge solver pacing (Phase 15.5) ---
     bridge_max_duration_seconds: int = 45

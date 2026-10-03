@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
+  Clock,
   Flag,
   GitBranch,
   Link2,
@@ -27,7 +28,20 @@ interface ProgressEvent {
   frontier_backward: number;
   tmdb_calls: number;
   cache_hits: number;
+  rate_limit_pauses?: number;
   elapsed_ms: number;
+}
+
+interface RateLimitedEvent {
+  wait_seconds: number;
+  rate_limit_pauses: number;
+}
+
+interface TimeoutEvent {
+  depth_reached: number;
+  tmdb_calls: number;
+  elapsed_ms: number;
+  message?: string;
 }
 
 interface ExhaustedEvent {
@@ -36,7 +50,7 @@ interface ExhaustedEvent {
   elapsed_ms: number;
 }
 
-type SolveStatus = "idle" | "streaming" | "solved" | "exhausted" | "error";
+type SolveStatus = "idle" | "streaming" | "solved" | "exhausted" | "timeout" | "error";
 
 const MIN_DEPTH = 2;
 const MAX_DEPTH = 5;
@@ -60,6 +74,8 @@ export default function BridgePage() {
   const [activePathIndex, setActivePathIndex] = useState(0);
   const [previewMovieId, setPreviewMovieId] = useState<number | null>(null);
   const [exhausted, setExhausted] = useState<ExhaustedEvent | null>(null);
+  const [timedOut, setTimedOut] = useState<TimeoutEvent | null>(null);
+  const [rateLimitNotice, setRateLimitNotice] = useState<RateLimitedEvent | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [onServerMap, setOnServerMap] = useState<Record<number, JellyfinItemSummary>>({});
 
@@ -126,6 +142,13 @@ export default function BridgePage() {
     };
   }, []);
 
+  // The pause banner only lives for the length of the backend's sleep.
+  useEffect(() => {
+    if (!rateLimitNotice) return;
+    const timer = window.setTimeout(() => setRateLimitNotice(null), rateLimitNotice.wait_seconds * 1000 + 500);
+    return () => window.clearTimeout(timer);
+  }, [rateLimitNotice]);
+
   // Fetch Jellyfin "on server" badges once a path is solved (non-fatal on failure).
   // Covers every path option's movies, not just the primary, so switching tabs
   // still shows correct badges without a refetch.
@@ -169,6 +192,8 @@ export default function BridgePage() {
     setResult(null);
     setActivePathIndex(0);
     setExhausted(null);
+    setTimedOut(null);
+    setRateLimitNotice(null);
     setErrorMessage(null);
     setOnServerMap({});
     setQueueError(null);
@@ -185,22 +210,35 @@ export default function BridgePage() {
       withCredentials: true,
     });
     sourceRef.current = source;
+    let finished = false;
 
     source.addEventListener("progress", (event) => {
       setProgress(JSON.parse((event as MessageEvent).data));
     });
+    source.addEventListener("rate_limited", (event) => {
+      setRateLimitNotice(JSON.parse((event as MessageEvent).data));
+    });
+    source.addEventListener("timeout", (event) => {
+      finished = true;
+      setTimedOut(JSON.parse((event as MessageEvent).data));
+      setStatus("timeout");
+      closeSource();
+    });
     source.addEventListener("result", (event) => {
+      finished = true;
       setResult(JSON.parse((event as MessageEvent).data));
       setActivePathIndex(0);
       setStatus("solved");
       closeSource();
     });
     source.addEventListener("exhausted", (event) => {
+      finished = true;
       setExhausted(JSON.parse((event as MessageEvent).data));
       setStatus("exhausted");
       closeSource();
     });
     source.addEventListener("error", (event) => {
+      finished = true;
       // The server sends a named "error" event on solve failure, but the
       // browser also fires a plain (dataless) "error" event on connection
       // loss - only the former carries a MessageEvent.data payload.
@@ -220,6 +258,12 @@ export default function BridgePage() {
     });
     source.addEventListener("done", () => {
       closeSource();
+      // Safety net: a stream that ends without a result/exhausted/timeout/error
+      // event must never leave the spinner running forever.
+      if (!finished) {
+        setErrorMessage("The solver stopped without returning a result.");
+        setStatus("error");
+      }
     });
   }
 
@@ -227,6 +271,7 @@ export default function BridgePage() {
     closeSource();
     setStatus("idle");
     setProgress(null);
+    setRateLimitNotice(null);
   }
 
   function retryWithHigherDepth() {
@@ -370,23 +415,65 @@ export default function BridgePage() {
         </div>
 
         {status === "streaming" && (
-          <div className="flex items-center gap-3 rounded-xl border border-app-border bg-app-surface px-5 py-4">
-            <Loader2 className="h-5 w-5 shrink-0 animate-spin text-accent" />
-            <div className="text-sm text-zinc-300">
-              {progress ? (
-                <>
-                  Searching depth {progress.depth} from start and target (up to {maxDepth} hops
-                  total) &middot; {progress.tmdb_calls} TMDB calls &middot; {progress.cache_hits}{" "}
-                  cache hits &middot; {(progress.elapsed_ms / 1000).toFixed(1)}s
-                  <p className="mt-0.5 text-xs text-zinc-500">
-                    Frontier: {progress.frontier_forward} forward / {progress.frontier_backward}{" "}
-                    backward
-                  </p>
-                </>
-              ) : (
-                "Starting search..."
-              )}
+          <div className="flex flex-col gap-3 rounded-xl border border-app-border bg-app-surface px-5 py-4">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-accent" />
+              <div className="min-w-0 text-sm text-zinc-300">
+                {progress ? (
+                  <>
+                    Searching depth {progress.depth} from start and target (up to {maxDepth} hops
+                    total) &middot; {progress.tmdb_calls} TMDB calls &middot; {progress.cache_hits}{" "}
+                    cache hits &middot; {(progress.elapsed_ms / 1000).toFixed(1)}s
+                    <p className="mt-0.5 text-xs text-zinc-500">
+                      Frontier: {progress.frontier_forward} forward / {progress.frontier_backward}{" "}
+                      backward
+                    </p>
+                  </>
+                ) : (
+                  "Starting search..."
+                )}
+              </div>
             </div>
+            {rateLimitNotice ? (
+              <div
+                role="status"
+                className="flex items-center gap-2 rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs font-medium text-amber-300"
+              >
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                API rate limit reached. Pausing search for a moment...
+                <span className="ml-auto shrink-0 text-amber-400/70">
+                  pause #{rateLimitNotice.rate_limit_pauses}
+                </span>
+              </div>
+            ) : (
+              !!progress?.rate_limit_pauses && (
+                <p className="text-xs text-amber-400/70">
+                  Paused {progress.rate_limit_pauses}x so far to stay under TMDB&apos;s rate limit.
+                </p>
+              )
+            )}
+          </div>
+        )}
+
+        {status === "timeout" && timedOut && (
+          <div className="flex flex-col gap-3 rounded-xl border border-amber-900/50 bg-amber-950/20 px-5 py-4">
+            <div className="flex items-center gap-2.5 text-sm font-medium text-amber-300">
+              <Clock className="h-4 w-4 shrink-0" />
+              Search timed out before a path could be found.
+            </div>
+            <p className="text-xs text-amber-400/80">
+              Reached depth {timedOut.depth_reached} after {(timedOut.elapsed_ms / 1000).toFixed(0)}s and{" "}
+              {timedOut.tmdb_calls} TMDB calls. Results so far are cached, so trying again resumes faster. You
+              can also raise the solver timeout in Settings.
+            </p>
+            <button
+              type="button"
+              onClick={() => startSolve()}
+              className="flex w-fit items-center gap-1.5 rounded-md border border-amber-800 px-3 py-1.5 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-900/30"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Try Again
+            </button>
           </div>
         )}
 

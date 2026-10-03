@@ -61,6 +61,7 @@ class CacheRepo:
         row.release_date = movie.get("release_date")
         row.poster_path = movie.get("poster_path")
         row.overview = movie.get("overview") or ""
+        row.tagline = movie.get("tagline") or ""
         row.origin_country = json.dumps(movie.get("origin_country") or [])
         row.original_language = movie.get("original_language")
         row.runtime = movie.get("runtime")

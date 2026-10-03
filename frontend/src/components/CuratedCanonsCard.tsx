@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, Download, Loader2, XCircle } from "lucide-
 import Toast, { type ToastState } from "./Toast";
 import SyncBadge from "./SyncBadge";
 import { useCuratedLists } from "../lib/queries";
-import { postSse } from "../lib/sse";
+import { describeProgress, runTask } from "../lib/tasks";
 import type { CuratedListSummary } from "../types/api";
 
 const linkButtonClass =
@@ -27,35 +27,42 @@ export default function CuratedCanonsCard() {
   const [watchlistUsername, setWatchlistUsername] = useState("");
   const [watchlistSyncedAt, setWatchlistSyncedAt] = useState<string | null>(null);
   const [watchlistWarning, setWatchlistWarning] = useState<string | null>(null);
+  const [watchlistProgress, setWatchlistProgress] = useState<string | null>(null);
   const syncWatchlist = useMutation({
-    mutationFn: () => postSse("/curated/watchlist/sync", { letterboxd_username: watchlistUsername }),
-    onMutate: () => setWatchlistWarning(null),
-    onSuccess: (events) => {
-      const result = events.find((e) => e.event === "result")?.data as
-        | { matched: number; total_films: number }
-        | undefined;
-      const errorEvent = events.find((e) => e.event === "error");
-      if (errorEvent) {
-        const error = errorEvent.data as { code?: string; message?: string } | null;
+    mutationFn: () =>
+      runTask<{ matched: number; total_films: number }>(
+        "/curated/watchlist/sync",
+        { letterboxd_username: watchlistUsername },
+        (task) => setWatchlistProgress(describeProgress(task)),
+      ),
+    onMutate: () => {
+      setWatchlistWarning(null);
+      setWatchlistProgress("Queued...");
+    },
+    onSuccess: (task) => {
+      if (task.status === "failed") {
+        const error = task.progress_data?.error;
         if (error?.code === "watchlist_not_found") {
           setWatchlistWarning(
             "Watchlist not found or private. Check the username, and make sure the watchlist is public on Letterboxd.",
           );
         } else {
-          const detail = error?.message;
+          const detail = error?.message ?? task.error;
           setToast({ type: "error", message: `Watchlist sync failed${detail ? `: ${detail}` : "."}` });
         }
-      } else {
-        setWatchlistSyncedAt(new Date().toISOString());
-        setToast({
-          type: "success",
-          message: result
-            ? `Synced ${result.matched}/${result.total_films} watchlist films.`
-            : "Watchlist synced.",
-        });
+        return;
       }
+      const result = task.progress_data?.result;
+      setWatchlistSyncedAt(new Date().toISOString());
+      setToast({
+        type: "success",
+        message: result
+          ? `Synced ${result.matched}/${result.total_films} watchlist films.`
+          : "Watchlist synced.",
+      });
     },
     onError: () => setToast({ type: "error", message: "Watchlist sync failed." }),
+    onSettled: () => setWatchlistProgress(null),
   });
 
   const createCustom = useMutation({
@@ -85,13 +92,10 @@ export default function CuratedCanonsCard() {
   async function handleSync(list: CuratedListSummary) {
     setSyncingId(list.id);
     try {
-      const events = await postSse(`/curated/sync/${list.id}`);
-      const result = events.find((e) => e.event === "result")?.data as
-        | { matched: number; total_films: number }
-        | undefined;
-      const errorEvent = events.find((e) => e.event === "error");
-      if (errorEvent) {
-        setToast({ type: "error", message: "Sync failed - see server logs." });
+      const task = await runTask<{ matched: number; total_films: number }>(`/curated/sync/${list.id}`);
+      const result = task.progress_data?.result;
+      if (task.status === "failed") {
+        setToast({ type: "error", message: `Sync failed: ${task.error ?? "see server logs."}` });
       } else {
         setToast({
           type: "success",
@@ -236,7 +240,7 @@ export default function CuratedCanonsCard() {
               ) : (
                 <CheckCircle2 className="h-3.5 w-3.5" />
               )}
-              Sync Watchlist
+              {watchlistProgress ? `Syncing... ${watchlistProgress}` : "Sync Watchlist"}
             </button>
           </div>
           {watchlistWarning && (

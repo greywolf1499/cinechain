@@ -3,7 +3,6 @@ sync persistence (via a monkeypatched scraper - no real network), and the
 bulk badges lookup used by movie cards across the app.
 """
 
-import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -51,6 +50,16 @@ def _fake_scrape(films):
                 {"stage": "page_done", "current": len(films), "total": None, "message": "..."})
         return {"is_ranked": True, "total_films": len(films), "films": films}
     return _scrape
+
+
+def _run_task(client, path, body=None, expected="completed"):
+    """POSTs a task-backed endpoint (202 + task id) and returns the finished task.
+    TestClient runs FastAPI BackgroundTasks to completion before returning."""
+    resp = client.post(path, json=body) if body is not None else client.post(path)
+    assert resp.status_code == 202, resp.text
+    task = client.get(f"/api/tasks/{resp.json()['id']}").json()
+    assert task["status"] == expected, task
+    return task
 
 
 def test_curated_lists_returns_all_four_presets_unsynced_by_default(client):
@@ -119,10 +128,10 @@ def test_sync_preset_persists_badges_and_updates_list_metadata(client, monkeypat
     monkeypatch.setattr(
         letterboxd, "scrape_letterboxd_list", _fake_scrape(films))
 
-    resp = client.post("/api/curated/sync/sight-and-sound-2022")
-    assert resp.status_code == 200
-    assert "event: result" in resp.text
-    assert "event: done" in resp.text
+    task = _run_task(client, "/api/curated/sync/sight-and-sound-2022")
+    assert task["name"] == "curated_list_sync"
+    assert task["progress_data"]["result"] == {"matched": 2, "total_films": 2, "is_ranked": True}
+    assert task["progress_data"]["progress"]["stage"] == "page_done"
 
     lists_resp = client.get("/api/curated/lists")
     ss22 = next(row for row in lists_resp.json()
@@ -169,11 +178,9 @@ def test_watchlist_sync_persists_for_current_user(client, monkeypatch):
     monkeypatch.setattr(
         letterboxd, "scrape_letterboxd_watchlist", _fake_scrape(films))
 
-    resp = client.post("/api/curated/watchlist/sync",
-                       json={"letterboxd_username": "alice_lb"})
-    assert resp.status_code == 200
-    assert "event: result" in resp.text
-    assert "event: done" in resp.text
+    task = _run_task(client, "/api/curated/watchlist/sync", {"letterboxd_username": "alice_lb"})
+    assert task["name"] == "watchlist_sync"
+    assert task["progress_data"]["result"] == {"matched": 1, "total_films": 1}
 
 
 # ---------------------------------------------------------
@@ -337,7 +344,7 @@ def test_enabling_syncing_and_disabling_a_discovered_list(client, monkeypatch):
         letterboxd, "scrape_letterboxd_list",
         _fake_scrape([{"title": "Cleo from 5 to 7", "year": 1962, "slug": "cleo-1962",
                        "tmdb_id": 4325, "rank": 1}]))
-    assert client.post(f"/api/curated/sync/{women['id']}").status_code == 200
+    _run_task(client, f"/api/curated/sync/{women['id']}")
 
     enabled = next(row for row in client.get("/api/curated/lists").json() if row["id"] == women["id"])
     assert enabled["is_enabled"] is True
@@ -390,11 +397,9 @@ def test_watchlist_sync_tolerates_missing_title_and_duplicates(client, monkeypat
     monkeypatch.setattr(
         letterboxd, "scrape_letterboxd_watchlist", _fake_scrape(films))
 
-    resp = client.post("/api/curated/watchlist/sync",
-                       json={"letterboxd_username": "alice_lb"})
-    assert resp.status_code == 200
-    assert "event: error" not in resp.text
-    assert '"matched": 1' in resp.text
+    task = _run_task(client, "/api/curated/watchlist/sync", {"letterboxd_username": "alice_lb"})
+    assert "error" not in task["progress_data"]
+    assert task["progress_data"]["result"]["matched"] == 1
 
 
 def test_watchlist_sync_404_emits_structured_error(client, monkeypatch):
@@ -410,18 +415,15 @@ def test_watchlist_sync_404_emits_structured_error(client, monkeypatch):
 
     monkeypatch.setattr(letterboxd, "fetch_html", not_found)
 
-    resp = client.post("/api/curated/watchlist/sync",
-                       json={"letterboxd_username": "ghost_user"})
+    task = _run_task(client, "/api/curated/watchlist/sync",
+                     {"letterboxd_username": "ghost_user"}, expected="failed")
 
-    assert resp.status_code == 200
-    error_line = next(line for line in resp.text.splitlines()
-                      if line.startswith("data: ") and "watchlist_not_found" in line)
-    body = json.loads(error_line.removeprefix("data: "))
-    assert body["code"] == "watchlist_not_found"
-    assert body["status"] == 404
-    assert body["username"] == "ghost_user"
-    assert "private" in body["message"]
-    assert "event: result" not in resp.text
+    error = task["progress_data"]["error"]
+    assert error["code"] == "watchlist_not_found"
+    assert error["status"] == 404
+    assert error["username"] == "ghost_user"
+    assert "private" in error["message"]
+    assert "result" not in task["progress_data"]
 
 
 def test_image_proxy_requires_login_and_blocks_foreign_hosts(client):

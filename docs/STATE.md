@@ -1,4 +1,4 @@
 # CineChain Project State
-**Current Phase:** Phase 17c: Curator Overhaul & Image Proxy
-**Current Task:** Removing the curator modal, building dedicated list pages, and implementing a JIT image proxy.
-**Next Steps:** Phase 17c complete and committed. Await human confirmation to begin Phase 17d.
+**Current Phase:** Phase 18a: Multi-Tenant Auth & Zero-Daemon Task Runner
+**Current Task:** Implementing JWT/HTTP-Only cookie auth and the SQLite-backed FastAPI BackgroundTasks runner.
+**Next Steps:** Phase 18a complete and committed. Await human confirmation to begin Phase 18b.

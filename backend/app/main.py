@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,12 +17,29 @@ from app.api.routes_movies import router as movies_router
 from app.api.routes_runs import router as runs_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_system import router as system_router
+from app.api.routes_tasks import router as tasks_router
 from app.api.routes_users import router as users_router
 from app.config import get_settings
 from app.integrations.omdb import OMDbClient
+from app.services import task_runner
 from app.services.tmdb import TMDBClient
 
+logger = logging.getLogger(__name__)
+
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _fail_interrupted_tasks() -> None:
+    """Jobs left pending/running by a previous process can never finish."""
+    from app.db import engine
+
+    try:
+        interrupted = task_runner.fail_interrupted_tasks(engine)
+    except Exception:
+        logger.warning("Could not reconcile interrupted tasks", exc_info=True)
+        return
+    if interrupted:
+        logger.warning("Marked %d interrupted task(s) as failed", interrupted)
 
 
 @asynccontextmanager
@@ -31,6 +49,7 @@ async def lifespan(app: FastAPI):
     # the pathfinder's DB reads) so a burst of concurrent sync work can't
     # spawn unbounded OS threads on the host laptop.
     anyio.to_thread.current_default_thread_limiter().total_tokens = 12
+    _fail_interrupted_tasks()
     async with httpx.AsyncClient(timeout=15.0) as http_client:
         app.state.http_client = http_client
         app.state.tmdb = TMDBClient(http_client)
@@ -52,6 +71,7 @@ app.include_router(movies_router, prefix=api_router_prefix)
 app.include_router(settings_router, prefix=api_router_prefix)
 app.include_router(curated_router, prefix=api_router_prefix)
 app.include_router(images_router, prefix=api_router_prefix)
+app.include_router(tasks_router, prefix=api_router_prefix)
 
 # Serve built frontend assets (JS/CSS/images) under /assets.
 assets_dir = STATIC_DIR / "assets"

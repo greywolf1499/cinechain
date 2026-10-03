@@ -20,12 +20,13 @@ from urllib.parse import parse_qs, urlparse
 
 import anyio
 from curl_cffi import requests as curl_requests
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, case, col, func, or_, select
 
 from app.api.deps import get_current_admin, get_current_user
+from app.api.routes_tasks import TaskOut
 from app.config import get_settings
 from app.db import get_session
 from app.models.curated import (
@@ -36,7 +37,7 @@ from app.models.curated import (
 )
 from app.models.run import RunStep
 from app.models.user import User
-from app.services import image_cache, letterboxd, settings_repo
+from app.services import image_cache, letterboxd, settings_repo, task_runner
 from app.utils.ids import utcnow
 
 logger = logging.getLogger(__name__)
@@ -301,47 +302,41 @@ def _persist_sync_result(session: Session, curated_list: CuratedList, result: di
     return len(matched), len(films)
 
 
-@router.post("/sync/{list_id}")
-async def sync_curated_list(
+@router.post("/sync/{list_id}", status_code=status.HTTP_202_ACCEPTED, response_model=TaskOut)
+def sync_curated_list(
     list_id: str,
-    request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
-    _admin: User = Depends(get_current_admin),
-) -> StreamingResponse:
+    admin: User = Depends(get_current_admin),
+) -> TaskOut:
+    """Starts a background sync (a `SystemTask`) and returns its id immediately;
+    poll `GET /api/tasks/{id}` or stream `GET /api/tasks/stream` for progress."""
     curated_list = _get_or_create_list(session, list_id)
     tmdb_api_key = _resolve_tmdb_api_key(session)
+    row_id, url, title = curated_list.id, curated_list.url, curated_list.title
 
-    async def event_source():
-        result: dict | None = None
+    def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
         try:
-            async for kind, payload in run_sync_scrape(
-                letterboxd.scrape_letterboxd_list, curated_list.url, tmdb_api_key=tmdb_api_key
-            ):
-                if await request.is_disconnected():
-                    break
-                if kind == "progress":
-                    yield f"event: progress\ndata: {json.dumps(payload)}\n\n"
-                elif kind == "result":
-                    result = payload
-                elif kind == "error":
-                    curated_list.last_sync_error = payload["message"]
-                    session.add(curated_list)
-                    session.commit()
-                    yield f"event: error\ndata: {json.dumps(payload)}\n\n"
-        finally:
-            pass
+            result = letterboxd.scrape_letterboxd_list(
+                url, tmdb_api_key=tmdb_api_key, progress_callback=ctx.progress)
+        except Exception as exc:
+            with ctx.session() as db:
+                failed = db.get(CuratedList, row_id)
+                if failed is not None:
+                    failed.last_sync_error = str(exc)
+                    db.add(failed)
+                    db.commit()
+            raise
+        with ctx.session() as db:
+            row = db.get(CuratedList, row_id)
+            matched, total = _persist_sync_result(db, row, result)
+        return {"matched": matched, "total_films": total, "is_ranked": result["is_ranked"]}
 
-        if result is not None:
-            matched, total = _persist_sync_result(
-                session, curated_list, result)
-            yield (
-                "event: result\ndata: "
-                f"{json.dumps({'matched': matched, 'total_films': total, 'is_ranked': result['is_ranked']})}"
-                "\n\n"
-            )
-        yield "event: done\ndata: {}\n\n"
-
-    return StreamingResponse(event_source(), media_type="text/event-stream")
+    task, _ = task_runner.submit_task(
+        background_tasks, session, "curated_list_sync", work,
+        user_id=admin.id, dedupe_key=f"curated_list_sync:{row_id}",
+        label=f"Syncing {title}", describe_error=_error_payload)
+    return TaskOut.from_model(task)
 
 
 class CustomListRequest(BaseModel):
@@ -387,13 +382,16 @@ class WatchlistSyncRequest(BaseModel):
     letterboxd_username: str
 
 
-@router.post("/watchlist/sync")
-async def sync_watchlist(
+@router.post("/watchlist/sync", status_code=status.HTTP_202_ACCEPTED, response_model=TaskOut)
+def sync_watchlist(
     payload: WatchlistSyncRequest,
-    request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
-) -> StreamingResponse:
+) -> TaskOut:
+    """Starts a background watchlist sync and returns the `SystemTask` immediately,
+    so a huge watchlist can't hit an HTTP timeout. Errors (e.g. a private or
+    deleted account) land on the task as `progress_data.error.code`."""
     tmdb_api_key = _resolve_tmdb_api_key(session)
     user_id = current_user.id
     try:
@@ -402,39 +400,22 @@ async def sync_watchlist(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    async def event_source():
-        result: dict | None = None
-        async for kind, event_payload in run_sync_scrape(
-            letterboxd.scrape_letterboxd_watchlist, username, tmdb_api_key=tmdb_api_key
-        ):
-            if await request.is_disconnected():
-                break
-            if kind == "progress":
-                yield f"event: progress\ndata: {json.dumps(event_payload)}\n\n"
-            elif kind == "result":
-                result = event_payload
-            elif kind == "error":
-                yield f"event: error\ndata: {json.dumps(event_payload)}\n\n"
+    def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
+        result = letterboxd.scrape_letterboxd_watchlist(
+            username, tmdb_api_key=tmdb_api_key, progress_callback=ctx.progress)
+        try:
+            with ctx.session() as db:
+                matched = _persist_watchlist(db, user_id, username, result["films"])
+        except Exception as exc:
+            logger.exception("Watchlist persistence failed for %s", username)
+            raise RuntimeError(f"Failed to save watchlist: {exc.__class__.__name__}") from exc
+        return {"matched": matched, "total_films": len(result["films"])}
 
-        if result is not None:
-            try:
-                matched = _persist_watchlist(
-                    session, user_id, username, result["films"])
-            except Exception as exc:
-                session.rollback()
-                logger.exception(
-                    "Watchlist persistence failed for %s", username)
-                message = f"Failed to save watchlist: {exc.__class__.__name__}"
-                error = {"code": "persist_failed", "message": message}
-                yield f"event: error\ndata: {json.dumps(error)}\n\n"
-            else:
-                yield (
-                    "event: result\ndata: "
-                    f"{json.dumps({'matched': matched, 'total_films': len(result['films'])})}\n\n"
-                )
-        yield "event: done\ndata: {}\n\n"
-
-    return StreamingResponse(event_source(), media_type="text/event-stream")
+    task, _ = task_runner.submit_task(
+        background_tasks, session, "watchlist_sync", work,
+        user_id=user_id, dedupe_key=f"watchlist_sync:{user_id}:{username}",
+        label=f"Letterboxd watchlist ({username})", describe_error=_error_payload)
+    return TaskOut.from_model(task)
 
 
 def _persist_watchlist(

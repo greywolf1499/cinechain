@@ -7,7 +7,7 @@ import ListCover from "./ListCover";
 import SyncBadge from "./SyncBadge";
 import type { ToastState } from "./Toast";
 import { ApiError, api } from "../lib/api";
-import { postSse } from "../lib/sse";
+import { runTask } from "../lib/tasks";
 import type { CuratedListSummary } from "../types/api";
 
 const buttonClass =
@@ -72,11 +72,11 @@ export default function CuratedListCard({
   }
 
   async function sync(): Promise<string> {
-    const events = await postSse(`/curated/sync/${list.id}`);
-    if (events.some((e) => e.event === "error")) throw new Error(`Sync failed for ${list.title}.`);
-    const result = events.find((e) => e.event === "result")?.data as
-      | { matched: number; total_films: number }
-      | undefined;
+    const task = await runTask<{ matched: number; total_films: number }>(`/curated/sync/${list.id}`);
+    if (task.status === "failed") {
+      throw new Error(`Sync failed for ${list.title}: ${task.error ?? "unknown error"}`);
+    }
+    const result = task.progress_data?.result;
     return result ? `Synced ${result.matched}/${result.total_films} films for ${list.title}.` : "Synced.";
   }
 

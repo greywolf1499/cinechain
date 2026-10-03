@@ -116,3 +116,91 @@ def test_users_list_returns_summaries(client):
     resp = client.get("/api/users")
     assert resp.status_code == 200
     assert [u["username"] for u in resp.json()] == ["alice"]
+
+
+def test_session_cookie_is_an_httponly_jwt(client):
+    import jwt
+
+    _register(client)
+    resp = _login(client)
+    header = resp.headers["set-cookie"].lower()
+    assert "httponly" in header and "samesite=lax" in header
+    token = client.cookies.get("cinechain_session")
+    assert token.count(".") == 2
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert {"sub", "iat", "exp", "jti"} <= set(claims)
+    assert jwt.get_unverified_header(token)["alg"] == "HS256"
+
+
+def test_forged_unsigned_and_expired_tokens_are_rejected(client):
+    import time
+
+    import jwt
+
+    from app.config import get_settings
+    from app.services.security import _get_secret_key
+
+    _register(client)
+    user_id = _login(client).json()["id"]
+    secret = _get_secret_key(get_settings())
+
+    def me_with(token):
+        client.cookies.set("cinechain_session", token)
+        return client.get("/api/auth/me").status_code
+
+    now = int(time.time())
+    good = {"sub": user_id, "iat": now, "exp": now + 60}
+    assert me_with(jwt.encode(good, secret, algorithm="HS256")) == 200
+    assert me_with(jwt.encode(good, "x" * 64, algorithm="HS256")) == 401  # wrong key
+    assert me_with(jwt.encode(good, None, algorithm="none")) == 401  # alg=none
+    assert me_with(jwt.encode({**good, "exp": now - 10}, secret, algorithm="HS256")) == 401
+    assert me_with(jwt.encode({"iat": now, "exp": now + 60}, secret, algorithm="HS256")) == 401
+    assert me_with("garbage") == 401
+
+
+def test_two_devices_are_logged_in_simultaneously_and_independently(client, config_dir):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    _register(client, username="partner_a", display_name="Partner A")
+    # Partner B's account is created by the (logged-in) admin.
+    _login(client, "partner_a")
+    assert _register(client, username="partner_b", display_name="Partner B").status_code == 201
+
+    phone_a = client
+    with TestClient(app) as phone_b:
+        assert _login(phone_a, "partner_a").status_code == 200
+        assert _login(phone_b, "partner_b").status_code == 200
+
+        assert phone_a.get("/api/auth/me").json()["username"] == "partner_a"
+        assert phone_b.get("/api/auth/me").json()["username"] == "partner_b"
+
+        # A second device for the same account stays valid when the first logs out.
+        with TestClient(app) as tablet_a:
+            _login(tablet_a, "partner_a")
+            assert phone_a.post("/api/auth/logout").status_code == 204
+            assert tablet_a.get("/api/auth/me").status_code == 200
+        assert phone_b.get("/api/auth/me").status_code == 200
+
+
+def test_me_renews_an_aging_session_cookie(client):
+    import time
+
+    import jwt
+
+    from app.config import get_settings
+    from app.services.security import _get_secret_key
+
+    _register(client)
+    user_id = _login(client).json()["id"]
+    old = int(time.time()) - 8 * 24 * 3600
+    stale = jwt.encode({"sub": user_id, "iat": old, "exp": old + 30 * 24 * 3600},
+                       _get_secret_key(get_settings()), algorithm="HS256")
+    client.cookies.clear()
+
+    resp = client.get("/api/auth/me", headers={"Cookie": f"cinechain_session={stale}"})
+
+    assert resp.status_code == 200
+    assert "cinechain_session=" in resp.headers["set-cookie"]
+    assert stale not in resp.headers["set-cookie"]

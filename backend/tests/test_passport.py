@@ -348,3 +348,21 @@ def test_backfill_directors_fills_missing_cache_entries(client):
     body = client.get("/api/passport/me").json()
     assert body["top_directors"] == [{"person_id": 21684, "name": "Bong Joon Ho", "count": 1}]
     assert body["directors_coverage"]["movies_with_directors"] == 1
+
+
+def test_backfill_counts_films_missing_from_tmdb_as_failed(client):
+    me = client.get("/api/auth/me").json()["id"]
+    with Session(client.db_engine) as session:
+        run = Run(name="Plain")
+        session.add(run)
+        session.commit()
+        _seed_watch(session, run, me, 496243, year=2019, origin='["KR"]')
+        _seed_watch(session, run, me, 777, year=2000, origin='["US"]')  # not on TMDB
+        session.commit()
+
+    with respx.mock:
+        _mock_tmdb()
+        respx.get(f"{TMDB}/movie/777").mock(return_value=httpx.Response(404, json={}))
+        task = _task(client, client.post("/api/passport/backfill-directors"))
+
+    assert task["progress_data"]["result"] == {"looked_up": 1, "failed": 1, "total": 2}

@@ -41,8 +41,9 @@ async function request<T>(
 	path: string,
 	body?: unknown,
 ): Promise<T> {
-	// A Blob/File is sent as-is (raw upload); anything else is JSON-encoded.
-	const isRaw = body instanceof Blob;
+	// A Blob/File (raw upload) or FormData (multipart) is sent as-is, letting the
+	// browser set the Content-Type; anything else is JSON-encoded.
+	const isRaw = body instanceof Blob || body instanceof FormData;
 	const response = await fetch(`${API_BASE}${path}`, {
 		method,
 		credentials: "include",

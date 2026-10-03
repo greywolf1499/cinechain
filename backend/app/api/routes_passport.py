@@ -143,10 +143,11 @@ def backfill_directors(
         with ctx.session() as db:
             for index, movie_id in enumerate(missing, start=1):
                 try:
-                    await fetch_with_backoff(
+                    found = await fetch_with_backoff(
                         lambda movie_id=movie_id: cache_repo.get_movie_directors(db, tmdb, movie_id),
                         time.monotonic() + passport_import.PER_CALL_DEADLINE_SECONDS, None)
-                    done += 1
+                    done += 0 if found is None else 1  # None = the film is gone from TMDB
+                    failed += 1 if found is None else 0
                 except Exception:  # noqa: BLE001 - one bad film must not stop the backfill
                     failed += 1
                 if index % 10 == 0 or index == len(missing):

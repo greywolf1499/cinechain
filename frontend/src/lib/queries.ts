@@ -12,6 +12,7 @@ import type {
 	ListSort,
 	ListState,
 	Page,
+	Passport,
 	DiscoveryCandidate,
 	EngineMeta,
 	MovieDetail,
@@ -343,5 +344,14 @@ export function useDeleteStep(runId: string) {
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 		},
+	});
+}
+
+export const PASSPORT_KEY = ["passport", "me"] as const;
+
+export function usePassport() {
+	return useQuery({
+		queryKey: PASSPORT_KEY,
+		queryFn: () => api.get<Passport>("/passport/me"),
 	});
 }

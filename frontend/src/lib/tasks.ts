@@ -46,9 +46,11 @@ const isFinished = (task: { status: TaskStatus }) =>
 export async function waitForTask<R = Record<string, unknown>>(
 	taskId: string,
 	onUpdate?: (task: SystemTask<R>) => void,
+	signal?: AbortSignal,
 ): Promise<SystemTask<R>> {
 	let failures = 0;
 	for (;;) {
+		signal?.throwIfAborted();
 		try {
 			const task = await api.get<SystemTask<R>>(`/tasks/${taskId}`);
 			failures = 0;
@@ -63,21 +65,23 @@ export async function waitForTask<R = Record<string, unknown>>(
 	}
 }
 
-/** POSTs an endpoint that returns 202 + a SystemTask, then waits for it. */
+/** POSTs an endpoint that returns 202 + a SystemTask (JSON or FormData body),
+ * then waits for it. */
 export async function runTask<R = Record<string, unknown>>(
 	path: string,
 	body?: unknown,
 	onUpdate?: (task: SystemTask<R>) => void,
+	signal?: AbortSignal,
 ): Promise<SystemTask<R>> {
 	const started = await api.post<SystemTask<R>>(path, body);
 	onUpdate?.(started);
 	return isFinished(started)
 		? started
-		: waitForTask<R>(started.id, onUpdate);
+		: waitForTask<R>(started.id, onUpdate, signal);
 }
 
 /** "120/400 films" style progress text for a running task. */
-export function describeProgress(task: SystemTask, unit = "films"): string {
+export function describeProgress(task: SystemTask<unknown>, unit = "films"): string {
 	if (task.status === "pending") return "Queued...";
 	const progress = task.progress_data?.progress;
 	if (progress?.current != null) {

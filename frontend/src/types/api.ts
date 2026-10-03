@@ -429,3 +429,45 @@ export interface CanonBadge {
 	badge_color: string;
 	badge_emoji?: string | null;
 }
+
+// --- passport (schemas/passport.py) ---
+
+export interface PassportCountry {
+	/** ISO 3166-1 alpha-2, uppercase. */
+	code: string;
+	count: number;
+	/** Historical codes folded into this one (e.g. "SU" into "RU"). */
+	merged_from: string[];
+}
+
+export interface PassportDirector {
+	person_id: number;
+	name: string;
+	count: number;
+}
+
+export interface Passport {
+	total_movies_watched: number;
+	total_watches: number;
+	decades_distribution: Record<string, number>;
+	countries: PassportCountry[];
+	top_directors: PassportDirector[];
+	directors_coverage: { movies_with_directors: number; movies_total: number };
+}
+
+export interface DiaryImportResult {
+	source: "csv" | "rss";
+	run_id: string;
+	total_rows: number;
+	imported: number;
+	skipped_duplicates: number;
+	unresolved_count: number;
+	unresolved: { title: string; year: number | null; reason: string }[];
+	rate_limit_pauses: number;
+}
+
+export interface BackfillResult {
+	looked_up: number;
+	failed: number;
+	total: number;
+}

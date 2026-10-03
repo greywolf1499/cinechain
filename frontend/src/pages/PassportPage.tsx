@@ -1,135 +1,159 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Award, BookUser, Loader2 } from "lucide-react";
-import PageHeading from "../components/PageHeading";
+import { lazy, Suspense, type ReactNode } from "react";
+import { BookUser, Clapperboard, Loader2 } from "lucide-react";
+import DecadesChart from "../components/DecadesChart";
 import EmptyState from "../components/EmptyState";
+import ImportHistory from "../components/ImportHistory";
+import PageHeading from "../components/PageHeading";
+import RunStatsSection from "../components/RunStatsSection";
+import { countryName } from "../lib/countryNames";
 import { isoToFlagEmoji } from "../lib/countries";
-import { useRunStats, useRuns } from "../lib/queries";
+import { usePassport } from "../lib/queries";
+import type { Passport } from "../types/api";
 
-const MEDALS = ["🥇", "🥈", "🥉"];
+// The world-map path data is ~100KB gzipped, so it loads only when the Passport opens.
+const WorldMap = lazy(() => import("../components/WorldMap"));
 
 export default function PassportPage() {
-  const { data: runs, isLoading: runsLoading } = useRuns();
-  const [selectedRunId, setSelectedRunId] = useState("");
-
-  useEffect(() => {
-    if (!selectedRunId && runs && runs.length > 0) {
-      setSelectedRunId(runs[0].id);
-    }
-  }, [runs, selectedRunId]);
-
-  const { data: stats, isLoading } = useRunStats(selectedRunId || undefined);
+  const { data: passport, isLoading, error } = usePassport();
 
   return (
     <div>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <PageHeading title="Passport" subtitle="Cultural breadth, decades traversed, keystone actors" />
-        {runs && runs.length > 0 && (
-          <select
-            value={selectedRunId}
-            onChange={(e) => setSelectedRunId(e.target.value)}
-            className="rounded-md border border-app-border bg-app-surface px-3 py-2 text-sm text-zinc-200 focus:border-accent focus:outline-none"
-          >
-            {runs.map((run) => (
-              <option key={run.id} value={run.id}>
-                {run.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <PageHeading
+        title="Passport"
+        subtitle="Everything you've watched across every run and your imported Letterboxd history"
+      />
 
-      {runsLoading || (runs && runs.length > 0 && (isLoading || !stats)) ? (
+      {isLoading && (
         <div className="flex justify-center py-16">
           <Loader2 className="h-6 w-6 animate-spin text-zinc-600" />
         </div>
-      ) : !runs || runs.length === 0 ? (
-        <EmptyState
-          icon={BookUser}
-          title="No runs yet"
-          description="Start a run and log a few films to build up your passport stats."
-        />
-      ) : stats ? (
-        <div className="flex flex-col gap-6">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <StatCard label="Hops Traveled" value={stats.total_hops} />
-            <StatCard label="Countries Visited" value={stats.countries.length} />
-            <StatCard label="Decades Spanned" value={stats.decades.length} />
+      )}
+      {error && <p className="text-sm text-red-400">Could not load your passport.</p>}
+
+      {passport && (
+        <div className="flex flex-col gap-8">
+          {passport.total_watches === 0 && (
+            <EmptyState
+              icon={BookUser}
+              title="Your passport is empty"
+              description="Log films in a run, or import your Letterboxd diary below, to start filling in the map."
+            />
+          )}
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard label="Films watched" value={passport.total_movies_watched} />
+            <StatCard label="Total watches" value={passport.total_watches} hint="rewatches included" />
+            <StatCard label="Countries visited" value={passport.countries.length} />
+            <StatCard label="Decades spanned" value={Object.keys(passport.decades_distribution).length} />
           </div>
 
-          <Section title="Origin Countries">
-            {stats.countries.length === 0 ? (
-              <p className="text-sm text-zinc-500">No watched films yet.</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {stats.countries.map((country) => (
-                  <span
-                    key={country}
-                    className="flex items-center gap-1.5 rounded-full border border-app-border bg-app-surface px-3 py-1.5 text-sm text-zinc-200"
-                  >
-                    <span>{isoToFlagEmoji(country)}</span>
-                    {country}
-                  </span>
-                ))}
-              </div>
-            )}
+          <Section title="Global Cinema Scratch-Off">
+            <Suspense fallback={<div className="flex h-64 items-center justify-center rounded-xl border border-app-border bg-app-bg"><Loader2 className="h-5 w-5 animate-spin text-zinc-600" /></div>}>
+              <WorldMap countries={passport.countries} />
+            </Suspense>
+            <CountryList countries={passport.countries} />
           </Section>
 
-          <Section title="Decades Traversed">
-            {stats.decades.length === 0 ? (
-              <p className="text-sm text-zinc-500">No watched films yet.</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {stats.decades.map((decade) => (
-                  <span
-                    key={decade}
-                    className="rounded-full bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent"
-                  >
-                    {decade}s
-                  </span>
-                ))}
-              </div>
-            )}
+          <div className="grid grid-cols-1 gap-8 xl:grid-cols-5">
+            <div className="xl:col-span-3">
+              <Section title="Films by Decade">
+                <DecadesChart distribution={passport.decades_distribution} />
+              </Section>
+            </div>
+            <div className="xl:col-span-2">
+              <Section title="Top Directors">
+                <TopDirectors passport={passport} />
+              </Section>
+            </div>
+          </div>
+
+          <Section title="Import History">
+            <ImportHistory coverage={passport.directors_coverage} />
           </Section>
 
-          <Section title="Keystone Actors">
-            {stats.keystone_actors.length === 0 ? (
-              <p className="text-sm text-zinc-500">No connecting actors recorded yet.</p>
-            ) : (
-              <div className="flex flex-col divide-y divide-app-border rounded-lg border border-app-border bg-app-surface">
-                {stats.keystone_actors.map((actor, index) => (
-                  <div key={actor.actor_id} className="flex items-center justify-between px-4 py-2.5">
-                    <div className="flex items-center gap-2.5">
-                      <span className="flex w-5 justify-center text-sm">
-                        {MEDALS[index] ?? <Award className="h-3.5 w-3.5 text-zinc-600" />}
-                      </span>
-                      <span className="text-sm text-zinc-200">{actor.actor_name}</span>
-                    </div>
-                    <span className="text-xs text-zinc-500">{actor.appearances}x</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Section>
+          <details className="group rounded-xl border border-app-border bg-app-surface">
+            <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-zinc-300">Per-run stats</summary>
+            <div className="border-t border-app-border px-5 py-4">
+              <RunStatsSection />
+            </div>
+          </details>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function CountryList({ countries }: { countries: Passport["countries"] }) {
+  if (countries.length === 0) return null;
+  return (
+    <ul className="mt-4 flex flex-wrap gap-2" aria-label="Visited countries">
+      {countries.map((country) => (
+        <li
+          key={country.code}
+          title={country.merged_from.length ? `Includes ${country.merged_from.join(", ")} (historical)` : undefined}
+          className="flex items-center gap-1.5 rounded-full border border-app-border bg-app-surface px-3 py-1 text-xs text-zinc-300"
+        >
+          <span aria-hidden="true">{isoToFlagEmoji(country.code)}</span>
+          {countryName(country.code)}
+          <span className="font-medium text-accent">{country.count}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TopDirectors({ passport }: { passport: Passport }) {
+  const { top_directors: directors, directors_coverage: coverage } = passport;
+  if (directors.length === 0) {
+    return (
+      <p className="rounded-xl border border-dashed border-app-border px-4 py-8 text-center text-sm text-zinc-500">
+        {coverage.movies_total > 0
+          ? "Director data hasn't been looked up yet - use the button under Import History."
+          : "No watched films yet."}
+      </p>
+    );
+  }
+  const max = directors[0].count;
+  return (
+    <ol className="flex flex-col divide-y divide-app-border rounded-xl border border-app-border bg-app-surface">
+      {directors.map((director, index) => (
+        <li key={director.person_id} className="flex flex-col gap-1.5 px-4 py-3">
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <span className="flex min-w-0 items-center gap-2.5 text-zinc-200">
+              <span className="w-4 shrink-0 text-center text-xs text-zinc-600">{index + 1}</span>
+              <Clapperboard className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+              <span className="truncate">{director.name}</span>
+            </span>
+            <span className="shrink-0 text-xs text-zinc-500">
+              {director.count} {director.count === 1 ? "film" : "films"}
+            </span>
+          </div>
+          <div className="h-1 overflow-hidden rounded-full bg-app-surface-hover">
+            <div className="h-full rounded-full bg-accent" style={{ width: `${(director.count / max) * 100}%` }} />
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function StatCard({ label, value, hint }: { label: string; value: number; hint?: string }) {
   return (
     <div className="rounded-xl border border-app-border bg-app-surface p-4">
-      <p className="text-2xl font-semibold text-zinc-100">{value}</p>
-      <p className="mt-1 text-xs text-zinc-500">{label}</p>
+      <p className="text-2xl font-semibold text-zinc-100">{value.toLocaleString()}</p>
+      <p className="mt-1 text-xs text-zinc-500">
+        {label}
+        {hint && <span className="text-zinc-600"> &middot; {hint}</span>}
+      </p>
     </div>
   );
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div>
-      <h2 className="mb-2.5 text-sm font-medium text-zinc-300">{title}</h2>
+    <section>
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">{title}</h2>
       {children}
-    </div>
+    </section>
   );
 }

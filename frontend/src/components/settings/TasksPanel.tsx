@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Clock, Loader2, Radio, XCircle } from "lucide-react";
 import { SettingsCard } from "./shared";
+import TaskProgressBar from "../TaskProgressBar";
 import { cn } from "../../lib/cn";
 import { useUsers } from "../../lib/queries";
 import { TASK_TITLES, describeProgress, useLiveTasks, type SystemTask } from "../../lib/tasks";
@@ -46,25 +47,6 @@ function StatusBadge({ status }: { status: SystemTask["status"] }) {
       <Icon className={cn("h-3 w-3", status === "running" && "animate-spin")} />
       {config.label}
     </span>
-  );
-}
-
-function ProgressBar({ task }: { task: SystemTask }) {
-  const progress = task.progress_data?.progress;
-  const known = progress?.total ? Math.min(100, Math.round(((progress.current ?? 0) / progress.total) * 100)) : null;
-  return (
-    <div
-      role="progressbar"
-      aria-valuenow={known ?? undefined}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      className="h-1.5 w-full overflow-hidden rounded-full bg-app-surface-hover"
-    >
-      <div
-        className={cn("h-full rounded-full bg-accent transition-[width] duration-500", known === null && "w-1/3 animate-pulse")}
-        style={known === null ? undefined : { width: `${known}%` }}
-      />
-    </div>
   );
 }
 
@@ -116,7 +98,7 @@ export default function TasksPanel() {
                   <StatusBadge status={task.status} />
                 </div>
               </div>
-              <ProgressBar task={task} />
+              <TaskProgressBar task={task} />
               <p className="text-[11px] text-zinc-400">
                 {describeProgress(task)}
                 {task.progress_data?.progress?.message && task.status === "running" && (

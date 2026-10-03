@@ -106,12 +106,16 @@ async def list_genres(
 @router.get("/movies/{tmdb_id}", response_model=MovieDetail)
 async def get_movie(
     tmdb_id: int,
+    refresh: bool = Query(default=False),
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
     omdb: OMDbClient = Depends(get_omdb_client),
     _current_user: User = Depends(get_current_user),
 ) -> MovieDetail:
-    movie = await cache_repo.get_movie(session, tmdb, tmdb_id)
+    movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=refresh)
+    if movie.overview is None and not refresh:
+        # NULL overview marks a stub cached from a lightweight TMDB payload.
+        movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=True)
     rating_row = await cache_repo.get_movie_ratings(session, tmdb, omdb, tmdb_id)
     ratings = (
         MovieRatings(

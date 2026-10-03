@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import queue as queue_module
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -34,6 +35,7 @@ from app.models.user import User
 from app.services import letterboxd, settings_repo
 from app.utils.ids import utcnow
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/curated", tags=["curated"])
 
 _SENTINEL = object()
@@ -67,7 +69,8 @@ async def run_sync_scrape(fn: Callable[..., dict], *args: Any, **kwargs: Any) ->
 
 def _resolve_tmdb_api_key(session: Session) -> str | None:
     overrides = settings_repo.get_overrides(session)
-    key = overrides.get("tmdb_api_key") or get_settings().tmdb_api_key
+    key = (overrides.get("tmdb_api_key")
+           or get_settings().tmdb_api_key or "").strip()
     return key or None
 
 
@@ -298,6 +301,7 @@ async def sync_watchlist(
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     tmdb_api_key = _resolve_tmdb_api_key(session)
+    user_id = current_user.id
     try:
         username = letterboxd.clean_username(payload.letterboxd_username)
     except ValueError as exc:
@@ -319,33 +323,59 @@ async def sync_watchlist(
                 yield f"event: error\ndata: {json.dumps({'message': str(event_payload)})}\n\n"
 
         if result is not None:
-            for row in session.exec(
-                select(LetterboxdWatchlist).where(
-                    LetterboxdWatchlist.user_id == current_user.id)
-            ).all():
-                session.delete(row)
-            session.commit()
-
-            matched = 0
-            for film in result["films"]:
-                if not film.get("tmdb_id"):
-                    continue
-                matched += 1
-                session.add(
-                    LetterboxdWatchlist(
-                        user_id=current_user.id, letterboxd_username=username,
-                        movie_id=film["tmdb_id"], title=film["title"], year=film.get(
-                            "year"),
-                    )
+            try:
+                matched = _persist_watchlist(
+                    session, user_id, username, result["films"])
+            except Exception as exc:
+                session.rollback()
+                logger.exception(
+                    "Watchlist persistence failed for %s", username)
+                message = f"Failed to save watchlist: {exc.__class__.__name__}"
+                yield f"event: error\ndata: {json.dumps({'message': message})}\n\n"
+            else:
+                yield (
+                    "event: result\ndata: "
+                    f"{json.dumps({'matched': matched, 'total_films': len(result['films'])})}\n\n"
                 )
-            session.commit()
-            yield (
-                "event: result\ndata: "
-                f"{json.dumps({'matched': matched, 'total_films': len(result['films'])})}\n\n"
-            )
         yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
+
+
+def _persist_watchlist(
+    session: Session, user_id: str, username: str, films: list[dict[str, Any]]
+) -> int:
+    """Replaces the user's stored watchlist atomically; tolerates scraped rows
+    with a missing title/year and duplicate TMDB ids."""
+    rows: list[LetterboxdWatchlist] = []
+    seen: set[int] = set()
+    for film in films:
+        try:
+            movie_id = int(film.get("tmdb_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not movie_id or movie_id in seen:
+            continue
+        seen.add(movie_id)
+        raw_year = film.get("year")
+        rows.append(
+            LetterboxdWatchlist(
+                user_id=user_id,
+                letterboxd_username=username,
+                movie_id=movie_id,
+                title=str(film.get("title") or film.get("slug") or movie_id),
+                year=raw_year if isinstance(raw_year, int) else None,
+            )
+        )
+
+    for old in session.exec(
+        select(LetterboxdWatchlist).where(
+            LetterboxdWatchlist.user_id == user_id)
+    ).all():
+        session.delete(old)
+    session.add_all(rows)
+    session.commit()
+    return len(rows)
 
 
 def _norm_url(url: str) -> str:

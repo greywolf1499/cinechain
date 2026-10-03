@@ -17,21 +17,20 @@ import {
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import AcquisitionControl from "./AcquisitionControl";
-import OnServerBadge from "./OnServerBadge";
+import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import RatingBadges from "./RatingBadges";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { profileUrl } from "../lib/tmdbImage";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
-import { useCanonBadgesBulk, useCreateStep, useDiscoverCandidates } from "../lib/queries";
+import { useCanonBadgesBulk, useCreateStep, useDiscoverCandidates, useMovieDetail } from "../lib/queries";
 import type {
   CastMember,
   DiscoveryCandidate,
   DiscoveryConnection,
   GenreOut,
   JellyfinItemSummary,
-  MovieDetail,
   MovieRatings,
   MovieSummary,
   RulesConfig,
@@ -564,7 +563,12 @@ function CandidateCard({
   const isLockedDuplicate = candidate.already_in_run && !allowRepeats;
 
   return (
-    <div className="flex h-full flex-col justify-between gap-2 rounded-lg border border-app-border bg-app-surface p-2.5">
+    <div
+      className={cn(
+        "flex h-full flex-col justify-between gap-2 rounded-lg border p-2.5",
+        onServerCardClass(onServer),
+      )}
+    >
       <div className="flex flex-col gap-2">
         <button
           type="button"
@@ -700,10 +704,7 @@ function MovieScreenView({
   onClose: () => void;
 }) {
   const navigate = useNavigate();
-  const { data: movie } = useQuery({
-    queryKey: ["movies", screen.movieId],
-    queryFn: () => api.get<MovieDetail>(`/movies/${screen.movieId}`),
-  });
+  const { movie, isHydrating } = useMovieDetail(screen.movieId);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
@@ -821,7 +822,7 @@ function MovieScreenView({
           )}
           {movie && (
             <p className="mt-2 line-clamp-3 text-xs text-zinc-500">
-              {movie.overview || "No overview available."}
+              {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
             </p>
           )}
         </div>
@@ -1053,7 +1054,12 @@ function ActorScreenView({
                     : new Set<number>(),
                 })
               }
-              className="flex flex-col gap-1 text-left transition-opacity hover:opacity-85"
+              className={cn(
+                "flex flex-col gap-1 rounded-lg border p-1 text-left transition-opacity hover:opacity-85",
+                jellyfinStatus?.[String(movie.tmdb_id)]?.on_server
+                  ? onServerCardClass(true)
+                  : "border-transparent",
+              )}
             >
               <div className="relative">
                 <MoviePoster path={movie.poster_path} title={movie.title} className="w-full" />

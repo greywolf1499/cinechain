@@ -107,9 +107,21 @@ export default function RequestOptionsModal({
 
       {!loading && !loadError && (
         <div className="flex flex-col gap-3">
+          <p
+            className={
+              service === "seerr"
+                ? "rounded-md border border-sky-900/60 bg-sky-950/40 px-3 py-2 text-xs font-medium text-sky-300"
+                : "rounded-md border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs font-medium text-amber-300"
+            }
+          >
+            {service === "seerr"
+              ? "Routing via Seerr - the request is created in Seerr, which forwards it to the Radarr instance you pick below."
+              : "Direct to Radarr - the movie is added straight to Radarr, bypassing Seerr."}
+          </p>
+
           {service === "seerr" && (
             <label className="flex flex-col gap-1 text-xs text-zinc-400">
-              Server
+              Destination Radarr Instance
               <select
                 className={selectClass}
                 value={serverId ?? ""}

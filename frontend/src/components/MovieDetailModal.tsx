@@ -11,9 +11,9 @@ import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
-import { useCanonBadgesBulk, useUpdateStep } from "../lib/queries";
+import { useCanonBadgesBulk, useMovieDetail, useUpdateStep } from "../lib/queries";
 import type { ActorClickPayload } from "./actorClickTypes";
-import type { GenreOut, JellyfinItemSummary, MovieDetail, RunStep } from "../types/api";
+import type { GenreOut, JellyfinItemSummary, RunStep } from "../types/api";
 
 interface TransitionMeta {
   actor_id?: number;
@@ -42,11 +42,7 @@ export default function MovieDetailModal({
   onRequestMarkWatched: () => void;
   onRequestDelete: () => void;
 }) {
-  const { data: movie } = useQuery({
-    queryKey: ["movies", step.movie_id],
-    queryFn: () => api.get<MovieDetail>(`/movies/${step.movie_id}`),
-    enabled: open,
-  });
+  const { movie, isHydrating } = useMovieDetail(step.movie_id, open);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
@@ -132,7 +128,7 @@ export default function MovieDetailModal({
             </div>
             {movie ? (
               <p className="mt-2 line-clamp-4 text-xs text-zinc-500">
-                {movie.overview || "No overview available."}
+                {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
               </p>
             ) : (
               <div className="mt-2 flex items-center gap-1.5 text-xs text-zinc-600">

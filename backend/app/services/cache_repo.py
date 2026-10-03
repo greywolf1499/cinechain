@@ -60,7 +60,7 @@ class CacheRepo:
         row.title = movie["title"]
         row.release_date = movie.get("release_date")
         row.poster_path = movie.get("poster_path")
-        row.overview = movie.get("overview")
+        row.overview = movie.get("overview") or ""
         row.origin_country = json.dumps(movie.get("origin_country") or [])
         row.original_language = movie.get("original_language")
         row.runtime = movie.get("runtime")
@@ -294,10 +294,14 @@ class CacheRepo:
 # --- async read-through orchestration ---
 
 
-async def get_movie(session: Session, tmdb: TMDBClient, tmdb_id: int) -> CachedMovie:
+async def get_movie(
+    session: Session, tmdb: TMDBClient, tmdb_id: int, *, refresh: bool = False
+) -> CachedMovie:
+    """Read-through detail fetch; `refresh` re-fetches `/movie/{id}` even when
+    a row is cached (search/credits stubs carry no overview or runtime)."""
     repo = CacheRepo(session)
     cached = await anyio.to_thread.run_sync(repo.get_cached_movie, tmdb_id)
-    if cached is not None:
+    if cached is not None and not refresh:
         return cached
     movie = await tmdb.get_movie(tmdb_id)
     return await anyio.to_thread.run_sync(repo.upsert_movie, movie)

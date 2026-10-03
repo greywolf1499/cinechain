@@ -69,6 +69,7 @@ class TMDBClient:
         settings: Settings | None = None,
         max_concurrency: int = 15,
         max_retries: int = 5,
+        max_requests_per_second: float = 35.0,
     ) -> None:
         self._client = client
         self._settings = settings or get_settings()
@@ -77,6 +78,20 @@ class TMDBClient:
         self._overrides: dict[str, str] = {}
         # Adaptive pacing state: counts recent 429s, decays on clean requests.
         self._consecutive_429s = 0
+        # Global request-start pacing (TMDB tolerates ~50 rps; stay below it).
+        self._min_interval = 1.0 / max_requests_per_second
+        self._next_slot = 0.0
+
+    async def _send(
+        self, url: str, params: dict[str, Any] | None, headers: dict[str, str]
+    ) -> httpx.Response:
+        """Every outbound request (including retries) reserves a start slot."""
+        now = asyncio.get_running_loop().time()
+        slot = max(now, self._next_slot)
+        self._next_slot = slot + self._min_interval
+        if slot > now:
+            await asyncio.sleep(slot - now)
+        return await self._client.get(url, params=params, headers=headers)
 
     def set_overrides(self, overrides: dict[str, str]) -> None:
         """Admin-configured DB overrides (Phase 10.1) take precedence over .env."""
@@ -99,7 +114,7 @@ class TMDBClient:
         hit_429 = False
 
         async with self._semaphore:
-            response = await self._client.get(url, params=params, headers=headers)
+            response = await self._send(url, params, headers)
             hit_429 = hit_429 or response.status_code == 429
             for attempt in range(1, self._max_retries + 1):
                 if response.status_code not in RETRYABLE_STATUS_CODES:
@@ -118,7 +133,7 @@ class TMDBClient:
                 )
                 await asyncio.sleep(delay)
                 backoff *= 2
-                response = await self._client.get(url, params=params, headers=headers)
+                response = await self._send(url, params, headers)
                 hit_429 = hit_429 or response.status_code == 429
 
             self._consecutive_429s = (

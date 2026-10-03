@@ -335,3 +335,17 @@ def test_jellyfin_test_lookup_route_returns_raw_matches(client):
     body = resp.json()
     assert body["query_type"] == "title"
     assert body["matches"][0]["name"] == "The Matrix"
+
+
+async def test_lookup_sends_all_supported_auth_headers():
+    with respx.mock:
+        route = respx.get(f"{JELLYFIN_BASE}/Items").mock(
+            return_value=httpx.Response(200, json={"Items": []}))
+        async with httpx.AsyncClient() as client:
+            jellyfin = JellyfinClient(client, settings=_configured_settings())
+            await jellyfin.test_lookup("603")
+
+    headers = route.calls.last.request.headers
+    assert headers["Authorization"] == 'MediaBrowser Token="secret-token"'
+    assert headers["X-MediaBrowser-Token"] == "secret-token"
+    assert headers["X-Emby-Token"] == "secret-token"

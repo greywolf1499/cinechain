@@ -1,7 +1,8 @@
 import { ArrowRight } from "lucide-react";
 import AcquisitionControl from "./AcquisitionControl";
 import MoviePoster from "./MoviePoster";
-import OnServerBadge from "./OnServerBadge";
+import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
+import { cn } from "../lib/cn";
 import { profileUrl } from "../lib/tmdbImage";
 import type { BridgeNode, JellyfinItemSummary, SharedActorConnection } from "../types/api";
 
@@ -20,7 +21,12 @@ export default function BridgePathView({
     <div className="flex flex-wrap items-start gap-1">
       {path.map((node, index) => (
         <div key={`${node.movie_id}-${index}`} className="flex items-start gap-1">
-          <div className="w-24 text-center">
+          <div
+            className={cn(
+              "w-24 rounded-lg border p-1 text-center",
+              onServerMap?.[node.movie_id]?.on_server ? onServerCardClass(true) : "border-transparent",
+            )}
+          >
             <button
               type="button"
               onClick={() => onMovieClick?.(node.movie_id)}

@@ -7,6 +7,7 @@ import type {
 	CuratedAccount,
 	CuratedListSummary,
 	DiscoveryCandidate,
+	MovieDetail,
 	Run,
 	RunDetail,
 	RunStats,
@@ -107,6 +108,33 @@ export function useAcquisitionStatus(tmdbId: number, enabled = true) {
 		enabled,
 		staleTime: 30_000,
 	});
+}
+
+export const MIN_OVERVIEW_LENGTH = 20;
+
+/** Movie detail with JIT hydration: bridge/actor-expansion payloads carry no
+ * overview, so a missing/short one triggers a one-off forced TMDB refresh. */
+export function useMovieDetail(movieId: number | undefined, enabled = true) {
+	const base = useQuery({
+		queryKey: ["movies", movieId],
+		queryFn: () => api.get<MovieDetail>(`/movies/${movieId}`),
+		enabled: enabled && movieId !== undefined,
+	});
+	const needsHydration =
+		enabled &&
+		!!base.data &&
+		(base.data.overview?.trim().length ?? 0) < MIN_OVERVIEW_LENGTH;
+	const hydrated = useQuery({
+		queryKey: ["movies", movieId, "hydrated"],
+		queryFn: () => api.get<MovieDetail>(`/movies/${movieId}?refresh=true`),
+		enabled: needsHydration,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+	});
+	return {
+		movie: hydrated.data ?? base.data,
+		isHydrating: needsHydration && hydrated.isFetching,
+	};
 }
 
 export function useCanonBadgesBulk(movieIds: number[]) {

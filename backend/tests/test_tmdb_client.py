@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import pytest
 import respx
@@ -36,3 +38,19 @@ async def test_gives_up_after_exhausting_retries():
                 await tmdb.get_movie(2)
 
     assert route.call_count == 3
+
+
+async def test_requests_are_paced_by_global_rate_limit():
+    import time
+
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/3").mock(
+            return_value=httpx.Response(200, json={"id": 3, "title": "T", "genres": []}))
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client, max_requests_per_second=50.0)
+            start = time.monotonic()
+            await asyncio.gather(*(tmdb.get_movie(3) for _ in range(11)))
+            elapsed = time.monotonic() - start
+
+    # 11 requests at 50 rps need >= 10 intervals of 20ms
+    assert elapsed >= 0.18

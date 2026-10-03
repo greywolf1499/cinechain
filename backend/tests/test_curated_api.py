@@ -375,3 +375,20 @@ def test_watchlist_sync_rejects_invalid_username(client):
     _register_and_login(client)
     resp = client.post("/api/curated/watchlist/sync", json={"letterboxd_username": "../admin"})
     assert resp.status_code == 400
+
+
+def test_watchlist_sync_tolerates_missing_title_and_duplicates(client, monkeypatch):
+    _register_and_login(client)
+    films = [
+        {"title": None, "year": None, "slug": "amelie-2001", "tmdb_id": 194},
+        {"title": "Amelie again", "year": "2001", "slug": "amelie-dup", "tmdb_id": 194},
+        {"title": "No match", "year": 2000, "slug": "nope", "tmdb_id": None},
+    ]
+    monkeypatch.setattr(
+        letterboxd, "scrape_letterboxd_watchlist", _fake_scrape(films))
+
+    resp = client.post("/api/curated/watchlist/sync",
+                       json={"letterboxd_username": "alice_lb"})
+    assert resp.status_code == 200
+    assert "event: error" not in resp.text
+    assert '"matched": 1' in resp.text

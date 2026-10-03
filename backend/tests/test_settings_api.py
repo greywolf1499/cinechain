@@ -280,3 +280,11 @@ def test_solver_settings_rejects_out_of_range_values(client):
     resp = client.patch("/api/settings/solver",
                         json={"bridge_max_duration_seconds": 1})
     assert resp.status_code == 422
+
+
+def test_solver_timeout_allows_up_to_600_seconds(client):
+    _register_and_login(client)
+    assert client.patch("/api/settings/solver",
+                        json={"bridge_max_duration_seconds": 600}).status_code == 200
+    assert client.patch("/api/settings/solver",
+                        json={"bridge_max_duration_seconds": 601}).status_code == 422

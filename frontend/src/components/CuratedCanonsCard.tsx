@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Download, Loader2, XCircle } from "lucide-react";
 import Toast, { type ToastState } from "./Toast";
 import CuratorBrowser from "./CuratorBrowser";
+import SyncBadge from "./SyncBadge";
 import { useCuratedLists } from "../lib/queries";
 import { postSse } from "../lib/sse";
 import type { CuratedListSummary } from "../types/api";
@@ -21,6 +22,7 @@ export default function CuratedCanonsCard() {
   const [customColor, setCustomColor] = useState("#d9a441");
 
   const [watchlistUsername, setWatchlistUsername] = useState("");
+  const [watchlistSyncedAt, setWatchlistSyncedAt] = useState<string | null>(null);
   const syncWatchlist = useMutation({
     mutationFn: () => postSse("/curated/watchlist/sync", { letterboxd_username: watchlistUsername }),
     onSuccess: (events) => {
@@ -29,8 +31,10 @@ export default function CuratedCanonsCard() {
         | undefined;
       const errorEvent = events.find((e) => e.event === "error");
       if (errorEvent) {
-        setToast({ type: "error", message: "Watchlist sync failed - see server logs." });
+        const detail = (errorEvent.data as { message?: string } | null)?.message;
+        setToast({ type: "error", message: `Watchlist sync failed${detail ? `: ${detail}` : "."}` });
       } else {
+        setWatchlistSyncedAt(new Date().toISOString());
         setToast({
           type: "success",
           message: result
@@ -113,15 +117,16 @@ export default function CuratedCanonsCard() {
                 className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-app-border bg-app-bg px-3 py-2.5"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-zinc-200">
-                    {list.badge_prefix} - {list.title}
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-200">
+                    <span className="truncate">
+                      {list.badge_prefix} - {list.title}
+                    </span>
+                    <SyncBadge syncedAt={list.last_synced_at} />
                   </p>
                   <p className="text-[11px] text-zinc-500">
                     {list.total_items > 0
                       ? `${list.total_items} films synced`
-                      : "Not yet synced"}
-                    {list.last_synced_at &&
-                      ` · last synced ${new Date(list.last_synced_at).toLocaleString()}`}
+                      : "No films synced yet"}
                   </p>
                   {list.last_sync_error && (
                     <p className="flex items-center gap-1 text-[11px] text-red-400">
@@ -185,8 +190,9 @@ export default function CuratedCanonsCard() {
         </div>
 
         <div className="border-t border-app-border pt-3">
-          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+          <p className="mb-2 flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
             Sync My Letterboxd Watchlist
+            <SyncBadge syncedAt={watchlistSyncedAt} />
           </p>
           <div className="flex flex-wrap gap-2">
             <input

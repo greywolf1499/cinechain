@@ -41,21 +41,22 @@ class JellyfinClient:
 
     @property
     def _url(self) -> str:
-        return self._overrides.get("jellyfin_url") or self._settings.jellyfin_url
+        url = self._overrides.get(
+            "jellyfin_url") or self._settings.jellyfin_url
+        return url.strip().rstrip("/")
 
     @property
     def _api_key(self) -> str:
-        return self._overrides.get("jellyfin_api_key") or self._settings.jellyfin_api_key
+        key = self._overrides.get(
+            "jellyfin_api_key") or self._settings.jellyfin_api_key
+        return key.strip()
 
     @property
     def _enabled(self) -> bool:
         return bool(self._url)
 
     def _headers(self) -> dict[str, str]:
-        api_key = self._api_key
-        if not api_key:
-            return {}
-        return {"X-Emby-Token": api_key}
+        return _auth_headers(self._api_key)
 
     async def check_health(self) -> dict:
         if not self._enabled:
@@ -223,6 +224,18 @@ class JellyfinClient:
         }
 
 
+def _auth_headers(api_key: str) -> dict[str, str]:
+    """Send every header flavor Jellyfin accepts - newer servers reject the
+    legacy X-Emby-Token alone with a 401."""
+    if not api_key:
+        return {}
+    return {
+        "Authorization": f'MediaBrowser Token="{api_key}"',
+        "X-MediaBrowser-Token": api_key,
+        "X-Emby-Token": api_key,
+    }
+
+
 def _normalize_title(value: str) -> str:
     """Lowercase + strip all non-alphanumeric characters, so "Se7en" and
     "Se7en:" both compare equal to "se7en"."""
@@ -260,7 +273,7 @@ async def check_jellyfin_connectivity(client: httpx.AsyncClient, url: str, api_k
     """Tests a candidate URL/token directly - independent of any configured JellyfinClient."""
     if not url:
         return {"reachable": False, "version": None, "detail": "Jellyfin URL is required"}
-    headers = {"X-Emby-Token": api_key} if api_key else {}
+    headers = _auth_headers(api_key.strip())
     try:
         response = await client.get(
             f"{url.rstrip('/')}/System/Info/Public", headers=headers, timeout=5.0

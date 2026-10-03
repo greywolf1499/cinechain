@@ -217,7 +217,7 @@ class SolverConfigOut(BaseModel):
 
 
 class SolverConfigUpdate(BaseModel):
-    bridge_max_duration_seconds: int = Field(ge=5, le=300)
+    bridge_max_duration_seconds: int = Field(ge=5, le=600)
 
 
 @router.get("/solver", response_model=SolverConfigOut)

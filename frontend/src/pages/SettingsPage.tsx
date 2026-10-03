@@ -154,7 +154,7 @@ function SolverSettingsCard() {
           <input
             type="number"
             min={5}
-            max={300}
+            max={600}
             value={value ?? ""}
             onChange={(e) => setValue(Number(e.target.value))}
             className={`${inputClass} w-24`}

@@ -8,8 +8,8 @@ import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
-import { useCanonBadgesBulk } from "../lib/queries";
-import type { GenreOut, JellyfinItemSummary, MovieDetail } from "../types/api";
+import { useCanonBadgesBulk, useMovieDetail } from "../lib/queries";
+import type { GenreOut, JellyfinItemSummary } from "../types/api";
 
 /** Lightweight, read-only movie preview - used for bridge path nodes (not yet
  * logged in any run, so the heavier step-editing MovieDetailModal doesn't apply). */
@@ -24,11 +24,7 @@ export default function MoviePreviewModal({
   movieId: number;
   fallbackTitle?: string;
 }) {
-  const { data: movie } = useQuery({
-    queryKey: ["movies", movieId],
-    queryFn: () => api.get<MovieDetail>(`/movies/${movieId}`),
-    enabled: open,
-  });
+  const { movie, isHydrating } = useMovieDetail(movieId, open);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
@@ -92,7 +88,7 @@ export default function MoviePreviewModal({
                 ))}
               </div>
               <p className="mt-2 line-clamp-6 text-xs text-zinc-500">
-                {movie.overview || "No overview available."}
+                {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
               </p>
             </>
           )}

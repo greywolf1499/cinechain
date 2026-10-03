@@ -273,3 +273,30 @@ def test_movie_ratings_bulk_endpoint(client):
     body = resp.json()
     assert body["603"]["imdb_rating"] == "8.7"
     assert body["604"]["imdb_rating"] == "8.7"
+
+
+def test_get_movie_hydrates_stub_overview_and_supports_refresh(client):
+    from app.models.cache import CachedMovie
+
+    _register_and_login(client)
+    session = next(app.dependency_overrides[get_session]())
+    session.add(CachedMovie(tmdb_id=603, title="The Matrix"))  # stub: overview NULL
+    session.commit()
+
+    with respx.mock:
+        route = respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": 603, "title": "The Matrix", "overview": "A hacker learns the truth.",
+                      "runtime": 136, "genres": []},
+            )
+        )
+        first = client.get("/api/movies/603")
+        second = client.get("/api/movies/603")
+        refreshed = client.get("/api/movies/603", params={"refresh": "true"})
+
+    assert first.json()["overview"] == "A hacker learns the truth."
+    assert first.json()["runtime"] == 136
+    assert second.json()["overview"] == "A hacker learns the truth."
+    assert refreshed.status_code == 200
+    assert route.call_count == 2  # stub hydration + explicit refresh; middle call was cached

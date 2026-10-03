@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { AlertTriangle, GitBranch, Loader2, Lock } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
-import OnServerBadge from "./OnServerBadge";
+import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
@@ -211,7 +211,12 @@ export default function ForkInTheRoadModal({
           return (
             <div
               key={movie.tmdb_id}
-              className="flex flex-col gap-2 rounded-md border border-app-border bg-app-bg p-2"
+              className={cn(
+                "flex flex-col gap-2 rounded-md border p-2",
+                jellyfinStatus?.[String(movie.tmdb_id)]?.on_server
+                  ? onServerCardClass(true)
+                  : "border-app-border bg-app-bg",
+              )}
             >
               <div className="flex items-center gap-3">
                 <MoviePoster path={movie.poster_path} title={movie.title} className="w-10" />

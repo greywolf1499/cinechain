@@ -10,10 +10,12 @@ import {
   Loader2,
   Lock,
   MoreHorizontal,
+  Palette,
   Pencil,
   Plus,
   RotateCcw,
   Skull,
+  Sparkles,
   Trash2,
   Trophy,
   User,
@@ -197,6 +199,7 @@ export default function RunDetailPage() {
           </div>
 
           <div className="order-2 min-w-0 lg:order-1 lg:col-span-7 lg:col-start-1 xl:col-span-8">
+            {run.game_type === "aesthetic_gradient" && <GradientStrip steps={run.steps} />}
             <ChainTimeline
               runId={run.id}
               steps={run.steps}
@@ -602,6 +605,22 @@ function ActiveFrontierCard({
   );
 }
 
+/** The run's poster colours blended left-to-right: the "gradient" an Aesthetic Gradient run draws. */
+function GradientStrip({ steps }: { steps: RunStep[] }) {
+  const colors = steps.map((s) => s.movie_dominant_color).filter((c): c is string => !!c);
+  if (colors.length === 0) return null;
+  const background =
+    colors.length === 1 ? colors[0] : `linear-gradient(to right, ${colors.join(", ")})`;
+  return (
+    <div className="mb-3" aria-label="Run colour gradient">
+      <div className="h-3 rounded-full border border-app-border" style={{ background }} />
+      <p className="mt-1 text-[10px] text-zinc-500">
+        Colour gradient across {colors.length} poster{colors.length === 1 ? "" : "s"}
+      </p>
+    </div>
+  );
+}
+
 function ConstraintIcon({ kind }: { kind: string }) {
   const className = "h-3.5 w-3.5 shrink-0";
   switch (kind) {
@@ -613,6 +632,10 @@ function ConstraintIcon({ kind }: { kind: string }) {
       return <Calendar className={className} />;
     case "country":
       return <Globe className={className} />;
+    case "color":
+      return <Palette className={className} />;
+    case "semantic":
+      return <Sparkles className={className} />;
     default:
       return <Link2 className={className} />;
   }

@@ -42,8 +42,20 @@ class Settings(BaseSettings):
     # No longer enforced on the streamed solve (bounded by depth + bridge_max_duration_seconds);
     # kept so existing env files still load.
     pathfinder_call_budget: int = 150
+    # --- Semantic Trope Web (ONNX embeddings, fetched once on first use) ---
+    onnx_model_url: str = (
+        "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_quantized.onnx"
+    )
+    onnx_tokenizer_url: str = (
+        "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
+    )
+
     # --- Bridge solver pacing (Phase 15.5) ---
     bridge_max_duration_seconds: int = 45
+
+    @property
+    def onnx_model_dir(self) -> Path:
+        return self.config_dir / "models" / "all-MiniLM-L6-v2"
 
     @property
     def database_path(self) -> Path:

@@ -62,6 +62,8 @@ export interface RunStep {
 	movie_poster_path: string | null;
 	movie_release_year: number | null;
 	movie_origin_country: string | null;
+	/** Poster colour ("#rrggbb"), when the movie cache has computed it (Aesthetic Gradient). */
+	movie_dominant_color?: string | null;
 	transition_metadata: Record<string, unknown> | null;
 	user_notes: string | null;
 	status: StepStatus;
@@ -148,7 +150,7 @@ export interface SharedActorConnection {
 
 /** The rule shaping a run's next hop (backend `ConstraintInfo`). */
 export interface ConstraintInfo {
-	kind: "director" | "actor" | "free" | "year" | "country" | (string & {});
+	kind: "director" | "actor" | "free" | "year" | "country" | "color" | "semantic" | (string & {});
 	title: string;
 	detail: string | null;
 }
@@ -294,6 +296,10 @@ export interface DiscoveryCandidate {
 	existing_step_number: number | null;
 	/** The run's constraint (e.g. country) couldn't be checked yet; logging re-checks it. */
 	constraint_unverified?: boolean;
+	/** Aesthetic Gradient: the poster's dominant colour ("#rrggbb"). */
+	dominant_color?: string | null;
+	/** Semantic Trope Web: plot similarity to the frontier film, 0..1. */
+	semantic_score?: number | null;
 }
 
 // --- integrations (schemas/integrations.py) ---

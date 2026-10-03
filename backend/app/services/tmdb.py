@@ -188,6 +188,20 @@ class TMDBClient:
             params["primary_release_year"] = year
         return await self._get("/search/movie", params=params)
 
+    async def get_poster_bytes(
+        self, poster_path: str, size: str = "w185", max_bytes: int = 2 * 1024 * 1024
+    ) -> bytes | None:
+        """A poster's raw bytes from the TMDB image CDN (no API key, not rate limited
+        like the API). None when it can't be fetched or is implausibly large."""
+        url = f"{self._settings.tmdb_image_base}/{size}/{poster_path.lstrip('/')}"
+        try:
+            response = await self._client.get(url, follow_redirects=True)
+        except httpx.HTTPError:
+            return None
+        if response.status_code != 200 or len(response.content) > max_bytes:
+            return None
+        return response.content
+
     async def get_movie(self, tmdb_id: int) -> TMDBMovie:
         data = await self._get(f"/movie/{tmdb_id}")
         return _normalize_movie_detail(data)

@@ -1,6 +1,7 @@
 from fastapi import HTTPException, status
 from sqlmodel import Session
 
+from app.engines.algorithms import AestheticGradientEngine, SemanticTropeEngine
 from app.engines.base import BaseChallengeEngine
 from app.engines.canon_island import CanonIslandEngine
 from app.engines.cinechain import CineChainEngine
@@ -18,6 +19,8 @@ ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
         ChronoClimbEngine,
         WorldPassportEngine,
         AuteurRelayEngine,
+        AestheticGradientEngine,
+        SemanticTropeEngine,
     )
 }
 

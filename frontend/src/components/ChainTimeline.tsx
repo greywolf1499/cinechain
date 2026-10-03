@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import MoviePoster from "./MoviePoster";
 import ChainLink from "./ChainLink";
+import ColorSwatch from "./ColorSwatch";
 import MarkWatchedModal from "./MarkWatchedModal";
 import MovieDetailModal from "./MovieDetailModal";
 import { CanonBadgeList } from "./CanonBadge";
@@ -207,6 +208,9 @@ function StationRow({
               title={step.movie_title}
               className={cn("w-16", isPlanned && "opacity-60")}
             />
+            {step.movie_dominant_color && (
+              <ColorSwatch color={step.movie_dominant_color} className="absolute -right-1.5 -top-1.5" />
+            )}
           </div>
 
           <div className="min-w-0 flex-1">

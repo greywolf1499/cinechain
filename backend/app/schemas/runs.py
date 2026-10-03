@@ -78,6 +78,8 @@ class RunStepPublic(BaseModel):
     movie_poster_path: str | None
     movie_release_year: int | None
     movie_origin_country: str | None
+    # Poster colour from the movie cache (Aesthetic Gradient swatch); filled in by the routes.
+    movie_dominant_color: str | None = None
     transition_metadata: dict[str, Any] | None
     user_notes: str | None
     status: str

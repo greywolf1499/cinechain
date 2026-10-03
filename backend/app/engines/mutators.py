@@ -63,7 +63,7 @@ class MutatorEngine(CineChainEngine):
         row = self.session.get(CachedMovie, movie_id)
         if row is None:
             return await cache_repo.get_movie(self.session, self.tmdb, movie_id)
-        if hydrate and row.origin_country is None:
+        if hydrate and self._needs_hydration(row):
             return await cache_repo.get_movie(self.session, self.tmdb, movie_id, refresh=True)
         return row
 
@@ -94,17 +94,23 @@ class MutatorEngine(CineChainEngine):
         return await self._validate_link(
             from_movie_id, to_movie_id, cast_limit, rules, previous_transition)
 
-    async def _filter_pool(
-        self, frontier: CachedMovie, candidates: list[DiscoveryCandidate]
-    ) -> list[DiscoveryCandidate]:
+    def _needs_hydration(self, row: CachedMovie) -> bool:
+        """Does this pool film still need its full TMDB detail before it can be judged?"""
+        return self.needs_detail and row.origin_country is None
+
+    async def _hydrate_pool(
+        self, candidates: list[DiscoveryCandidate]
+    ) -> dict[int, CachedMovie]:
+        """Cached rows for the pool, fetching full detail for the most popular films
+        that need it (bounded by HYDRATE_BUDGET / HYDRATE_SECONDS)."""
         budget = HYDRATE_BUDGET if self.needs_detail else 0
         deadline = time.monotonic() + HYDRATE_SECONDS
-        keep: set[int] = set()
+        rows: dict[int, CachedMovie] = {}
         for candidate in sorted(candidates, key=lambda c: -(c.popularity or 0.0)):
             row = self.session.get(CachedMovie, candidate.movie_id)
             if row is None:
                 continue
-            if self.needs_detail and row.origin_country is None and budget > 0:
+            if self._needs_hydration(row) and budget > 0:
                 budget -= 1
                 try:
                     fetched = await fetch_with_backoff(
@@ -117,7 +123,17 @@ class MutatorEngine(CineChainEngine):
                 except Exception:  # noqa: BLE001 - leave this film unverified
                     self.session.rollback()
                 candidate.origin_country = row.origin_country
-            if self.pair_violation(frontier, row):
+            rows[candidate.movie_id] = row
+        return rows
+
+    async def _filter_pool(
+        self, frontier: CachedMovie, candidates: list[DiscoveryCandidate]
+    ) -> list[DiscoveryCandidate]:
+        rows = await self._hydrate_pool(candidates)
+        keep: set[int] = set()
+        for candidate in candidates:
+            row = rows.get(candidate.movie_id)
+            if row is None or self.pair_violation(frontier, row):
                 continue
             candidate.constraint_unverified = self.needs_detail and row.origin_country is None
             keep.add(candidate.movie_id)

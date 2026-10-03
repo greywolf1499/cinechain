@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from sqlalchemy import LargeBinary
 from sqlmodel import JSON, Column, Field, SQLModel
 
 from app.utils.ids import utcnow
@@ -29,6 +30,10 @@ class CachedMovie(SQLModel, table=True):
     cast_fetched_at: datetime | None = None
     # Same idea for directors: NULL = never fetched, set + no rows = "no directors".
     directors_fetched_at: datetime | None = None
+    # Aesthetic Gradient: poster's dominant colour as "#rrggbb"; NULL = not computed yet.
+    dominant_color: str | None = Field(default=None, max_length=7)
+    # Semantic Trope Web: float32 little-endian 384-d unit vector of `overview`; NULL = not computed.
+    overview_embedding: bytes | None = Field(default=None, sa_column=Column(LargeBinary))
 
 
 class CachedActor(SQLModel, table=True):

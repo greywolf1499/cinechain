@@ -1,5 +1,6 @@
 import { Clapperboard, Star, User } from "lucide-react";
 import { profileUrl } from "../lib/tmdbImage";
+import { SemanticMatchBadge } from "./ColorSwatch";
 import type { RunStep } from "../types/api";
 
 interface TransitionMeta {
@@ -11,6 +12,8 @@ interface TransitionMeta {
   profile_path?: string | null;
   character_in_from?: string | null;
   character_in_to?: string | null;
+  semantic_score?: number;
+  color_distance?: number;
 }
 
 /** Renders on the vertical spine track between two station cards. */
@@ -63,6 +66,15 @@ export default function ChainLink({ step, isKeystone }: { step: RunStep; isKeyst
           </>
         ) : (
           <p className="text-[10px] text-zinc-600">Chain broken — no shared cast</p>
+        )}
+        <SemanticMatchBadge score={meta?.semantic_score} className="ml-auto shrink-0" />
+        {meta?.color_distance !== undefined && (
+          <span
+            title="Euclidean RGB distance between the two posters' dominant colours (lower = smoother)"
+            className="ml-auto shrink-0 rounded-full bg-app-surface-hover px-2 py-0.5 text-[9px] font-semibold text-zinc-400"
+          >
+            Colour Δ {Math.round(meta.color_distance)}
+          </span>
         )}
       </div>
     </div>

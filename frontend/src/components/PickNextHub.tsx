@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import Modal from "./Modal";
+import ColorSwatch, { SemanticMatchBadge } from "./ColorSwatch";
 import MoviePoster from "./MoviePoster";
 import AcquisitionControl from "./AcquisitionControl";
 import MovieTagline from "./MovieTagline";
@@ -579,6 +580,9 @@ function CandidateCard({
           <div className="absolute left-1 top-1">
             <OnServerBadge onServer={onServer} />
           </div>
+          {candidate.dominant_color && (
+            <ColorSwatch color={candidate.dominant_color} className="absolute right-1 top-1" />
+          )}
         </button>
 
         <div>
@@ -603,6 +607,7 @@ function CandidateCard({
         </div>
 
         <ConnectionBadge connections={candidate.connections} />
+        <SemanticMatchBadge score={candidate.semantic_score} />
         {candidate.constraint_unverified && (
           <span
             title="This run's rule couldn't be checked for this film yet - logging will check it."

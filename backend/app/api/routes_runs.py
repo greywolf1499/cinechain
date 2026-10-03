@@ -229,11 +229,30 @@ async def _enforce_run_rules(
     return extra_metadata, linked_metadata
 
 
+def _step_colors(session: Session, steps: list[RunStep]) -> dict[int, str | None]:
+    """Cached poster colour per step film (Aesthetic Gradient swatches)."""
+    movie_ids = {s.movie_id for s in steps}
+    if not movie_ids:
+        return {}
+    rows = session.exec(
+        select(CachedMovie.tmdb_id, CachedMovie.dominant_color).where(
+            CachedMovie.tmdb_id.in_(movie_ids))  # type: ignore[attr-defined]
+    ).all()
+    return dict(rows)
+
+
+def _step_public(step: RunStep, colors: dict[int, str | None]) -> RunStepPublic:
+    public = RunStepPublic.model_validate(step)
+    public.movie_dominant_color = colors.get(step.movie_id)
+    return public
+
+
 def _to_run_detail(session: Session, run: Run) -> RunDetail:
     steps = session.exec(
         select(RunStep).where(RunStep.run_id ==
                               run.id).order_by(RunStep.logged_at)
     ).all()
+    colors = _step_colors(session, list(steps))
     participants = session.exec(
         select(RunParticipant)
         .where(RunParticipant.run_id == run.id)
@@ -241,7 +260,7 @@ def _to_run_detail(session: Session, run: Run) -> RunDetail:
     ).all()
     return RunDetail(
         **RunSummary.model_validate(run).model_dump(),
-        steps=[RunStepPublic.model_validate(s) for s in steps],
+        steps=[_step_public(s, colors) for s in steps],
         participants=[ParticipantPublic.model_validate(
             p) for p in participants],
     )
@@ -471,7 +490,7 @@ async def create_step(
     _apply_run_outcome(session, tmdb, run)
     session.commit()
     session.refresh(step)
-    return step
+    return _step_public(step, _step_colors(session, [step]))
 
 
 @router.patch("/{run_id}/steps/{step_id}/mark-watched", response_model=RunStepPublic)

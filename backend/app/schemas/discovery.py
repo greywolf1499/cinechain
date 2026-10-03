@@ -26,3 +26,7 @@ class DiscoveryCandidate(BaseModel):
     # The run's constraint (e.g. World Passport country) couldn't be checked yet
     # because the film's details haven't been fetched; logging re-checks it.
     constraint_unverified: bool = False
+    # Algorithm Sandbox modes: the candidate's poster colour ("#rrggbb") and its
+    # semantic (plot) similarity to the frontier film, 0..1.
+    dominant_color: str | None = None
+    semantic_score: float | None = None

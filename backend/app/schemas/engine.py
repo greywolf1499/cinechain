@@ -23,6 +23,9 @@ class ValidationResult(BaseModel):
     blocked: bool = False
     # Auteur Relay: which kind of link this hop is/must be ("actor" | "director").
     connection_type: str | None = None
+    # Algorithm Sandbox modes: how close the two films measured (None = unknown).
+    similarity: float | None = None  # Semantic Trope Web, cosine similarity (-1..1)
+    color_distance: float | None = None  # Aesthetic Gradient, RGB Euclidean distance
 
 
 class SuggestionFilters(BaseModel):
@@ -90,7 +93,7 @@ class SwapNodeResult(BaseModel):
 class ConstraintInfo(BaseModel):
     """The rule currently shaping a run's *next* hop (e.g. "must be a Director")."""
 
-    kind: str  # director | actor | free | year | country
+    kind: str  # director | actor | free | year | country | color | semantic
     title: str
     detail: str | None = None
 

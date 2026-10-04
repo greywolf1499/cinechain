@@ -957,6 +957,50 @@ export interface BingoWatchlist {
 	pending: number;
 }
 
+// --- tools: The Perfect Marathon Router (POST /tools/router/*) ---
+
+export type WhiplashLabel = "Smooth Transition" | "Gentle Shift" | "Tonal Whiplash";
+
+export interface RouterWeights {
+	weight_genre?: number;
+	weight_year?: number;
+	weight_runtime?: number;
+	weight_rating?: number;
+}
+
+export interface RouterFilm {
+	movie_id: number;
+	title: string;
+	year: number | null;
+	poster_path: string | null;
+	overview: string | null;
+	runtime: number | null;
+	rating: number | null;
+	genres: string[];
+}
+
+export interface RouterTransition {
+	from_movie_id: number;
+	to_movie_id: number;
+	cost: number;
+	label: WhiplashLabel;
+	/** Why the hop is smooth, or where the biggest gap is ("1980s Science Fiction Harmony"). */
+	summary: string;
+	deltas: { genre: number; year: number; runtime: number; rating: number };
+}
+
+export interface RouterResult {
+	ordered_movie_ids: number[];
+	initial_whiplash_score: number;
+	optimized_whiplash_score: number;
+	improvement_percentage: number;
+	transitions: RouterTransition[];
+	/** The films in the optimized order. */
+	films: RouterFilm[];
+	method: "exact" | "simulated_annealing";
+	calculation_ms: number;
+}
+
 // --- The Daily Bridge (schemas/puzzles.py) ---
 
 export type DailyAttemptStatus = "not_started" | "in_progress" | "solved" | "forfeited";

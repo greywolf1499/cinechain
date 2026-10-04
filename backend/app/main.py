@@ -17,6 +17,7 @@ from app.api.routes_integrations import router as integrations_router
 from app.api.routes_movies import router as movies_router
 from app.api.routes_passport import router as passport_router
 from app.api.routes_puzzles import router as puzzles_router
+from app.api.routes_router import router as marathon_router_router
 from app.api.routes_runs import router as runs_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_split import router as split_router
@@ -82,6 +83,7 @@ app.include_router(tasks_router, prefix=api_router_prefix)
 app.include_router(passport_router, prefix=api_router_prefix)
 app.include_router(tools_router, prefix=api_router_prefix)
 app.include_router(puzzles_router, prefix=api_router_prefix)
+app.include_router(marathon_router_router, prefix=api_router_prefix)
 
 # Serve built frontend assets (JS/CSS/images) under /assets.
 assets_dir = STATIC_DIR / "assets"

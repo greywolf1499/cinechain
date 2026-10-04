@@ -1,4 +1,4 @@
-import { CalendarCheck, Dices, GitBranch, Map as MapIcon, type LucideIcon } from "lucide-react";
+import { CalendarCheck, Compass, Dices, GitBranch, Map as MapIcon, type LucideIcon } from "lucide-react";
 import type { EngineMeta, Run } from "../types/api";
 import { usesCastLinks } from "./gameModes";
 
@@ -43,6 +43,13 @@ export const TOOLS: ToolDefinition[] = [
 		description: "A randomised 5x5 card of cinephile challenges, filled from your Letterboxd watchlist.",
 		icon: Dices,
 		to: "/tools/bingo",
+	},
+	{
+		id: "router",
+		name: "Perfect Marathon Router",
+		description: "Pick up to 20 films and get the order with the least tonal whiplash, then queue it as a run.",
+		icon: Compass,
+		to: "/tools/router",
 	},
 ];
 

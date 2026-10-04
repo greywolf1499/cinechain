@@ -9,6 +9,7 @@ import DailyBridgePage from "./pages/DailyBridgePage";
 import PassportPage from "./pages/PassportPage";
 import ToolsPage from "./pages/ToolsPage";
 import BingoPage from "./pages/BingoPage";
+import MarathonRouterPage from "./pages/MarathonRouterPage";
 import MapPage from "./pages/MapPage";
 import SettingsLayout from "./pages/settings/SettingsLayout";
 import {
@@ -43,6 +44,7 @@ export const router = createBrowserRouter([
           { path: "tools/daily", element: <DailyBridgePage /> },
           { path: "tools/bingo", element: <BingoPage /> },
           { path: "tools/map", element: <MapPage /> },
+          { path: "tools/router", element: <MarathonRouterPage /> },
           { path: "bridge", element: <LegacyBridgeRedirect /> },
           { path: "passport", element: <PassportPage /> },
           { path: "lists", element: <ListsPage /> },

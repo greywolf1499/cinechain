@@ -33,6 +33,8 @@ import type {
 	RunStatus,
 	RulesConfig,
 	RequestConfig,
+	RouterResult,
+	RouterWeights,
 	RunStep,
 	SplitPool,
 	StepStatus,
@@ -610,5 +612,25 @@ export function useSplitPool(runId: string, scan = 0) {
 		queryKey: [...queryKeys.run(runId), "split-pool", scan],
 		queryFn: () => api.get<SplitPool>(`/runs/${runId}/split-pool?scan=${scan}`),
 		staleTime: 30_000,
+	});
+}
+
+/** The Perfect Marathon Router: the smoothest order for these films. */
+export function useOptimizeMarathon() {
+	return useMutation({
+		mutationFn: (payload: { movie_ids: number[] } & RouterWeights) =>
+			api.post<RouterResult>("/tools/router/optimize", payload),
+	});
+}
+
+/** Queues a router marathon as an active run of planned steps, in the order given. */
+export function useConvertMarathonToRun() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (payload: { run_name: string; movie_ids: number[] }) =>
+			api.post<RunDetail>("/tools/router/convert-to-run", payload),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["runs"] });
+		},
 	});
 }

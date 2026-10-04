@@ -5,6 +5,7 @@ import LoginPage from "./pages/LoginPage";
 import RunsPage from "./pages/RunsPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import BridgePage from "./pages/BridgePage";
+import DailyBridgePage from "./pages/DailyBridgePage";
 import PassportPage from "./pages/PassportPage";
 import ToolsPage from "./pages/ToolsPage";
 import BingoPage from "./pages/BingoPage";
@@ -39,6 +40,7 @@ export const router = createBrowserRouter([
           { path: "runs/:id", element: <RunDetailPage /> },
           { path: "tools", element: <ToolsPage /> },
           { path: "tools/bridge", element: <BridgePage /> },
+          { path: "tools/daily", element: <DailyBridgePage /> },
           { path: "tools/bingo", element: <BingoPage /> },
           { path: "tools/map", element: <MapPage /> },
           { path: "bridge", element: <LegacyBridgeRedirect /> },

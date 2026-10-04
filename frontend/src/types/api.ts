@@ -775,3 +775,56 @@ export interface BingoWatchlist {
 	/** Films still missing detail / directors / ratings; request again with `hydrate` to fill more. */
 	pending: number;
 }
+
+// --- The Daily Bridge (schemas/puzzles.py) ---
+
+export type DailyAttemptStatus = "not_started" | "in_progress" | "solved" | "forfeited";
+
+export interface PuzzleHop {
+	movie: MovieSummary;
+	/** The link that led into this film; null for the starting film. */
+	link: SharedActorConnection | null;
+}
+
+export interface DailyAttempt {
+	status: DailyAttemptStatus;
+	chain: PuzzleHop[];
+	hops: number;
+	/** One per hop once solved: "green" got closer to the target, "yellow" didn't. */
+	grades: ("green" | "yellow")[] | null;
+	share_text: string | null;
+	run_id: string | null;
+}
+
+export interface DailyPuzzle {
+	puzzle_number: number;
+	date: string;
+	start_movie: MovieSummary;
+	target_movie: MovieSummary;
+	par_hops: number;
+	attempt: DailyAttempt;
+	/** Only revealed once the attempt is solved or forfeited. */
+	optimal_path: PuzzleHop[] | null;
+}
+
+export interface DailyHopResult {
+	valid: boolean;
+	reason: string | null;
+	connections: SharedActorConnection[];
+	recorded: boolean;
+	solved: boolean;
+	next_movie: MovieSummary | null;
+	attempt: DailyAttempt;
+}
+
+export interface DailyForfeitResult {
+	puzzle_number: number;
+	par_hops: number;
+	optimal_path: PuzzleHop[];
+	attempt: DailyAttempt;
+}
+
+export interface DailyConvertResult {
+	run_id: string;
+	movies: number;
+}

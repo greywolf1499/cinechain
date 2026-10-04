@@ -16,11 +16,13 @@ import PageHeading from "../components/PageHeading";
 import EmptyState from "../components/EmptyState";
 import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
+import AntiCheatBanner from "../components/AntiCheatBanner";
 import MoviePreviewModal from "../components/MoviePreviewModal";
 import BridgePathView, { PathTagChips } from "../components/BridgePathView";
 import BridgeSwapPanel, { type SwapState, type SwapTabState } from "../components/BridgeSwapPanel";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
+import { isAntiCheatLocked } from "../lib/antiCheat";
 import { isScenicRoute, usedIntermediateIds } from "../lib/bridge";
 import { connectionMetadata } from "../lib/connections";
 import { useCreateStep, useEngines, useRun, useRuns } from "../lib/queries";
@@ -138,6 +140,8 @@ export default function BridgePage() {
   const [timedOut, setTimedOut] = useState<TimeoutEvent | null>(null);
   const [rateLimitNotice, setRateLimitNotice] = useState<RateLimitedEvent | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // The server refused today's Daily Puzzle pair until it is solved or forfeited.
+  const [antiCheatLocked, setAntiCheatLocked] = useState(false);
   const [onServerMap, setOnServerMap] = useState<Record<number, JellyfinItemSummary>>({});
 
   const [queueing, setQueueing] = useState(false);
@@ -265,6 +269,7 @@ export default function BridgePage() {
     setTimedOut(null);
     setRateLimitNotice(null);
     setErrorMessage(null);
+    setAntiCheatLocked(false);
     setOnServerMap({});
     setQueueError(null);
 
@@ -276,9 +281,8 @@ export default function BridgePage() {
       max_depth: String(depth),
     });
     if (runIdFromQuery) params.set("run_id", runIdFromQuery);
-    const source = new EventSource(`/api/engine/bridge/stream?${params.toString()}`, {
-      withCredentials: true,
-    });
+    const streamUrl = `/api/engine/bridge/stream?${params.toString()}`;
+    const source = new EventSource(streamUrl, { withCredentials: true });
     sourceRef.current = source;
     let finished = false;
 
@@ -324,6 +328,9 @@ export default function BridgePage() {
         }
       } else {
         setErrorMessage("Connection to the solver was lost.");
+        void isAntiCheatLocked(streamUrl).then((locked) => {
+          if (locked) setAntiCheatLocked(true);
+        });
       }
       setStatus("error");
       closeSource();
@@ -783,7 +790,9 @@ export default function BridgePage() {
           </div>
         )}
 
-        {status === "error" && errorMessage && (
+        {status === "error" && antiCheatLocked && <AntiCheatBanner />}
+
+        {status === "error" && errorMessage && !antiCheatLocked && (
           <div className="flex items-center gap-2.5 rounded-xl border border-red-900/50 bg-red-950/20 px-5 py-4 text-sm text-red-300">
             <XCircle className="h-4 w-4 shrink-0" />
             {errorMessage}

@@ -18,6 +18,10 @@ import type {
 	GoldenVetoResult,
 	MovieDetail,
 	TropeExtraction,
+	DailyConvertResult,
+	DailyForfeitResult,
+	DailyHopResult,
+	DailyPuzzle,
 	Run,
 	RunDetail,
 	RunStats,
@@ -465,5 +469,57 @@ export function usePassport() {
 	return useQuery({
 		queryKey: PASSPORT_KEY,
 		queryFn: () => api.get<Passport>("/passport/me"),
+	});
+}
+
+// --- The Daily Bridge ---
+
+const DAILY_KEY = ["puzzles", "daily"] as const;
+
+export function useDailyPuzzle() {
+	return useQuery({
+		queryKey: DAILY_KEY,
+		queryFn: () => api.get<DailyPuzzle>("/puzzles/daily"),
+		staleTime: 60_000,
+		retry: false,
+	});
+}
+
+/** Checks (and, when it continues the chain, records) a hop; a solve or move refreshes the board. */
+export function useValidateDailyHop() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (vars: { current_movie_id: number; next_movie_id: number }) =>
+			api.post<DailyHopResult>("/puzzles/daily/validate-hop", vars),
+		onSuccess: (result) => {
+			if (result.recorded) void queryClient.invalidateQueries({ queryKey: DAILY_KEY });
+		},
+	});
+}
+
+export function useUndoDailyHop() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => api.post<DailyPuzzle>("/puzzles/daily/undo"),
+		onSuccess: (puzzle) => queryClient.setQueryData(DAILY_KEY, puzzle),
+	});
+}
+
+export function useForfeitDaily() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => api.post<DailyForfeitResult>("/puzzles/daily/forfeit"),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: DAILY_KEY }),
+	});
+}
+
+export function useConvertDailyToRun() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => api.post<DailyConvertResult>("/puzzles/daily/convert-to-run"),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: DAILY_KEY });
+			void queryClient.invalidateQueries({ queryKey: ["runs"] });
+		},
 	});
 }

@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -26,7 +26,7 @@ from app.schemas.engine import (
     TeaserResult,
     ValidationResult,
 )
-from app.services import bridge_paths, cache_repo, llm, settings_repo
+from app.services import bridge_paths, cache_repo, daily_puzzle, llm, settings_repo
 from app.services.tmdb import TMDBClient, TMDBError
 from app.services.tmdb_backoff import DeadlineReached
 from app.utils.dates import parse_release_year
@@ -88,13 +88,29 @@ async def validate(
     return await engine.validate_next_step(payload.from_movie_id, payload.to_movie_id)
 
 
-@router.post("/engine/bridge")
+ANTI_CHEAT_LOCKED = {
+    "code": "anti_cheat_locked",
+    "message": "Bridge Solver is locked for today's Daily Puzzle until solved or forfeited!",
+}
+
+
+def _anti_cheat_response(session: Session, user: User, from_id: int, to_id: int) -> JSONResponse | None:
+    """403 when this pair is today's Daily Puzzle and the user hasn't solved or forfeited it."""
+    if daily_puzzle.is_locked(session, user.id, from_id, to_id):
+        return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content=ANTI_CHEAT_LOCKED)
+    return None
+
+
+@router.post("/engine/bridge", response_model=None)
 async def bridge_fast(
     payload: BridgeRequest,
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
-    _current_user: User = Depends(get_current_user),
-) -> dict:
+    current_user: User = Depends(get_current_user),
+) -> dict | Response:
+    if locked := _anti_cheat_response(
+            session, current_user, payload.from_movie_id, payload.to_movie_id):
+        return locked
     engine = get_engine(payload.game_type, session, tmdb)
     agen = engine.solve_bridge(
         payload.from_movie_id, payload.to_movie_id, FAST_MAX_DEPTH,
@@ -390,7 +406,7 @@ async def bridge_path_tags(
     return PathTagsResult(tags=bridge_paths.analyze_path_tags(session, nodes), nodes=nodes)
 
 
-@router.get("/engine/bridge/stream")
+@router.get("/engine/bridge/stream", response_model=None)
 async def bridge_stream(
     request: Request,
     from_movie_id: int = Query(...),
@@ -406,7 +422,9 @@ async def bridge_stream(
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
     current_user: User = Depends(get_current_user),
-) -> StreamingResponse:
+) -> Response:
+    if locked := _anti_cheat_response(session, current_user, from_movie_id, to_movie_id):
+        return locked
     engine = get_engine(game_type, session, tmdb)
     excluded_movie_ids, cast_limit, min_runtime = _run_solve_context(
         session, run_id, current_user)

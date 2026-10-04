@@ -1,4 +1,4 @@
-import { Dices, GitBranch, Map as MapIcon, type LucideIcon } from "lucide-react";
+import { CalendarCheck, Dices, GitBranch, Map as MapIcon, type LucideIcon } from "lucide-react";
 import type { EngineMeta, Run } from "../types/api";
 import { usesCastLinks } from "./gameModes";
 
@@ -22,6 +22,13 @@ export const TOOLS: ToolDefinition[] = [
 		icon: GitBranch,
 		to: "/tools/bridge",
 		requiredCapability: "solve_bridge",
+	},
+	{
+		id: "daily",
+		name: "Daily Bridge",
+		description: "Today's Cine-Wordle: link two famous films through shared cast or directors, in as few hops as you can.",
+		icon: CalendarCheck,
+		to: "/tools/daily",
 	},
 	{
 		id: "map",

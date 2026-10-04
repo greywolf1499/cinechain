@@ -44,6 +44,11 @@ class CachedMovie(SQLModel, table=True):
     # LLM-extracted kebab-case tropes/themes ("heist", "time-loop"); NULL = not extracted yet.
     extracted_tropes: list[str] | None = Field(
         default=None, sa_column=Column(JSON(none_as_null=True)))
+    # Historical Time-Travel: the year the story is *set* in (negative = BCE) and a short era label
+    # ("Ancient Rome", "World War II"); NULL = not resolved yet. A film with no period indicator
+    # resolves to its release year / "Contemporary". A manual edit is stored the same way.
+    narrative_year: int | None = None
+    narrative_era_label: str | None = None
 
 
 class CachedActor(SQLModel, table=True):

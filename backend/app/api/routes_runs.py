@@ -334,21 +334,27 @@ async def _enforce_run_rules(
     return extra_metadata, linked_metadata
 
 
-def _step_colors(session: Session, steps: list[RunStep]) -> dict[int, str | None]:
-    """Cached poster colour per step film (Aesthetic Gradient swatches)."""
+def _step_movie_info(session: Session, steps: list[RunStep]) -> dict[int, tuple]:
+    """Cached per-film extras for the steps: poster colour (Aesthetic Gradient swatches) and the
+    narrative setting year / era (Historical Time-Travel)."""
     movie_ids = {s.movie_id for s in steps}
     if not movie_ids:
         return {}
     rows = session.exec(
-        select(CachedMovie.tmdb_id, CachedMovie.dominant_color).where(
-            CachedMovie.tmdb_id.in_(movie_ids))  # type: ignore[attr-defined]
+        select(
+            CachedMovie.tmdb_id, CachedMovie.dominant_color,
+            CachedMovie.narrative_year, CachedMovie.narrative_era_label,
+        ).where(CachedMovie.tmdb_id.in_(movie_ids))  # type: ignore[attr-defined]
     ).all()
-    return dict(rows)
+    return {row[0]: row[1:] for row in rows}
 
 
-def _step_public(step: RunStep, colors: dict[int, str | None]) -> RunStepPublic:
+def _step_public(step: RunStep, info: dict[int, tuple]) -> RunStepPublic:
     public = RunStepPublic.model_validate(step)
-    public.movie_dominant_color = colors.get(step.movie_id)
+    color, narrative_year, narrative_era = info.get(step.movie_id, (None, None, None))
+    public.movie_dominant_color = color
+    public.movie_narrative_year = narrative_year
+    public.movie_narrative_era_label = narrative_era
     return public
 
 
@@ -357,7 +363,7 @@ def _to_run_detail(session: Session, run: Run) -> RunDetail:
         select(RunStep).where(RunStep.run_id ==
                               run.id).order_by(RunStep.logged_at)
     ).all()
-    colors = _step_colors(session, list(steps))
+    info = _step_movie_info(session, list(steps))
     participants = session.exec(
         select(RunParticipant)
         .where(RunParticipant.run_id == run.id)
@@ -365,7 +371,7 @@ def _to_run_detail(session: Session, run: Run) -> RunDetail:
     ).all()
     return RunDetail(
         **RunSummary.model_validate(run).model_dump(),
-        steps=[_step_public(s, colors) for s in steps],
+        steps=[_step_public(s, info) for s in steps],
         participants=[ParticipantPublic.model_validate(
             p) for p in participants],
     )
@@ -687,7 +693,7 @@ async def create_step(
     step = await _log_step(session, tmdb, run, current_user, payload, omdb)
     session.commit()
     session.refresh(step)
-    return _step_public(step, _step_colors(session, [step]))
+    return _step_public(step, _step_movie_info(session, [step]))
 
 
 @router.patch("/{run_id}/steps/{step_id}/mark-watched", response_model=RunStepPublic)
@@ -973,7 +979,7 @@ async def accept_fork_movie(
     session.add(run)
     session.commit()
     session.refresh(step)
-    return _step_public(step, _step_colors(session, [step]))
+    return _step_public(step, _step_movie_info(session, [step]))
 
 
 @router.post("/{run_id}/veto", response_model=GoldenVetoResult)

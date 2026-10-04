@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, Clapperboard, Star, User } from "lucide-react";
 import { cn } from "../lib/cn";
+import { leapText } from "../lib/historicalEra";
 import { countryName } from "../lib/countryNames";
 import { isoToFlagEmoji } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
@@ -41,12 +42,15 @@ export default function ChainLink({
   isKeystone,
   castLinked = true,
   previousMovieId,
+  leap,
 }: {
   step: RunStep;
   isKeystone: boolean;
   castLinked?: boolean;
   /** The film this step was linked from: enables the "Why this link?" pitch. */
   previousMovieId?: number;
+  /** Historical Time-Travel: the leap in setting years into this step (null = unknown). */
+  leap?: number | null;
 }) {
   const meta = step.transition_metadata as TransitionMeta | null;
   const craft = stepCraftLink(step);
@@ -119,12 +123,17 @@ export default function ChainLink({
           <p className="text-xs font-medium text-fuchsia-300">🎭 Character Hop: {meta.character_hop}</p>
         ) : castLinked ? (
           <p className="text-[10px] text-zinc-600">Chain broken — no shared cast</p>
+        ) : leap != null ? (
+          <div className="flex min-w-0 flex-col gap-1">
+            <LeapChip leap={leap} />
+          </div>
         ) : (
           <div className="flex min-w-0 flex-col gap-1">
             <RuleLink meta={meta} />
             <TropeLinkBadge meta={step.transition_metadata} />
           </div>
         )}
+        {leap != null && castLinked && <LeapChip leap={leap} className="shrink-0" />}
         {previousMovieId !== undefined && (
           <PitchButton
             previousMovieId={previousMovieId}
@@ -147,6 +156,17 @@ export default function ChainLink({
   );
 }
 
+
+function LeapChip({ leap, className }: { leap: number; className?: string }) {
+  return (
+    <p
+      title="Leap through the films' setting years"
+      className={cn("flex items-center gap-1.5 text-xs font-medium text-violet-300", className)}
+    >
+      ⏳ {leapText(leap)}
+    </p>
+  );
+}
 
 /** The hop's rule evidence for modes with no cast link: year jump, country change, colour/plot match. */
 function RuleLink({ meta }: { meta: TransitionMeta | null }) {

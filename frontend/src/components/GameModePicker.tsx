@@ -21,6 +21,7 @@ const MODE_ORDER = [
   "regional_deep_dive",
   "rt_split",
   "chrono_climb",
+  "historical_time_travel",
   "genre_pendulum",
   "world_passport",
   "aesthetic_gradient",

@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import Modal from "./Modal";
+import { HISTORICAL_TIME_TRAVEL, leapText, narrativeSettingText } from "../lib/historicalEra";
 import ColorSwatch, { SemanticMatchBadge } from "./ColorSwatch";
 import ModifierChips from "./ModifierChips";
 import PitchButton from "./PitchButton";
@@ -1104,6 +1105,31 @@ function MechanicBadge({
   candidate: DiscoveryCandidate;
   gameType: string;
 }) {
+  if (gameType === HISTORICAL_TIME_TRAVEL && candidate.narrative_year != null) {
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <span
+          title="The year the story is set in (not the release year)"
+          className="w-fit rounded-full bg-violet-950 px-2 py-0.5 text-[10px] font-semibold text-violet-200"
+        >
+          {narrativeSettingText(candidate.narrative_year, candidate.narrative_era_label)}
+        </span>
+        {candidate.narrative_delta != null && (
+          <span className="flex w-fit items-center gap-1 rounded-full bg-app-surface-hover px-2 py-0.5 text-[10px] font-semibold text-violet-300">
+            ⏳ {leapText(candidate.narrative_delta)}
+          </span>
+        )}
+        {candidate.constraint_unverified && (
+          <span
+            title="This film's setting year couldn't be worked out yet; logging checks it again"
+            className="w-fit text-[9px] text-amber-400"
+          >
+            unverified
+          </span>
+        )}
+      </div>
+    );
+  }
   if (gameType === "chrono_climb" && candidate.year_delta != null) {
     const up = candidate.year_delta > 0;
     const Icon = up ? ArrowUp : ArrowDown;

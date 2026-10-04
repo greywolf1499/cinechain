@@ -17,6 +17,7 @@ POPULAR_FALLBACK_SIZE = 150
 # What each mode needs on the seed row for its first hop to be judged.
 MODE_REQUIREMENTS = {
     "chrono_climb": lambda m: bool(m.release_date),
+    "historical_time_travel": lambda m: bool(m.release_date),
     "world_passport": lambda m: bool(m.origin_country),
     "semantic_trope": lambda m: bool((m.overview or "").strip()),
     "aesthetic_gradient": lambda m: bool(m.poster_path),

@@ -27,7 +27,8 @@ export function availableModifiers(gameType: string): {
 } {
   return {
     castLink: STANDALONE_MODES.has(gameType),
-    chrono: gameType !== "chrono_climb",
+    // Chrono is Chrono Climb's own rule; Historical Time-Travel has its own (setting-year) direction.
+    chrono: gameType !== "chrono_climb" && gameType !== "historical_time_travel",
     staircase: true,
     cooldown: true,
   };
@@ -69,7 +70,9 @@ export function modifierPayload(
   const have = availableModifiers(gameType);
   const payload: Partial<RulesConfig> = {};
   if (have.castLink) payload.require_cast_link = !!rules.require_cast_link;
-  if (gameType === "chrono_climb") {
+  if (gameType === "historical_time_travel") {
+    payload.direction = rules.direction ?? "climb";
+  } else if (gameType === "chrono_climb") {
     payload.chrono_direction = rules.chrono_direction ?? rules.direction ?? "climb";
   } else if (rules.chrono_direction) {
     payload.chrono_direction = rules.chrono_direction;

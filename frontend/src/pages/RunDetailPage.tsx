@@ -77,6 +77,7 @@ import { REGIONAL_DEEP_DIVE } from "../lib/expedition";
 import { RT_SPLIT } from "../lib/splitScore";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import { STANDALONE_MODES, gameModeStyle, usesCastLinks } from "../lib/gameModes";
+import { HISTORICAL_TIME_TRAVEL } from "../lib/historicalEra";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
 import type {
   CuratedListSummary,
@@ -320,6 +321,7 @@ export default function RunDetailPage() {
               steps={run.steps}
               keystoneActorIds={keystoneActorIds}
               castLinked={castLinked}
+              gameType={run.game_type}
               onActorClick={(actor) => {
                 // Actor forks assume the unconstrained shared-cast engine.
                 if (!locked && run.game_type === "cinechain") setActiveActor(actor);
@@ -465,6 +467,10 @@ function modeDetail(
 ): string | null {
   if (gameType === "chrono_climb") {
     const label = rules.direction === "descent" ? "Descent" : "Climb";
+    return rules.require_cast_link ? `${label} + cast link` : label;
+  }
+  if (gameType === HISTORICAL_TIME_TRAVEL) {
+    const label = rules.direction === "descent" ? "Backward" : "Forward";
     return rules.require_cast_link ? `${label} + cast link` : label;
   }
   if (STANDALONE_MODES.has(gameType) && rules.require_cast_link) return "+ cast link";
@@ -1068,6 +1074,16 @@ function RulesSummaryCard({
             <span className="text-zinc-400">Direction</span>
             <span className="text-zinc-200">
               {rules.direction === "descent" ? "▼ Descent (older each film)" : "▲ Climb (newer each film)"}
+            </span>
+          </div>
+        )}
+        {gameType === HISTORICAL_TIME_TRAVEL && (
+          <div className="flex items-center justify-between">
+            <span className="text-zinc-400">Direction</span>
+            <span className="text-zinc-200">
+              {rules.direction === "descent"
+                ? "⏪ Backward (set earlier each film)"
+                : "⏩ Forward (set later each film)"}
             </span>
           </div>
         )}

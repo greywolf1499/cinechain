@@ -136,6 +136,9 @@ class RunStepPublic(BaseModel):
     movie_origin_country: str | None
     # Poster colour from the movie cache (Aesthetic Gradient swatch); filled in by the routes.
     movie_dominant_color: str | None = None
+    # Historical Time-Travel: when the film is set (negative = BCE) and its era label, from the cache.
+    movie_narrative_year: int | None = None
+    movie_narrative_era_label: str | None = None
     transition_metadata: dict[str, Any] | None
     user_notes: str | None
     status: str

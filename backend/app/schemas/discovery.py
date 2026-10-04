@@ -43,3 +43,8 @@ class DiscoveryCandidate(BaseModel):
     upcoming_tier_warning: str | None = None
     # Chrono modes: release year minus the frontier film's (negative on a descent).
     year_delta: int | None = None
+    # Historical Time-Travel: the year the film is *set* in (negative = BCE), its era label and the
+    # leap from the frontier film's setting year (negative on a descent).
+    narrative_year: int | None = None
+    narrative_era_label: str | None = None
+    narrative_delta: int | None = None

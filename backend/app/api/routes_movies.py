@@ -17,11 +17,20 @@ from app.schemas.movies import (
     MovieRatings,
     MovieSearchResponse,
     MovieSummary,
+    NarrativeEra,
+    NarrativeEraUpdate,
     PersonSummary,
     SeedSuggestionOut,
     TropeExtraction,
 )
-from app.services import cache_repo, llm, movie_features, pool_options, seed_suggestions
+from app.services import (
+    cache_repo,
+    historical_era,
+    llm,
+    movie_features,
+    pool_options,
+    seed_suggestions,
+)
 from app.services.cache_repo import CastEntry
 from app.services.crew_roles import role_for_job
 from app.services.movie_filters import passes_filters
@@ -209,6 +218,39 @@ async def extract_movie_tropes(
     except llm.LlmUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return TropeExtraction(tmdb_id=tmdb_id, tropes=tropes, cached=False)
+
+
+@router.post("/movies/{tmdb_id}/narrative-era", response_model=NarrativeEra)
+async def update_narrative_era(
+    tmdb_id: int,
+    payload: NarrativeEraUpdate | None = None,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> NarrativeEra:
+    """Historical Time-Travel's setting year. With a `narrative_year` and/or `narrative_era_label`
+    this is a manual correction (stored as-is); with an empty body the era is re-resolved from
+    TMDB keywords, the plot and (when on) the model, replacing whatever was stored."""
+    movie = await cache_repo.get_movie(session, tmdb, tmdb_id)
+    if movie.overview is None:
+        movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=True)
+    payload = payload or NarrativeEraUpdate()
+    label = (payload.narrative_era_label or "").strip()
+    if payload.narrative_year is None and not label:
+        year, era = await historical_era.ensure_narrative_era(
+            session, tmdb, movie, llm.load_config(session), force=True)
+        source = "resolved" if movie.narrative_year == year else "default"
+        return NarrativeEra(
+            tmdb_id=tmdb_id, narrative_year=year, narrative_era_label=era, source=source)
+    year = payload.narrative_year
+    if year is None:
+        year = historical_era.effective_era(movie)[0]
+    if not label:
+        label = historical_era.era_label_for_year(year, parse_release_year(movie.release_date))
+    historical_era.set_narrative_era(session, movie, year, label)
+    return NarrativeEra(
+        tmdb_id=tmdb_id, narrative_year=year, narrative_era_label=movie.narrative_era_label or label,
+        source="manual")
 
 
 @router.get("/movies/{tmdb_id}/ratings", response_model=MovieRatings | None)

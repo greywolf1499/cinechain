@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { leapText, narrativeSettingText } from "../lib/historicalEra";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, GitBranch, Loader2, Lock, Search, X } from "lucide-react";
@@ -320,8 +321,16 @@ function LogButton({
 
 /** "Fits this run's rule" plus whatever evidence the engine measured for a cast-free hop. */
 function describeRuleFit(validation: ValidationResult): string {
-  const mechanic = validation.mechanic as { year_delta?: number } | null | undefined;
+  const mechanic = validation.mechanic as
+    | { year_delta?: number; narrative_delta?: number; narrative_year?: number; narrative_era_label?: string }
+    | null
+    | undefined;
   const evidence: string[] = [];
+  if (mechanic?.narrative_delta !== undefined && mechanic.narrative_year !== undefined) {
+    evidence.push(
+      `${narrativeSettingText(mechanic.narrative_year, mechanic.narrative_era_label)} (${leapText(mechanic.narrative_delta)})`,
+    );
+  }
   if (mechanic?.year_delta !== undefined) {
     const years = Math.abs(mechanic.year_delta);
     evidence.push(`${years} year${years === 1 ? "" : "s"} ${mechanic.year_delta > 0 ? "later" : "earlier"}`);

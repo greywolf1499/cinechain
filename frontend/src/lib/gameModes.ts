@@ -5,6 +5,7 @@ import {
   Dices,
   Drama,
   Globe2,
+  History,
   Hourglass,
   Landmark,
   CalendarRange,
@@ -117,6 +118,14 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     ring: "border-violet-400 shadow-[0_0_0_1px_rgba(167,139,250,0.6),0_8px_30px_-8px_rgba(167,139,250,0.35)]",
     text: "text-violet-300",
   },
+  historical_time_travel: {
+    icon: History,
+    tagline: "Travel through the eras stories are set in",
+    tags: ["Any film", "Setting year", "Forward / Backward"],
+    bubble: "bg-blue-500/15 text-blue-300",
+    ring: "border-blue-400 shadow-[0_0_0_1px_rgba(96,165,250,0.6),0_8px_30px_-8px_rgba(96,165,250,0.35)]",
+    text: "text-blue-300",
+  },
   world_passport: {
     icon: Globe2,
     tagline: "A new country every film",
@@ -213,6 +222,7 @@ export function gameModeStyle(gameType: string): GameModeStyle {
 /** Modes that play on their own rule (year, country, colour, plot); shared cast is an opt-in modifier. */
 export const STANDALONE_MODES = new Set([
   "chrono_climb",
+  "historical_time_travel",
   "world_passport",
   "aesthetic_gradient",
   "semantic_trope",

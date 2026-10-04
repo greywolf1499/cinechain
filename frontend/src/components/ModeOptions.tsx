@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowDown, ArrowUp, Calendar, Globe2, Link2, Link2Off, Ruler } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Calendar, FastForward, Globe2, Link2, Link2Off, Rewind, Ruler } from "lucide-react";
 import { cn } from "../lib/cn";
 import {
   DEFAULT_COOLDOWN,
@@ -28,6 +28,8 @@ export default function ModeOptions({
   const have = availableModifiers(gameType);
   const requireCast = !!value.require_cast_link;
   const chronoMode = gameType === "chrono_climb";
+  const historicalMode = gameType === "historical_time_travel";
+  const historicalDirection = value.direction ?? "climb";
   const chrono: ChronoDirection | null = value.chrono_direction ?? null;
   const modeDirection: ChronoDirection = value.chrono_direction ?? value.direction ?? "climb";
   const staircase: RuntimeStaircase | null = value.runtime_staircase ?? null;
@@ -54,6 +56,28 @@ export default function ModeOptions({
               icon={<ArrowDown className="h-4 w-4" />}
               title="Chrono Descent"
               detail="Each film is older than the last"
+            />
+          </div>
+        </div>
+      )}
+
+      {historicalMode && (
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-zinc-400">Direction through history</p>
+          <div className="grid grid-cols-2 gap-2">
+            <ChoiceButton
+              active={historicalDirection === "climb"}
+              onClick={() => onChange({ ...value, direction: "climb" })}
+              icon={<FastForward className="h-4 w-4" />}
+              title="Forward"
+              detail="Each film is set later than the last"
+            />
+            <ChoiceButton
+              active={historicalDirection === "descent"}
+              onClick={() => onChange({ ...value, direction: "descent" })}
+              icon={<Rewind className="h-4 w-4" />}
+              title="Backward"
+              detail="Each film is set earlier than the last"
             />
           </div>
         </div>

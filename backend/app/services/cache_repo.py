@@ -83,6 +83,10 @@ class CacheRepo:
         if row is None:
             row = CachedMovie(tmdb_id=movie["id"])
         row.title = movie["title"]
+        if row.narrative_era_label == "Contemporary" and row.release_date != movie.get("release_date"):
+            # "Contemporary" was derived from the old release year; a real era is never touched.
+            row.narrative_year = None
+            row.narrative_era_label = None
         row.release_date = movie.get("release_date")
         # Derived features go stale with their source; they're recomputed on demand.
         if row.poster_path != movie.get("poster_path"):

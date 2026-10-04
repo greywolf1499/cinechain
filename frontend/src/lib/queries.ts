@@ -17,6 +17,7 @@ import type {
 	EngineMeta,
 	GoldenVetoResult,
 	MovieDetail,
+	NarrativeEra,
 	TropeExtraction,
 	DailyConvertResult,
 	DailyForfeitResult,
@@ -630,6 +631,25 @@ export function useConvertMarathonToRun() {
 		mutationFn: (payload: { run_name: string; movie_ids: number[] }) =>
 			api.post<RunDetail>("/tools/router/convert-to-run", payload),
 		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["runs"] });
+		},
+	});
+}
+
+/** Historical Time-Travel: corrects (or, with no body, re-resolves) a film's setting year. */
+export function useUpdateNarrativeEra(runId?: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			movieId,
+			...payload
+		}: {
+			movieId: number;
+			narrative_year?: number;
+			narrative_era_label?: string;
+		}) => api.post<NarrativeEra>(`/movies/${movieId}/narrative-era`, payload),
+		onSuccess: () => {
+			if (runId) void queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 			void queryClient.invalidateQueries({ queryKey: ["runs"] });
 		},
 	});

@@ -272,6 +272,9 @@ export interface RunStep {
 	movie_origin_country: string | null;
 	/** Poster colour ("#rrggbb"), when the movie cache has computed it (Aesthetic Gradient). */
 	movie_dominant_color?: string | null;
+	/** Historical Time-Travel: the year the film is set in (negative = BCE) and its era label. */
+	movie_narrative_year?: number | null;
+	movie_narrative_era_label?: string | null;
 	transition_metadata: Record<string, unknown> | null;
 	user_notes: string | null;
 	status: StepStatus;
@@ -620,6 +623,18 @@ export interface DiscoveryCandidate {
 	upcoming_tier_warning?: string | null;
 	/** Chrono modes: release year minus the frontier film's (negative on a descent). */
 	year_delta?: number | null;
+	/** Historical Time-Travel: the setting year (negative = BCE), era label and leap from the frontier. */
+	narrative_year?: number | null;
+	narrative_era_label?: string | null;
+	narrative_delta?: number | null;
+}
+
+/** POST /movies/{id}/narrative-era: a film's setting year. */
+export interface NarrativeEra {
+	tmdb_id: number;
+	narrative_year: number;
+	narrative_era_label: string;
+	source: "resolved" | "manual" | "default";
 }
 
 // --- integrations (schemas/integrations.py) ---

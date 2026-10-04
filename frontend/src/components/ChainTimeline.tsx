@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Loader2, Pencil } from "lucide-react";
 import MoviePoster from "./MoviePoster";
 import LinkBonusBadges from "./LinkBonusBadges";
 import ChainLink from "./ChainLink";
 import ColorSwatch from "./ColorSwatch";
+import EditSettingYearModal from "./EditSettingYearModal";
 import MarkWatchedModal from "./MarkWatchedModal";
 import MovieDetailModal from "./MovieDetailModal";
 import { CanonBadgeList } from "./CanonBadge";
 import { cn } from "../lib/cn";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
+import { HISTORICAL_TIME_TRAVEL, narrativeSettingText, stepLeap } from "../lib/historicalEra";
 import { useCanonBadgesBulk, useUpdateStep } from "../lib/queries";
 import type { ActorClickPayload } from "./actorClickTypes";
 import type { CanonBadge, RunStep } from "../types/api";
@@ -50,6 +52,7 @@ export default function ChainTimeline({
   onRequestDeleteStep,
   locked = false,
   castLinked = true,
+  gameType,
 }: {
   runId: string;
   steps: RunStep[];
@@ -60,6 +63,8 @@ export default function ChainTimeline({
   locked?: boolean;
   /** False for standalone modes: links show the mode's rule evidence instead of a cast link. */
   castLinked?: boolean;
+  /** Historical Time-Travel runs show each film's setting year and the leaps between them. */
+  gameType?: string;
 }) {
   const [order, setOrder] = useState<Order>(() => {
     if (typeof window === "undefined") return "story";
@@ -67,6 +72,8 @@ export default function ChainTimeline({
   });
   const [selectedStep, setSelectedStep] = useState<RunStep | null>(null);
   const [markWatchedStep, setMarkWatchedStep] = useState<RunStep | null>(null);
+  const [editEraStep, setEditEraStep] = useState<RunStep | null>(null);
+  const timeTravel = gameType === HISTORICAL_TIME_TRAVEL;
   const quickMarkWatched = useUpdateStep(runId);
   const { data: badgesMap } = useCanonBadgesBulk(steps.map((s) => s.movie_id));
 
@@ -118,6 +125,8 @@ export default function ChainTimeline({
                 quickMarkWatched.mutate({ stepId: row.step.id, watched_at: new Date().toISOString() })
               }
               locked={locked}
+              showEra={timeTravel}
+              onEditEra={() => setEditEraStep(row.step)}
               quickMarkWatchedPending={
                 quickMarkWatched.isPending && quickMarkWatched.variables?.stepId === row.step.id
               }
@@ -129,6 +138,11 @@ export default function ChainTimeline({
               isKeystone={isKeystoneConnector(row.step, keystoneActorIds)}
               castLinked={castLinked}
               previousMovieId={steps[steps.findIndex((s) => s.id === row.step.id) - 1]?.movie_id}
+              leap={
+                timeTravel
+                  ? stepLeap(steps[steps.findIndex((s) => s.id === row.step.id) - 1], row.step)
+                  : undefined
+              }
             />
           ),
         )}
@@ -154,6 +168,18 @@ export default function ChainTimeline({
         />
       )}
 
+      {editEraStep && (
+        <EditSettingYearModal
+          open
+          onClose={() => setEditEraStep(null)}
+          runId={runId}
+          movieId={editEraStep.movie_id}
+          movieTitle={editEraStep.movie_title}
+          year={editEraStep.movie_narrative_year}
+          label={editEraStep.movie_narrative_era_label}
+        />
+      )}
+
       {markWatchedStep && (
         <MarkWatchedModal
           open={!!markWatchedStep}
@@ -174,6 +200,8 @@ function StationRow({
   onQuickMarkWatched,
   quickMarkWatchedPending,
   locked,
+  showEra,
+  onEditEra,
 }: {
   step: RunStep;
   badges: CanonBadge[] | undefined;
@@ -181,6 +209,8 @@ function StationRow({
   onQuickMarkWatched: () => void;
   quickMarkWatchedPending: boolean;
   locked: boolean;
+  showEra: boolean;
+  onEditEra: () => void;
 }) {
   const decade = step.movie_release_year ? Math.floor(step.movie_release_year / 10) * 10 : null;
   const countries = parseOriginCountries(step.movie_origin_country);
@@ -258,6 +288,30 @@ function StationRow({
             <LinkBonusBadges meta={step.transition_metadata} className="mt-1.5" />
           </div>
         </button>
+
+        {showEra && (
+          <div className="flex items-center gap-2 rounded-md bg-violet-950/40 px-2.5 py-1.5">
+            <p
+              className="min-w-0 flex-1 truncate text-sm font-semibold text-violet-200"
+              title="The year the story is set in (not the release year)"
+            >
+              {step.movie_narrative_year != null
+                ? narrativeSettingText(step.movie_narrative_year, step.movie_narrative_era_label)
+                : "🕰️ Setting year not detected yet"}
+            </p>
+            {!locked && (
+              <button
+                type="button"
+                onClick={onEditEra}
+                aria-label={`Edit setting year for ${step.movie_title}`}
+                title="Edit setting year"
+                className="shrink-0 rounded p-1 text-violet-300 transition-colors hover:bg-violet-900/60"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
 
         {isPlanned && !locked && (
           <button

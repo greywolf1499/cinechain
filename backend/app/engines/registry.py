@@ -8,6 +8,7 @@ from app.engines.canon_island import CanonIslandEngine
 from app.engines.cinechain import CineChainEngine
 from app.engines.crew_craft import CrewCraftEngine
 from app.engines.genre_pendulum import GenrePendulumEngine
+from app.engines.historical_time_travel import HistoricalTimeTravelEngine
 from app.engines.march_madness import MarchMadnessEngine
 from app.engines.meet_in_middle import MeetInTheMiddleEngine
 from app.engines.method_actor import MethodActorEngine
@@ -37,6 +38,7 @@ ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
         DecadeSieveEngine,
         RouletteEngine,
         ChronoClimbEngine,
+        HistoricalTimeTravelEngine,
         WorldPassportEngine,
         AuteurRelayEngine,
         AestheticGradientEngine,

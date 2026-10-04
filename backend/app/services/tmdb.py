@@ -273,6 +273,16 @@ class TMDBClient:
         data = await self._get(f"/movie/{tmdb_id}")
         return _normalize_movie_detail(data)
 
+    async def get_movie_keywords(self, tmdb_id: int) -> list[str]:
+        """The names of the film's TMDB keywords ("world war ii", "ancient rome")."""
+        data = await self._get(f"/movie/{tmdb_id}/keywords")
+        return [k["name"] for k in data.get("keywords", []) if k.get("name")]
+
+    async def find_keyword_ids(self, name: str, limit: int = 3) -> list[int]:
+        """TMDB's ids for a keyword ("ancient rome"), best match first."""
+        data = await self._get("/search/keyword", params={"query": name})
+        return [k["id"] for k in data.get("results", [])[:limit]]
+
     async def get_movie_credits(self, tmdb_id: int) -> list[TMDBCastMember]:
         data = await self._get(f"/movie/{tmdb_id}/credits")
         return [

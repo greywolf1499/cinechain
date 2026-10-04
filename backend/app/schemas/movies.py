@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MovieSummary(BaseModel):
@@ -45,6 +45,23 @@ class TropeExtraction(BaseModel):
     cached: bool  # True when the stored tropes were returned without calling the model
     # False when the LLM is off, so an empty list means "not extracted" rather than "none".
     enabled: bool = True
+
+
+class NarrativeEraUpdate(BaseModel):
+    """Both fields omitted = re-resolve from TMDB keywords / plot / model; otherwise a manual edit
+    (`narrative_year` negative = BCE; a blank label becomes a generic era name)."""
+
+    narrative_year: int | None = Field(default=None, ge=-10_000, le=10_000)
+    narrative_era_label: str | None = Field(default=None, max_length=60)
+
+
+class NarrativeEra(BaseModel):
+    tmdb_id: int
+    narrative_year: int
+    narrative_era_label: str
+    # resolved = worked out from keywords / plot / model; manual = set by a player;
+    # default = nothing found and kept unsaved (TMDB or the model was unreachable).
+    source: str
 
 
 class CastMember(BaseModel):

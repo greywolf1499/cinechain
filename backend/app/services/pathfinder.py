@@ -50,6 +50,10 @@ _EVENT_FLUSH_SECONDS = 0.25
 # Result post-processing (runtime/country hydration for path tags) always gets
 # this long, even when the solve itself used up its whole time limit.
 _MIN_HYDRATE_SECONDS = 3.0
+MAX_ALTERNATE_PATHS = 3
+# Meeting points scanned per round when choosing which routes to offer: wider than the
+# number offered so mutually disjoint corridors can be preferred.
+_MEETING_SCAN_LIMIT = 12
 
 
 class _SearchStats:
@@ -217,11 +221,11 @@ async def solve_bridge_bipartite(
                     candidate_paths = _collect_deeper_paths(
                         forward, backward, min_hops, limit=3)
                 else:
-                    candidate_paths = [
+                    candidate_paths = prefer_disjoint_paths([
                         _reconstruct_path(forward, backward, meeting)
                         for meeting in _find_intersections(
-                            forward.visited, backward.visited, limit=3)
-                    ]
+                            forward.visited, backward.visited, limit=_MEETING_SCAN_LIMIT)
+                    ])[:MAX_ALTERNATE_PATHS]
                 if candidate_paths:
                     result = await _finish_result(
                         session, tmdb, candidate_paths, deadline)
@@ -388,6 +392,28 @@ async def _expand_actor_side(
     return new_nodes
 
 
+def _intermediate_films(path: list[NodeKey]) -> frozenset[int]:
+    """The films a route passes *through* (its endpoints are the same for every route)."""
+    return frozenset(node[1] for node in path[0::2][1:-1])
+
+
+def prefer_disjoint_paths(paths: list[list[NodeKey]]) -> list[list[NodeKey]]:
+    """Reorders `paths` (shortest first, as given) so routes sharing no intermediate film with
+    an earlier pick come first: the alternatives offered are distinct corridors, not the same
+    middle film reached through different actors. The rest follow in their original order."""
+    chosen: list[list[NodeKey]] = []
+    used: set[int] = set()
+    rest: list[list[NodeKey]] = []
+    for path in paths:
+        films = _intermediate_films(path)
+        if films & used:
+            rest.append(path)
+            continue
+        chosen.append(path)
+        used |= films
+    return chosen + rest
+
+
 def _find_intersections(
     forward_visited: dict[NodeKey, NodeKey | None],
     backward_visited: dict[NodeKey, NodeKey | None],
@@ -446,7 +472,7 @@ def _collect_deeper_paths(
         if _path_hops(path) < min_hops or len(set(path)) != len(path):
             continue  # too shallow, or it doubles back through a node it already used
         found.setdefault(tuple(n[1] for n in path[0::2]), path)
-    return sorted(found.values(), key=len)[:limit]
+    return prefer_disjoint_paths(sorted(found.values(), key=len))[:limit]
 
 
 async def _finish_result(

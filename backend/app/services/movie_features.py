@@ -66,20 +66,40 @@ async def ensure_dominant_colors(
     session.commit()
 
 
+def _needs_embedding(
+    movie: CachedMovie, config: embeddings.EmbeddingConfig, suspended: bool
+) -> bool:
+    """No vector yet, or one from a different model than the one in use. While the external
+    provider is suspended the local fallback's vectors are good enough (re-embedding them
+    would only burn CPU); once it is back they are upgraded."""
+    if not (movie.overview or "").strip():
+        return False
+    if movie.overview_embedding is None:
+        return True
+    stored = embeddings.row_fingerprint(movie.overview_embedding_model)
+    if stored == config.fingerprint:
+        return False
+    return not (suspended and stored == embeddings.LOCAL_FINGERPRINT)
+
+
 async def ensure_embeddings(session: Session, movies: Iterable[CachedMovie]) -> bool:
-    """Embed every film that has an overview but no embedding yet, in as few model
-    loads as possible. False when the model couldn't be used (callers stay lenient)."""
-    pending = [m for m in movies if m.overview_embedding is None and (m.overview or "").strip()]
+    """Embed every film that lacks a vector from the configured provider, in as few
+    batches as possible. An unreachable external provider falls back to the local model;
+    False only when no model could be used at all (callers stay lenient)."""
+    config = embeddings.load_config(session)
+    suspended = embeddings.external_suspended(config)
+    pending = [m for m in movies if _needs_embedding(m, config, suspended)]
     for start in range(0, len(pending), EMBED_BATCH_SIZE):
         batch = pending[start: start + EMBED_BATCH_SIZE]
         try:
-            vectors = await anyio.to_thread.run_sync(
-                embeddings.embed_texts, [(m.overview or "").strip() for m in batch])
+            result = await embeddings.embed_batch(
+                config, [(m.overview or "").strip() for m in batch])
         except embeddings.EmbeddingUnavailable as exc:
             logger.warning("Semantic embeddings unavailable: %s", exc)
             return False
-        for movie, vector in zip(batch, vectors, strict=True):
+        for movie, vector in zip(batch, result.vectors, strict=True):
             movie.overview_embedding = embeddings.encode_embedding(vector)
+            movie.overview_embedding_model = result.fingerprint
             session.add(movie)
         session.commit()
     return True

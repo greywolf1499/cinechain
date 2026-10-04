@@ -19,3 +19,13 @@ def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     yield tmp_path
     get_settings.cache_clear()
     sys.modules.pop("app.db", None)
+
+
+@pytest.fixture(autouse=True)
+def _reset_embedding_suspension():
+    """A failed external embedding provider is skipped for a minute; don't leak that across tests."""
+    from app.services import embeddings
+
+    embeddings.reset_suspension()
+    yield
+    embeddings.reset_suspension()

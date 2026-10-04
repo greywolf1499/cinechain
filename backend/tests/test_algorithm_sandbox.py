@@ -338,3 +338,70 @@ def test_semantic_is_lenient_when_the_model_is_unavailable(client, monkeypatch):
         resp = log(client, run_id, 3)
     assert resp.status_code == 201
     assert "semantic_score" not in (resp.json()["transition_metadata"] or {})
+
+
+# --- pluggable embedding providers (Phase 23b) ---
+
+OLLAMA_URL = "http://localhost:11434/api/embeddings"
+
+
+def configure_embeddings(client, **values):
+    resp = client.patch("/api/settings/integrations", json=values)
+    assert resp.status_code == 200, resp.text
+
+
+def mock_ollama(vectors: dict[str, np.ndarray]):
+    import json
+
+    def reply(request):
+        prompt = json.loads(request.content)["prompt"]
+        return httpx.Response(200, json={"embedding": vectors[prompt].tolist()})
+
+    return respx.post(OLLAMA_URL).mock(side_effect=reply)
+
+
+def test_semantic_uses_the_configured_ollama_provider(client, db_engine, fake_model):
+    configure_embeddings(client, embedding_provider="ollama", embedding_model="nomic-embed-text")
+    run_id = create_run(client, "semantic_trope")
+    with respx.mock:
+        mock_universe(PLOTS)
+        ollama = mock_ollama(VECTORS)
+        log(client, run_id, 1)
+        ok = log(client, run_id, 2)
+
+    assert ok.status_code == 201
+    assert ok.json()["transition_metadata"]["semantic_score"] == pytest.approx(0.8944, abs=1e-3)
+    assert ollama.call_count == 2 and fake_model == []  # the local model never ran
+    with Session(db_engine) as session:
+        assert session.get(CachedMovie, 1).overview_embedding_model == "ollama:nomic-embed-text"
+
+
+def test_semantic_falls_back_to_local_when_ollama_is_down(client, db_engine, fake_model):
+    configure_embeddings(client, embedding_provider="ollama")
+    run_id = create_run(client, "semantic_trope")
+    with respx.mock:
+        mock_universe(PLOTS)
+        ollama = respx.post(OLLAMA_URL).mock(side_effect=httpx.ConnectError("refused"))
+        assert log(client, run_id, 1).status_code == 201
+        ok = log(client, run_id, 2)
+        blocked = log(client, run_id, 3)
+
+    assert ok.status_code == 201 and blocked.status_code == 409  # still enforced, via ONNX
+    assert ollama.call_count == 1  # suspended after the first failure
+    with Session(db_engine) as session:
+        assert session.get(CachedMovie, 1).overview_embedding_model == embeddings.LOCAL_FINGERPRINT
+
+
+def test_semantic_never_compares_vectors_from_different_models():
+    from app.engines.algorithms import SemanticTropeEngine
+
+    vector = embeddings.encode_embedding(unit(1, 0, 0))
+    local = CachedMovie(tmdb_id=1, title="A", overview_embedding=vector)
+    same = CachedMovie(
+        tmdb_id=2, title="B", overview_embedding=vector,
+        overview_embedding_model=embeddings.LOCAL_FINGERPRINT)
+    other = CachedMovie(
+        tmdb_id=3, title="C", overview_embedding=vector, overview_embedding_model="ollama:x")
+    engine = SemanticTropeEngine(None, None)
+    assert engine.measure(local, same) == pytest.approx(1.0)  # NULL model = the local one
+    assert engine.measure(local, other) is None  # different vector spaces: can't tell

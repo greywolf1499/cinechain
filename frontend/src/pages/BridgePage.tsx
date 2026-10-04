@@ -8,7 +8,6 @@ import {
   Link2,
   Loader2,
   RotateCcw,
-  Search,
   Sparkles,
   XCircle,
 } from "lucide-react";
@@ -22,6 +21,7 @@ import BridgePathView, { PathTagChips } from "../components/BridgePathView";
 import BridgeSwapPanel, { type SwapState, type SwapTabState } from "../components/BridgeSwapPanel";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
+import { isScenicRoute, usedIntermediateIds } from "../lib/bridge";
 import { connectionMetadata } from "../lib/connections";
 import { useCreateStep, useEngines, useRun, useRuns } from "../lib/queries";
 import type {
@@ -66,10 +66,14 @@ interface ExhaustedEvent {
 
 type SolveStatus = "idle" | "streaming" | "solved" | "exhausted" | "timeout" | "error";
 
-type DeeperState =
+// "Search Deeper" (more hops) and "Find Alternative Routes" (same hops, avoiding the films
+// already used) share one streaming slot - only one extra search runs at a time.
+type ExtraSearchState =
   | { status: "idle" }
-  | { status: "streaming"; target: number; progress: ProgressEvent | null }
+  | { status: "streaming"; kind: ExtraSearchKind; label: string; progress: ProgressEvent | null }
   | { status: "empty" | "timeout" | "error"; message: string };
+
+type ExtraSearchKind = "deeper" | "alternatives";
 
 function routesFromResult(result: BridgeResult, labelPrefix = ""): BridgeRoute[] {
   return [
@@ -125,7 +129,7 @@ export default function BridgePage() {
   const [options, setOptions] = useState<BridgeRoute[]>([]);
   const [swap, setSwap] = useState<SwapState | null>(null);
   const [applyingSwap, setApplyingSwap] = useState(false);
-  const [deeper, setDeeper] = useState<DeeperState>({ status: "idle" });
+  const [deeper, setDeeper] = useState<ExtraSearchState>({ status: "idle" });
   // Highest "Search Deeper" hop target that already came back empty.
   const [deeperFloor, setDeeperFloor] = useState(0);
   const [activePathIndex, setActivePathIndex] = useState(0);
@@ -457,33 +461,59 @@ export default function BridgePage() {
   const nextDeeperHops = Math.max(maxHopsFound, deeperFloor) + 1;
 
   function searchDeeper() {
-    if (!startMovie || !targetMovie || options.length === 0) return;
     if (nextDeeperHops > DEEP_SEARCH_MAX_HOPS) return;
+    runExtraSearch("deeper");
+  }
+
+  function findAlternatives() {
+    runExtraSearch("alternatives");
+  }
+
+  function runExtraSearch(kind: ExtraSearchKind) {
+    if (!startMovie || !targetMovie || options.length === 0) return;
     closeDeeperSource();
     const target = nextDeeperHops;
+    // Alternatives aim for the shortest hop count already found; the search may still come back
+    // longer when every shorter corridor is blocked - that is what makes it a scenic detour.
+    const shortest = options.reduce((min, option) => Math.min(min, option.hops), Number.POSITIVE_INFINITY);
+    const avoided = usedIntermediateIds(options);
     setSwap(null);
-    setDeeper({ status: "streaming", target, progress: null });
+    setDeeper({
+      status: "streaming",
+      kind,
+      label: kind === "deeper" ? `${target}+ hop routes` : `alternative routes (avoiding ${avoided.length} film${avoided.length === 1 ? "" : "s"})`,
+      progress: null,
+    });
 
-    // Same SSE endpoint, told to skip routes shallower than `target` hops. The
-    // shallow levels are cache hits; every new level it reaches is cached.
+    // Same SSE endpoint. Deeper skips routes shallower than `target` hops (the shallow levels are
+    // cache hits); alternatives exclude every intermediate film of the routes already shown.
     const params = new URLSearchParams({
       from_movie_id: String(startMovie.tmdb_id),
       to_movie_id: String(targetMovie.tmdb_id),
       game_type: solveGameType,
-      max_depth: String(target),
-      min_hops: String(target),
     });
+    if (kind === "deeper") {
+      params.set("max_depth", String(target));
+      params.set("min_hops", String(target));
+    } else {
+      params.set("max_depth", String(Math.max(maxDepth, shortest + 1)));
+      avoided.forEach((id) => params.append("exclude_movie_ids", String(id)));
+    }
     if (runIdFromQuery) params.set("run_id", runIdFromQuery);
     const source = new EventSource(`/api/engine/bridge/stream?${params.toString()}`, {
       withCredentials: true,
     });
     deeperSourceRef.current = source;
     let finished = false;
-    const finish = (state: DeeperState) => {
+    const finish = (state: ExtraSearchState) => {
       finished = true;
       setDeeper(state);
       closeDeeperSource();
     };
+    const emptyMessage =
+      kind === "deeper"
+        ? `No new ${target}+ hop routes turned up.`
+        : "No other corridor exists within this depth that avoids the films already used.";
 
     source.addEventListener("progress", (event) => {
       const progressEvent: ProgressEvent = JSON.parse((event as MessageEvent).data);
@@ -492,21 +522,26 @@ export default function BridgePage() {
     source.addEventListener("result", (event) => {
       const parsed: BridgeResult = JSON.parse((event as MessageEvent).data);
       const known = new Set(options.map((option) => pathKey(option.path)));
-      const fresh = routesFromResult(parsed, "Deeper - ").filter((route) => !known.has(pathKey(route.path)));
+      const fresh = routesFromResult(parsed, kind === "deeper" ? "Deeper - " : "Alt - ")
+        .map((route) => (kind === "alternatives" ? { ...route, label: route.label.replace(/Shortest$/, "Different Corridor") } : route))
+        .filter((route) => !known.has(pathKey(route.path)));
       if (fresh.length > 0) {
         setOptions((prev) => [...prev, ...fresh]);
         setActivePathIndex(options.length);
         finish({ status: "idle" });
       } else {
-        setDeeperFloor(target);
-        finish({ status: "empty", message: `No new ${target}+ hop routes turned up.` });
+        if (kind === "deeper") setDeeperFloor(target);
+        finish({ status: "empty", message: emptyMessage });
       }
     });
     source.addEventListener("exhausted", () => {
-      setDeeperFloor(target);
+      if (kind === "deeper") setDeeperFloor(target);
       finish({
         status: "empty",
-        message: `No routes of ${target}+ hops exist within this search depth. The levels it explored are now cached.`,
+        message:
+          kind === "deeper"
+            ? `No routes of ${target}+ hops exist within this search depth. The levels it explored are now cached.`
+            : emptyMessage,
       });
     });
     source.addEventListener("timeout", (event) => {
@@ -521,9 +556,9 @@ export default function BridgePage() {
       let message = "Connection to the solver was lost.";
       if (messageEvent.data) {
         try {
-          message = JSON.parse(messageEvent.data).message ?? "Deeper search failed.";
+          message = JSON.parse(messageEvent.data).message ?? "The search failed.";
         } catch {
-          message = "Deeper search failed.";
+          message = "The search failed.";
         }
       }
       finish({ status: "error", message });
@@ -794,13 +829,15 @@ export default function BridgePage() {
                     )}
                   >
                     Path {index + 1} ({option.label})
+                    {isScenicRoute(option, options) && <ScenicBadge compact />}
                   </button>
                 ))}
               </div>
             )}
 
-            {activePath && activePath.tags.length > 0 && (
-              <div className="mb-3">
+            {activePath && (activePath.tags.length > 0 || isScenicRoute(activePath, options)) && (
+              <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                {isScenicRoute(activePath, options) && <ScenicBadge />}
                 <PathTagChips tags={activePath.tags} />
               </div>
             )}
@@ -842,7 +879,7 @@ export default function BridgePage() {
                 <div className="flex flex-wrap items-center gap-3">
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
                   <p className="min-w-0 flex-1 text-sm text-zinc-300">
-                    Searching for {deeper.target}+ hop routes
+                    Searching for {deeper.label}
                     {deeper.progress && (
                       <span className="text-zinc-500">
                         {" "}
@@ -862,21 +899,39 @@ export default function BridgePage() {
                   </button>
                 </div>
               ) : (
-                <div className="flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={searchDeeper}
-                    disabled={nextDeeperHops > DEEP_SEARCH_MAX_HOPS}
-                    className="flex items-center gap-1.5 rounded-md border border-accent/50 px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Search className="h-4 w-4" />
-                    Search Deeper
-                  </button>
-                  <p className="min-w-0 flex-1 text-xs text-zinc-500">
-                    {nextDeeperHops > DEEP_SEARCH_MAX_HOPS
-                      ? `Already searched to the ${DEEP_SEARCH_MAX_HOPS}-hop limit.`
-                      : `Hunt for weirder routes of ${nextDeeperHops}+ hops. Everything it explores is cached, so repeat searches get faster.`}
-                  </p>
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
+                    <div className="flex min-w-0 flex-1 basis-60 flex-col gap-1.5">
+                      <button
+                        type="button"
+                        onClick={findAlternatives}
+                        className="flex w-fit items-center gap-1.5 rounded-md border border-accent/50 px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/10"
+                      >
+                        <span aria-hidden>🔀</span>
+                        Find Alternative Routes
+                      </button>
+                      <p className="text-xs text-zinc-500">
+                        Same hop target, but never through the {usedIntermediateIds(options).length} intermediate film
+                        {usedIntermediateIds(options).length === 1 ? "" : "s"} already shown - a genuinely different corridor.
+                      </p>
+                    </div>
+                    <div className="flex min-w-0 flex-1 basis-60 flex-col gap-1.5">
+                      <button
+                        type="button"
+                        onClick={searchDeeper}
+                        disabled={nextDeeperHops > DEEP_SEARCH_MAX_HOPS}
+                        className="flex w-fit items-center gap-1.5 rounded-md border border-accent/50 px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <span aria-hidden>🔍</span>
+                        Search Deeper (More Hops)
+                      </button>
+                      <p className="text-xs text-zinc-500">
+                        {nextDeeperHops > DEEP_SEARCH_MAX_HOPS
+                          ? `Already searched to the ${DEEP_SEARCH_MAX_HOPS}-hop limit.`
+                          : `Hunt for weirder routes of ${nextDeeperHops}+ hops. Everything it explores is cached, so repeat searches get faster.`}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
               {(deeper.status === "empty" || deeper.status === "timeout") && (
@@ -911,6 +966,22 @@ export default function BridgePage() {
         )}
       </div>
     </div>
+  );
+}
+
+/** Marks a route that intentionally takes a longer, less obvious corridor. */
+function ScenicBadge({ compact = false }: { compact?: boolean }) {
+  return (
+    <span
+      title="A longer, less obvious corridor than the shortest route"
+      className={cn(
+        "ml-1.5 inline-flex items-center gap-1 rounded-full border border-fuchsia-400/40 bg-fuchsia-500/10 font-medium text-fuchsia-300",
+        compact ? "px-1.5 py-0.5 text-[10px]" : "ml-0 px-2.5 py-1 text-[11px]",
+      )}
+    >
+      <span aria-hidden>🌀</span>
+      Scenic Detour
+    </span>
   );
 }
 

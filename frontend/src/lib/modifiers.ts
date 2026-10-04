@@ -82,7 +82,10 @@ export function modifierPayload(
 export interface ModifierWarning {
   /** "danger" = the run will almost certainly dead-end; "caution" = a thin pool. */
   level: "danger" | "caution";
-  message: string;
+  /** The combination, in a sentence. */
+  headline: string;
+  /** Why it is hard: what each rule removes from the pool. */
+  why: string;
 }
 
 /** Anti-synergistic stacks: rules that each narrow the pool so much together that a run
@@ -93,46 +96,49 @@ export function modifierWarnings(gameType: string, rules: RulesConfig): Modifier
   const chrono = gameType === "chrono_climb" || !!rules.chrono_direction;
   const staircase = !!rules.runtime_staircase;
   const cooldown = effectiveCooldown(gameType, rules);
-  const strictOrderRules = Number(chrono) + Number(staircase);
+  const orderingRules = Number(chrono) + Number(staircase);
+  const chronoName = gameType === "chrono_climb" ? "Chrono Climb" : "Chrono";
 
-  if (gameType === "canon_island" && strictOrderRules >= 1) {
+  if (chrono && staircase) {
     warnings.push({
-      level: strictOrderRules >= 2 ? "danger" : "caution",
-      message:
-        strictOrderRules >= 2
-          ? "Canon Island + shared cast + Chrono + Runtime Staircase leaves almost no valid films - the run will dead-end fast."
-          : "Canon Island already limits you to one curated list with a shared actor; an ordering rule on top makes the pool very thin.",
+      level: "caution",
+      headline: `${chronoName} + Runtime Staircase creates a double constraint that may exhaust small local libraries.`,
+      why: "Every pick must be both newer and longer (or shorter) than the last. Each step discards roughly half of the remaining films, and the ratchet only tightens - chains stall quickly unless your cache holds thousands of films.",
+    });
+  }
+  if (gameType === "canon_island" && orderingRules >= 1) {
+    warnings.push({
+      level: orderingRules >= 2 ? "danger" : "caution",
+      headline: "Canon Island + an ordering rule leaves a very thin pool.",
+      why: "The island is one curated list, and every hop must also share an actor with the last film. Adding a year or runtime ordering on top leaves only a handful of legal next films - often none.",
     });
   }
   if (gameType === "semantic_trope" && castLinked) {
     warnings.push({
-      level: strictOrderRules >= 1 ? "danger" : "caution",
-      message:
-        "Strict plot similarity plus a shared-cast link rarely agree - few films match both, so expect a tiny pool.",
+      level: orderingRules >= 1 ? "danger" : "caution",
+      headline: "Strict plot similarity + a shared-cast link rarely agree.",
+      why: "Films with near-identical plots are seldom made by the same actors, so few candidates satisfy both rules at once.",
     });
   }
-  if (gameType === "aesthetic_gradient" && castLinked && strictOrderRules >= 1) {
+  if (gameType === "aesthetic_gradient" && castLinked && orderingRules >= 1) {
     warnings.push({
       level: "caution",
-      message: "Poster colours, shared cast and an ordering rule together leave very few candidates.",
+      headline: "Poster colours + shared cast + an ordering rule leave very few candidates.",
+      why: "Each rule is independent of the others (colour has nothing to do with cast or year), so the overlap of all three is tiny.",
     });
   }
-  if (gameType === "auteur_relay" && strictOrderRules >= 2) {
+  if (gameType === "auteur_relay" && orderingRules >= 2) {
     warnings.push({
       level: "danger",
-      message: "Alternating actor/director links plus Chrono and Runtime Staircase is close to impossible.",
-    });
-  }
-  if (chrono && staircase && gameType !== "canon_island" && gameType !== "semantic_trope") {
-    warnings.push({
-      level: "caution",
-      message: "Chrono and Runtime Staircase both force a one-way ratchet - chains get short quickly.",
+      headline: "Auteur Relay + Chrono + Runtime Staircase is close to impossible.",
+      why: "Links must alternate actor, director, actor... and every film must also climb in both year and runtime. Directors have small filmographies, so the chain runs out almost immediately.",
     });
   }
   if (cooldown >= 6 && castLinked) {
     warnings.push({
       level: "caution",
-      message: `A ${cooldown}-step country cooldown on a shared-cast chain locks out most of the casting pool.`,
+      headline: `A ${cooldown}-step country cooldown on a shared-cast chain locks out most of the casting pool.`,
+      why: "Actors mostly work in one country. Locking out the last several countries removes most of the filmographies you could hop through, especially with a US-heavy library.",
     });
   }
   return warnings;

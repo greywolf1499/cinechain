@@ -28,6 +28,10 @@ OVERRIDABLE_KEYS = (
     "seerr_api_key",
     "seerr_request_mode",
     "seerr_user_id",
+    "embedding_provider",
+    "embedding_base_url",
+    "embedding_api_key",
+    "embedding_model",
 )
 
 

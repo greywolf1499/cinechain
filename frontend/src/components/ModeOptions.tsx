@@ -149,8 +149,8 @@ export default function ModeOptions({
       </ModifierRow>
 
       {warnings.map((warning) => (
-        <p
-          key={warning.message}
+        <div
+          key={warning.headline}
           role="alert"
           className={cn(
             "flex items-start gap-2 rounded-md border px-2.5 py-2 text-[11px] leading-relaxed",
@@ -160,8 +160,14 @@ export default function ModeOptions({
           )}
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          {warning.message}
-        </p>
+          <div>
+            <p className="font-semibold">
+              <span aria-hidden>⚠️ </span>
+              {warning.headline}
+            </p>
+            <p className="mt-0.5 opacity-80">Why: {warning.why}</p>
+          </div>
+        </div>
       ))}
     </div>
   );

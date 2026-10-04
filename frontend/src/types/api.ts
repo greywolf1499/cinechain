@@ -397,6 +397,22 @@ export interface IntegrationConfig {
 	seerr_api_key_masked: string | null;
 	seerr_request_mode: RequestMode;
 	seerr_user_id: number | null;
+	embedding_provider: EmbeddingProvider;
+	embedding_base_url: string;
+	embedding_model: string;
+	embedding_api_key_masked: string | null;
+}
+
+export type EmbeddingProvider = "local_onnx" | "ollama" | "openai";
+
+/** Result of "Test Connection" for an embedding provider (backend `EmbeddingTestResult`). */
+export interface EmbeddingTestResult {
+	ok: boolean;
+	latency_ms: number | null;
+	dimension: number | null;
+	provider: string;
+	model: string;
+	detail: string | null;
 }
 
 // --- Radarr / Seerr request flow (routes_integrations.py, Phase 16) ---

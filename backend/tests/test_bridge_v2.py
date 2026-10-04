@@ -295,6 +295,100 @@ def test_stream_validates_min_hops(client):
     assert resp.status_code == 422
 
 
+# --- Find Alternative Routes (disjoint corridors) ---
+
+
+def _mock_corridors_universe():
+    # Two 2-hop corridors A -> M1 -> C and A -> M2 -> C; M1 is reachable through TWO actors, so
+    # the same middle film would otherwise fill two of the three offered routes.
+    _mock_movie(1, "Movie A", [_cast(100, "P"), _cast(101, "Q"), _cast(104, "S")])
+    _mock_movie(4, "Movie C", [_cast(102, "R"), _cast(103, "T")])
+    _mock_movie(2, "Movie M1", [_cast(100, "P"), _cast(101, "Q"), _cast(102, "R")])
+    _mock_movie(3, "Movie M2", [_cast(104, "S"), _cast(103, "T")])
+    _mock_person(100, [_credit(1, "Movie A"), _credit(2, "Movie M1")])
+    _mock_person(101, [_credit(1, "Movie A"), _credit(2, "Movie M1")])
+    _mock_person(104, [_credit(1, "Movie A"), _credit(3, "Movie M2")])
+    _mock_person(102, [_credit(4, "Movie C"), _credit(2, "Movie M1")])
+    _mock_person(103, [_credit(4, "Movie C"), _credit(3, "Movie M2")])
+
+
+async def _solve_corridors(session, **kwargs):
+    async with httpx.AsyncClient() as http:
+        return [e async for e in pathfinder.solve_bridge_bipartite(
+            session, TMDBClient(http), 1, 4, **kwargs)]
+
+
+def test_prefer_disjoint_paths_puts_distinct_corridors_first():
+    def path(*movies):
+        return [node for movie in movies for node in (("movie", movie), ("actor", 0))][:-1]
+
+    same_middle_a, same_middle_b, other_middle = path(1, 2, 4), path(1, 2, 4), path(1, 3, 4)
+    ordered = pathfinder.prefer_disjoint_paths([same_middle_a, same_middle_b, other_middle])
+    assert ordered == [same_middle_a, other_middle, same_middle_b]
+
+
+async def test_alternative_routes_are_distinct_corridors(config_dir, db_engine):
+    with Session(db_engine) as session, respx.mock:
+        _mock_corridors_universe()
+        events = await _solve_corridors(session, max_depth=4)
+
+    result = next(e for e in events if e["type"] == "result")
+    corridors = [[n.movie_id for n in p["path"]] for p in [result, *result["alternate_paths"]]]
+    assert [1, 2, 4] in corridors and [1, 3, 4] in corridors
+    assert corridors[1][1] != corridors[0][1]  # the first alternative avoids the primary's middle film
+
+
+async def test_excluding_the_intermediates_forces_a_different_corridor(config_dir, db_engine):
+    with Session(db_engine) as session, respx.mock:
+        _mock_corridors_universe()
+        events = await _solve_corridors(session, max_depth=4, excluded_movie_ids={2})
+
+    result = next(e for e in events if e["type"] == "result")
+    assert [n.movie_id for n in result["path"]] == [1, 3, 4]
+    assert not result["alternate_paths"]
+
+
+async def test_excluding_every_corridor_is_exhausted(config_dir, db_engine):
+    with Session(db_engine) as session, respx.mock:
+        _mock_corridors_universe()
+        events = await _solve_corridors(session, max_depth=4, excluded_movie_ids={2, 3})
+
+    assert not any(e["type"] == "result" for e in events)
+    assert events[-2]["type"] == "exhausted"
+
+
+def _stream_result(client, **params):
+    import json
+
+    resp = client.get("/api/engine/bridge/stream", params={
+        "from_movie_id": 1, "to_movie_id": 4, "max_depth": 4, **params})
+    assert resp.status_code == 200
+    for block in resp.text.split("\n\n"):
+        if block.startswith("event: result"):
+            return json.loads(block.split("data: ", 1)[1])
+    return None
+
+
+def test_stream_accepts_exclude_movie_ids(client):
+    with respx.mock:
+        _mock_corridors_universe()
+        result = _stream_result(client, exclude_movie_ids=[2])
+    assert [n["movie_id"] for n in result["path"]] == [1, 3, 4]
+
+
+def test_stream_never_excludes_the_endpoints(client):
+    with respx.mock:
+        _mock_corridors_universe()
+        result = _stream_result(client, exclude_movie_ids=[1, 4, 2])
+    assert [n["movie_id"] for n in result["path"]] == [1, 3, 4]
+
+
+def test_stream_rejects_an_oversized_exclusion_list(client):
+    resp = client.get("/api/engine/bridge/stream", params={
+        "from_movie_id": 1, "to_movie_id": 4, "exclude_movie_ids": list(range(500))})
+    assert resp.status_code == 422
+
+
 # --- broad detour ---
 
 

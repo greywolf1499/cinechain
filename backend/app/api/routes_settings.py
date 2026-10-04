@@ -14,7 +14,7 @@ from app.integrations.radarr import check_radarr_connectivity
 from app.integrations.seerr import DEFAULT_URL as SEERR_DEFAULT_URL
 from app.integrations.seerr import check_seerr_connectivity
 from app.models.user import User
-from app.services import settings_repo
+from app.services import embeddings, settings_repo
 from app.services.tmdb import check_tmdb_connectivity
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -38,6 +38,10 @@ class IntegrationConfigOut(BaseModel):
     seerr_api_key_masked: str | None = None
     seerr_request_mode: Literal["auto", "prompt"] = "auto"
     seerr_user_id: int | None = None
+    embedding_provider: Literal["local_onnx", "ollama", "openai"] = "local_onnx"
+    embedding_base_url: str = ""
+    embedding_model: str = ""
+    embedding_api_key_masked: str | None = None
 
 
 class IntegrationConfigUpdate(BaseModel):
@@ -53,11 +57,33 @@ class IntegrationConfigUpdate(BaseModel):
     seerr_api_key: str | None = None
     seerr_request_mode: Literal["auto", "prompt"] | None = None
     seerr_user_id: int | None = None
+    embedding_provider: Literal["local_onnx", "ollama", "openai"] | None = None
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
+    embedding_model: str | None = None
 
 
 class ConnectivityTestResult(BaseModel):
     reachable: bool
     version: str | None = None
+    detail: str | None = None
+
+
+class EmbeddingTestRequest(BaseModel):
+    """Candidate provider settings; a blank key falls back to the stored one."""
+
+    embedding_provider: Literal["local_onnx", "ollama", "openai"]
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
+    embedding_model: str | None = None
+
+
+class EmbeddingTestResult(BaseModel):
+    ok: bool
+    latency_ms: int | None = None
+    dimension: int | None = None
+    provider: str
+    model: str
     detail: str | None = None
 
 
@@ -98,6 +124,7 @@ def _build_config(session: Session) -> IntegrationConfigOut:
     omdb_key = overrides.get("omdb_api_key") or base.omdb_api_key
     radarr_key = overrides.get("radarr_api_key") or base.radarr_api_key
     seerr_key = overrides.get("seerr_api_key") or base.seerr_api_key
+    embedding = embeddings.load_config(session)
     profile_id = overrides.get("radarr_default_quality_profile_id")
     seerr_user = overrides.get("seerr_user_id")
     return IntegrationConfigOut(
@@ -123,6 +150,10 @@ def _build_config(session: Session) -> IntegrationConfigOut:
         seerr_request_mode="prompt" if overrides.get(
             "seerr_request_mode") == "prompt" else "auto",
         seerr_user_id=int(seerr_user) if seerr_user else None,
+        embedding_provider=embedding.provider,  # type: ignore[arg-type]
+        embedding_base_url=embedding.base_url,
+        embedding_model=embedding.model,
+        embedding_api_key_masked=_mask(embedding.api_key),
     )
 
 
@@ -210,6 +241,23 @@ async def test_seerr_connection(
     result = await check_seerr_connectivity(
         request.app.state.http_client, payload.url, payload.api_key or stored)
     return ConnectivityTestResult(**result)
+
+
+@router.post("/integrations/test-embeddings", response_model=EmbeddingTestResult)
+async def test_embedding_provider(
+    payload: EmbeddingTestRequest,
+    session: Session = Depends(get_session),
+    _admin: User = Depends(get_current_admin),
+) -> EmbeddingTestResult:
+    """Embeds a dummy sentence with the candidate settings: latency + vector width."""
+    stored = embeddings.load_config(session)
+    config = embeddings.EmbeddingConfig(
+        provider=payload.embedding_provider,
+        base_url=payload.embedding_base_url or "",
+        api_key=payload.embedding_api_key or stored.api_key,
+        model=payload.embedding_model or "",
+    )
+    return EmbeddingTestResult(**await embeddings.check_connection(config))
 
 
 class SolverConfigOut(BaseModel):

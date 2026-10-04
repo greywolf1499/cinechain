@@ -34,6 +34,9 @@ class CachedMovie(SQLModel, table=True):
     dominant_color: str | None = Field(default=None, max_length=7)
     # Semantic Trope Web: float32 little-endian 384-d unit vector of `overview`; NULL = not computed.
     overview_embedding: bytes | None = Field(default=None, sa_column=Column(LargeBinary))
+    # "provider:model" that produced `overview_embedding`; NULL = the local ONNX model (pre-23b rows).
+    # Vectors from different models live in different spaces and are never compared.
+    overview_embedding_model: str | None = None
 
 
 class CachedActor(SQLModel, table=True):

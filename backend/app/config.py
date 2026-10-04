@@ -50,6 +50,12 @@ class Settings(BaseSettings):
         "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
     )
 
+    # --- Embedding provider for the Semantic Trope Web (admin settings override these) ---
+    embedding_provider: str = "local_onnx"  # local_onnx | ollama | openai
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = ""
+
     # --- Bridge solver pacing (Phase 15.5) ---
     bridge_max_duration_seconds: int = 45
 

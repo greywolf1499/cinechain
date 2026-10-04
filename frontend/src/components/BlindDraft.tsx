@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Check, Clock, EyeOff, Loader2, Minus, Plus, Sparkles, ThumbsUp, Ticket } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Clock, Dices, EyeOff, Loader2, Minus, Plus, Sparkles, ThumbsUp, Ticket } from "lucide-react";
 import MoviePoster from "./MoviePoster";
 import { cn } from "../lib/cn";
 import type { RouletteMovie } from "../types/api";
@@ -28,6 +28,15 @@ export default function BlindDraft({
   const [chosenId, setChosenId] = useState<number | null>(null);
   const [sharp, setSharp] = useState(false); // flips a frame after the choice so the unblur animates
 
+  // Blind Coin Flip: the card the "roulette" light is on, null when not flipping.
+  const [flashIndex, setFlashIndex] = useState<number | null>(null);
+  const flipTimer = useRef<number | null>(null);
+  const flipping = flashIndex !== null;
+
+  useEffect(() => () => {
+    if (flipTimer.current !== null) window.clearTimeout(flipTimer.current);
+  }, []);
+
   useEffect(() => {
     if (chosenId === null) return;
     const timer = window.setTimeout(() => setSharp(true), 60);
@@ -45,6 +54,31 @@ export default function BlindDraft({
     const best = Math.max(...movies.map((m) => votes[m.tmdb_id] ?? 0));
     const leaders = movies.filter((m) => (votes[m.tmdb_id] ?? 0) === best);
     setChosenId(leaders[Math.floor(Math.random() * leaders.length)].tmdb_id);
+  }
+
+  // The deadlock breaker: a light races across the masked cards, slows down and lands on a
+  // random one, which is then revealed like any other choice. Votes are ignored.
+  function blindCoinFlip() {
+    if (flipping || chosen) return;
+    const winner = Math.floor(Math.random() * movies.length);
+    const steps = (2 + Math.floor(Math.random() * 2)) * movies.length;
+    // Step i lights card (start + i) % n; start so the last step lands exactly on `winner`.
+    const start = (((winner - (steps - 1)) % movies.length) + movies.length) % movies.length;
+    let step = 0;
+    const tick = () => {
+      setFlashIndex((start + step) % movies.length);
+      if (step === steps - 1) {
+        flipTimer.current = window.setTimeout(() => {
+          setFlashIndex(null);
+          setChosenId(movies[winner].tmdb_id);
+        }, 450);
+        return;
+      }
+      step += 1;
+      // Decelerate: quick at first, lingering near the end.
+      flipTimer.current = window.setTimeout(tick, 70 + step * step * 1.6);
+    };
+    tick();
   }
 
   const totalVotes = movies.reduce((sum, m) => sum + (votes[m.tmdb_id] ?? 0), 0);
@@ -77,6 +111,7 @@ export default function BlindDraft({
                   ? "scale-[1.03] border-accent shadow-[0_0_28px_-6px] shadow-accent/60"
                   : "border-app-border",
                 chosen && !isChosen && "scale-95 opacity-40",
+                flashIndex === index && "scale-[1.04] border-accent bg-accent/10 shadow-[0_0_24px_-6px] shadow-accent/70",
               )}
             >
               <div className="relative overflow-hidden rounded-md">
@@ -132,7 +167,7 @@ export default function BlindDraft({
                     <button
                       type="button"
                       aria-label={`Remove a vote from film ${index + 1}`}
-                      disabled={count === 0}
+                      disabled={count === 0 || flipping}
                       onClick={() => vote(movie.tmdb_id, -1)}
                       className="rounded p-1 text-zinc-400 hover:bg-app-surface-hover disabled:opacity-30"
                     >
@@ -145,6 +180,7 @@ export default function BlindDraft({
                     <button
                       type="button"
                       aria-label={`Vote for film ${index + 1}`}
+                      disabled={flipping}
                       onClick={() => vote(movie.tmdb_id, 1)}
                       className="rounded p-1 text-accent hover:bg-app-surface-hover"
                     >
@@ -154,6 +190,7 @@ export default function BlindDraft({
                   <button
                     type="button"
                     onClick={() => setChosenId(movie.tmdb_id)}
+                    disabled={flipping}
                     className="rounded-md border border-app-border px-2 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-accent hover:text-accent"
                   >
                     Choose this one
@@ -196,7 +233,20 @@ export default function BlindDraft({
       {!chosen && (
         <button
           type="button"
-          disabled={totalVotes === 0}
+          disabled={flipping}
+          onClick={blindCoinFlip}
+          className="flex items-center justify-center gap-1.5 rounded-md border border-app-border px-3 py-2 text-xs font-semibold text-zinc-200 transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Dices className={cn("h-3.5 w-3.5", flipping && "animate-spin")} />
+          {flipping ? "Flipping..." : "🎲 Blind Coin Flip"}
+          {!flipping && <span className="font-normal text-zinc-500">- deadlocked? let fate pick</span>}
+        </button>
+      )}
+
+      {!chosen && (
+        <button
+          type="button"
+          disabled={totalVotes === 0 || flipping}
           onClick={revealTopVibe}
           className="flex items-center justify-center gap-1.5 rounded-md border border-accent/50 bg-accent/10 px-3 py-2 text-xs font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
         >

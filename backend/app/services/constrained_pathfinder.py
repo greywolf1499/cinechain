@@ -305,7 +305,7 @@ async def _meeting_paths(
                 if not await _path_satisfies(ctx, movie_ids):
                     rejected.add((f_state, b_state))
                     candidates.pop(movie_ids, None)
-    return sorted(candidates.values(), key=len)[:MAX_RESULT_PATHS]
+    return pathfinder.prefer_disjoint_paths(sorted(candidates.values(), key=len))[:MAX_RESULT_PATHS]
 
 
 async def _path_satisfies(ctx: _Ctx, movie_ids: tuple[int, ...]) -> bool:

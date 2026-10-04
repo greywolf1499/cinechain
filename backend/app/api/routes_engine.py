@@ -34,6 +34,7 @@ FAST_MAX_DEPTH = 2
 FAST_CALL_BUDGET = 20
 FAST_MAX_DURATION_SECONDS = 15
 # "Search Deeper" can ask for routes this many movie-hops long, at most.
+MAX_EXCLUDED_MOVIES = 200
 DEEP_SEARCH_MAX_HOPS = 8
 SWAP_MAX_DURATION_SECONDS = 15
 TAGS_MAX_MOVIES = 20
@@ -328,6 +329,9 @@ async def bridge_stream(
     run_id: str | None = Query(default=None),
     # "Search Deeper": only offer routes of at least this many movie-hops.
     min_hops: int | None = Query(default=None, ge=2, le=DEEP_SEARCH_MAX_HOPS),
+    # "Find Alternative Routes": films the route may not pass through (the intermediates of
+    # routes already shown), forcing a distinct corridor. The two endpoints are never excluded.
+    exclude_movie_ids: list[int] = Query(default=[], max_length=MAX_EXCLUDED_MOVIES),
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
     current_user: User = Depends(get_current_user),
@@ -335,6 +339,7 @@ async def bridge_stream(
     engine = get_engine(game_type, session, tmdb)
     excluded_movie_ids, cast_limit, min_runtime = _run_solve_context(
         session, run_id, current_user)
+    excluded_movie_ids = (excluded_movie_ids | set(exclude_movie_ids)) - {from_movie_id, to_movie_id}
     start_connection_type = _tail_connection_type(session, run_id, from_movie_id)
     run = session.get(Run, run_id) if run_id else None
     run_rules = run.rules_config if run is not None else None

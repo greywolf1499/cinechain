@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import ClassVar
 
+from sqlalchemy import or_
 from sqlmodel import select
 
 from app.engines.cinechain import CineChainEngine
@@ -278,6 +279,13 @@ class SemanticTropeEngine(FeatureEngine):
         vector_b = embeddings.decode_embedding(later.overview_embedding)
         if vector_a is None or vector_b is None:
             return None
+        # Different models (or widths) live in different vector spaces: can't tell.
+        if (
+            embeddings.row_fingerprint(earlier.overview_embedding_model)
+            != embeddings.row_fingerprint(later.overview_embedding_model)
+            or vector_a.shape != vector_b.shape
+        ):
+            return None
         return embeddings.cosine_similarity(vector_a, vector_b)
 
     def violation(self, earlier: CachedMovie, later: CachedMovie, metric: float) -> str | None:
@@ -310,10 +318,17 @@ class SemanticTropeEngine(FeatureEngine):
             return []
         pool: dict[int, CachedMovie] = {}
 
-        # Films already embedded from earlier play.
-        for row in self.session.exec(
-            select(CachedMovie).where(CachedMovie.overview_embedding.is_not(None))  # type: ignore[union-attr]
-        ).all():
+        # Films already embedded (by the same model as the frontier) from earlier play.
+        fingerprint = embeddings.row_fingerprint(frontier.overview_embedding_model)
+        statement = select(CachedMovie).where(
+            CachedMovie.overview_embedding.is_not(None))  # type: ignore[union-attr]
+        if fingerprint == embeddings.LOCAL_FINGERPRINT:
+            statement = statement.where(or_(
+                CachedMovie.overview_embedding_model.is_(None),  # type: ignore[union-attr]
+                CachedMovie.overview_embedding_model == fingerprint))
+        else:
+            statement = statement.where(CachedMovie.overview_embedding_model == fingerprint)
+        for row in self.session.exec(statement).all():
             pool[row.tmdb_id] = row
 
         # Plus TMDB's recommended / similar titles, read and embedded on the fly.

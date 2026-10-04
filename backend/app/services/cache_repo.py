@@ -74,6 +74,7 @@ class CacheRepo:
         row.poster_path = movie.get("poster_path")
         if row.overview != (movie.get("overview") or ""):
             row.overview_embedding = None
+            row.overview_embedding_model = None
         row.overview = movie.get("overview") or ""
         row.tagline = movie.get("tagline") or ""
         row.origin_country = json.dumps(movie.get("origin_country") or [])

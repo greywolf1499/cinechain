@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import CuratedCanonsCard from "../../components/CuratedCanonsCard";
 import { RadarrSettingsCard, SeerrSettingsCard } from "../../components/ArrIntegrationCards";
+import EmbeddingsCard from "../../components/settings/EmbeddingsCard";
 import CacheCard from "../../components/settings/CacheCard";
 import IntegrationsStatusCard from "../../components/settings/IntegrationsStatusCard";
 import RulesetsCard from "../../components/settings/RulesetsCard";
@@ -53,6 +54,7 @@ export function IntegrationsSettings() {
       <IntegrationsStatusCard />
       {isAdmin && <RadarrSettingsCard />}
       {isAdmin && <SeerrSettingsCard />}
+      {isAdmin && <EmbeddingsCard />}
       {isAdmin && <CuratedCanonsCard />}
     </Stack>
   );

@@ -1,26 +1,55 @@
-"""JIT text embeddings for the Semantic Trope Web (all-MiniLM-L6-v2, ONNX, no PyTorch).
+"""Text embeddings for the Semantic Trope Web, behind one pluggable provider interface.
 
-The quantized model (~23 MB) is downloaded once into `config_dir/models`, loaded
-only for the duration of one batch, then dropped and garbage-collected so the
-process stays under its RAM ceiling between requests.
+Providers (`embedding_provider` setting):
+- `local_onnx` (default): all-MiniLM-L6-v2 on ONNX Runtime, no PyTorch. The quantized
+  model (~23 MB) is downloaded once into `config_dir/models`, loaded only for the
+  duration of one batch, then dropped and garbage-collected so the process stays under
+  its RAM ceiling between requests.
+- `ollama`: a local Ollama server (`POST {base}/api/embeddings`, one prompt per call).
+- `openai`: any OpenAI-compatible `POST {base}/v1/embeddings` endpoint with an API key.
+
+`embed_batch` is the entry point: an external provider that errors or exceeds
+`EXTERNAL_TIMEOUT_SECONDS` falls back to the local model (and is skipped for a minute,
+so a dead server costs one timeout, not one per request). Vectors from different
+models aren't comparable, so each stored vector carries the `fingerprint` that made it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import gc
 import logging
 import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
+import anyio.to_thread
 import httpx
 import numpy as np
+from sqlmodel import Session
 
 from app.config import get_settings
+from app.services import settings_repo
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 384  # the local ONNX model's width
+PROVIDER_LOCAL = "local_onnx"
+PROVIDER_OLLAMA = "ollama"
+PROVIDER_OPENAI = "openai"
+PROVIDERS = (PROVIDER_LOCAL, PROVIDER_OLLAMA, PROVIDER_OPENAI)
+LOCAL_MODEL_NAME = "all-MiniLM-L6-v2"
+LOCAL_FINGERPRINT = f"{PROVIDER_LOCAL}:{LOCAL_MODEL_NAME}"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
+DEFAULT_OPENAI_URL = "https://api.openai.com"
+DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
+# Cap on any external call: past it we fall back to the local model.
+EXTERNAL_TIMEOUT_SECONDS = 5.0
+EXTERNAL_CONCURRENCY = 4
+SUSPEND_SECONDS = 60.0
 MAX_TOKENS = 256
 MODEL_FILE = "model_quantized.onnx"
 TOKENIZER_FILE = "tokenizer.json"
@@ -123,11 +152,197 @@ def encode_embedding(vector: np.ndarray) -> bytes:
 
 
 def decode_embedding(blob: bytes | None) -> np.ndarray | None:
-    if not blob or len(blob) != EMBEDDING_DIM * 4:
+    if not blob or len(blob) % 4 != 0:
         return None
     return np.frombuffer(blob, dtype="<f4")
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    if a.shape != b.shape:
+        return 0.0
     denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
     return float(np.dot(a, b) / denominator) if denominator else 0.0
+
+
+# --- pluggable providers ---
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    provider: str = PROVIDER_LOCAL
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+
+    @property
+    def external(self) -> bool:
+        return self.provider in (PROVIDER_OLLAMA, PROVIDER_OPENAI)
+
+    @property
+    def effective_model(self) -> str:
+        if self.provider == PROVIDER_OLLAMA:
+            return self.model or DEFAULT_OLLAMA_MODEL
+        if self.provider == PROVIDER_OPENAI:
+            return self.model or DEFAULT_OPENAI_MODEL
+        return LOCAL_MODEL_NAME
+
+    @property
+    def fingerprint(self) -> str:
+        return f"{self.provider}:{self.effective_model}"
+
+
+@dataclass
+class EmbeddingBatch:
+    vectors: list[np.ndarray]
+    fingerprint: str  # the model that actually produced them (the local one after a fallback)
+    fell_back: bool = False
+
+
+def load_config(session: Session) -> EmbeddingConfig:
+    """The admin's saved provider settings, falling back to `.env` and then local ONNX."""
+    base = get_settings()
+    overrides = settings_repo.get_overrides(session)
+    provider = overrides.get("embedding_provider") or base.embedding_provider
+    if provider not in PROVIDERS:
+        provider = PROVIDER_LOCAL
+    return EmbeddingConfig(
+        provider=provider,
+        base_url=overrides.get("embedding_base_url") or base.embedding_base_url,
+        api_key=overrides.get("embedding_api_key") or base.embedding_api_key,
+        model=overrides.get("embedding_model") or base.embedding_model,
+    )
+
+
+def row_fingerprint(stored: str | None) -> str:
+    return stored or LOCAL_FINGERPRINT
+
+
+def ollama_url(config: EmbeddingConfig) -> str:
+    base = (config.base_url or DEFAULT_OLLAMA_URL).rstrip("/")
+    return base if base.endswith("/api/embeddings") else f"{base}/api/embeddings"
+
+
+def openai_url(config: EmbeddingConfig) -> str:
+    base = (config.base_url or DEFAULT_OPENAI_URL).rstrip("/")
+    if base.endswith("/embeddings"):
+        return base
+    return f"{base}/embeddings" if base.endswith("/v1") else f"{base}/v1/embeddings"
+
+
+def _unit(vector: list[float]) -> np.ndarray:
+    array = np.asarray(vector, dtype=np.float32)
+    if array.ndim != 1 or array.size == 0 or not np.all(np.isfinite(array)):
+        raise EmbeddingUnavailable("The provider returned a malformed embedding")
+    return array / max(float(np.linalg.norm(array)), 1e-12)
+
+
+async def _embed_ollama(config: EmbeddingConfig, texts: list[str]) -> list[np.ndarray]:
+    url = ollama_url(config)
+    gate = asyncio.Semaphore(EXTERNAL_CONCURRENCY)
+
+    async def one(client: httpx.AsyncClient, text: str) -> np.ndarray:
+        async with gate:
+            response = await client.post(
+                url, json={"model": config.effective_model, "prompt": text})
+            response.raise_for_status()
+            return _unit(response.json()["embedding"])
+
+    async with httpx.AsyncClient(timeout=EXTERNAL_TIMEOUT_SECONDS) as client:
+        return list(await asyncio.gather(*(one(client, text) for text in texts)))
+
+
+async def _embed_openai(config: EmbeddingConfig, texts: list[str]) -> list[np.ndarray]:
+    headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+    async with httpx.AsyncClient(timeout=EXTERNAL_TIMEOUT_SECONDS) as client:
+        response = await client.post(
+            openai_url(config), headers=headers,
+            json={"model": config.effective_model, "input": texts})
+        response.raise_for_status()
+        items = sorted(response.json()["data"], key=lambda item: item["index"])
+    if len(items) != len(texts):
+        raise EmbeddingUnavailable("The provider returned the wrong number of embeddings")
+    return [_unit(item["embedding"]) for item in items]
+
+
+def _error_text(response: httpx.Response) -> str:
+    """The provider's own explanation (Ollama: {"error": "..."}, OpenAI: {"error": {"message"}})."""
+    try:
+        error = response.json().get("error")
+        if isinstance(error, dict):
+            error = error.get("message")
+        if error:
+            return str(error)[:300]
+    except (ValueError, AttributeError):
+        pass
+    return response.reason_phrase or "request failed"
+
+
+async def embed_external(config: EmbeddingConfig, texts: list[str]) -> list[np.ndarray]:
+    """One batch through the configured external provider, capped at `EXTERNAL_TIMEOUT_SECONDS`.
+    Every failure mode (HTTP error, timeout, bad JSON, bad shape) becomes `EmbeddingUnavailable`."""
+    call = _embed_ollama if config.provider == PROVIDER_OLLAMA else _embed_openai
+    try:
+        async with asyncio.timeout(EXTERNAL_TIMEOUT_SECONDS):
+            return await call(config, texts)
+    except EmbeddingUnavailable:
+        raise
+    except httpx.HTTPStatusError as exc:
+        raise EmbeddingUnavailable(
+            f"{config.provider} embeddings failed (HTTP {exc.response.status_code}): "
+            f"{_error_text(exc.response)}") from exc
+    except Exception as exc:  # a bad provider must never break a request
+        raise EmbeddingUnavailable(
+            f"{config.provider} embeddings failed: {exc or type(exc).__name__}") from exc
+
+
+# External providers that just failed: fingerprint+URL -> monotonic time to retry after.
+_suspended_until: dict[str, float] = {}
+
+
+def _suspension_key(config: EmbeddingConfig) -> str:
+    return f"{config.fingerprint}@{config.base_url}"
+
+
+def external_suspended(config: EmbeddingConfig) -> bool:
+    return config.external and _suspended_until.get(_suspension_key(config), 0.0) > time.monotonic()
+
+
+def reset_suspension() -> None:
+    _suspended_until.clear()
+
+
+async def embed_batch(config: EmbeddingConfig, texts: list[str]) -> EmbeddingBatch:
+    """Embeds `texts` with the configured provider, or with local ONNX if it is unavailable.
+    Raises `EmbeddingUnavailable` only when the local model can't run either."""
+    if config.external and not external_suspended(config):
+        try:
+            return EmbeddingBatch(await embed_external(config, texts), config.fingerprint)
+        except EmbeddingUnavailable as exc:
+            _suspended_until[_suspension_key(config)] = time.monotonic() + SUSPEND_SECONDS
+            logger.warning("%s; using the local model for now", exc)
+            vectors = await anyio.to_thread.run_sync(embed_texts, texts)
+            return EmbeddingBatch(vectors, LOCAL_FINGERPRINT, fell_back=True)
+    vectors = await anyio.to_thread.run_sync(embed_texts, texts)
+    return EmbeddingBatch(vectors, LOCAL_FINGERPRINT, fell_back=config.external)
+
+
+async def check_connection(config: EmbeddingConfig) -> dict:
+    """Embeds a dummy sentence with `config` (no fallback, no suspension) for the Settings page:
+    {ok, latency_ms, dimension, provider, model, detail}."""
+    result: dict = {
+        "ok": False, "latency_ms": None, "dimension": None,
+        "provider": config.provider, "model": config.effective_model, "detail": None,
+    }
+    started = time.perf_counter()
+    try:
+        if config.external:
+            vectors = await embed_external(config, ["CineChain connection test"])
+        else:
+            vectors = await anyio.to_thread.run_sync(embed_texts, ["CineChain connection test"])
+    except EmbeddingUnavailable as exc:
+        result["detail"] = str(exc)
+        return result
+    result.update(
+        ok=True, latency_ms=round((time.perf_counter() - started) * 1000),
+        dimension=int(vectors[0].shape[0]))
+    return result

@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -26,6 +28,8 @@ class ValidationResult(BaseModel):
     # Algorithm Sandbox modes: how close the two films measured (None = unknown).
     similarity: float | None = None  # Semantic Trope Web, cosine similarity (-1..1)
     color_distance: float | None = None  # Aesthetic Gradient, RGB Euclidean distance
+    # Rule evidence for this hop (Chrono year delta, Passport countries), stored on the step.
+    mechanic: dict[str, Any] | None = None
 
 
 class SuggestionFilters(BaseModel):

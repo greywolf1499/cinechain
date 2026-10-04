@@ -9,6 +9,10 @@ class MovieSummary(BaseModel):
     origin_country: str | None = None
 
 
+class SeedSuggestionOut(MovieSummary):
+    reason: str  # why it was picked, e.g. "On the SS22 list", "IMDb 8.4"
+
+
 class MovieRatings(BaseModel):
     imdb_rating: str | None = None
     rotten_tomatoes: str | None = None

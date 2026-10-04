@@ -146,7 +146,9 @@ export default function MovieSearchAutocomplete({
                       ? `Connects to Frontier via ${validation.connections
                           .map((c) => (c.kind === "director" ? `${c.actor_name} (director)` : c.actor_name))
                           .join(", ")}`
-                      : "First step - nothing to validate yet."}
+                      : tailMovieId !== undefined
+                        ? describeRuleFit(validation)
+                        : "First step - nothing to validate yet."}
                   </div>
                 ) : validation.blocked ? (
                   <div className="flex items-center gap-1.5 text-xs font-medium text-red-400">
@@ -286,4 +288,23 @@ function LogButton({
       {children}
     </button>
   );
+}
+
+/** "Fits this run's rule" plus whatever evidence the engine measured for a cast-free hop. */
+function describeRuleFit(validation: ValidationResult): string {
+  const mechanic = validation.mechanic as { year_delta?: number } | null | undefined;
+  const evidence: string[] = [];
+  if (mechanic?.year_delta !== undefined) {
+    const years = Math.abs(mechanic.year_delta);
+    evidence.push(`${years} year${years === 1 ? "" : "s"} ${mechanic.year_delta > 0 ? "later" : "earlier"}`);
+  }
+  if (validation.similarity != null) {
+    evidence.push(`${Math.round(Math.max(0, validation.similarity) * 100)}% plot match`);
+  }
+  if (validation.color_distance != null) {
+    evidence.push(`colour distance ${Math.round(validation.color_distance)}`);
+  }
+  return evidence.length > 0
+    ? `Fits this run's rule (${evidence.join(", ")}).`
+    : "Fits this run's rule.";
 }

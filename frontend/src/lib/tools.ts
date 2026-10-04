@@ -1,5 +1,6 @@
 import { Dices, GitBranch, Map as MapIcon, type LucideIcon } from "lucide-react";
 import type { EngineMeta, Run } from "../types/api";
+import { usesCastLinks } from "./gameModes";
 
 export interface ToolDefinition {
 	id: string;
@@ -50,11 +51,18 @@ export interface Compatibility {
  * With no active run a tool is simply available ("neutral"). */
 export function toolCompatibility(
 	tool: ToolDefinition,
-	run: Pick<Run, "name" | "game_type"> | null | undefined,
+	run: Pick<Run, "name" | "game_type" | "rules_config"> | null | undefined,
 	engines: EngineMeta[] | undefined,
 ): Compatibility {
 	if (!run || !tool.requiredCapability || !engines) return { state: "neutral", message: null };
 	const engine = engines.find((e) => e.game_type === run.game_type);
+	if (
+		tool.requiredCapability === "solve_bridge" &&
+		engine?.capabilities.includes("solve_bridge") &&
+		!usesCastLinks(run.game_type, run.rules_config)
+	) {
+		return { state: "incompatible", message: "Disabled: this mode doesn't link films by cast" };
+	}
 	if (engine?.capabilities.includes(tool.requiredCapability)) {
 		return { state: "compatible", message: `Compatible with current run (${run.name})` };
 	}

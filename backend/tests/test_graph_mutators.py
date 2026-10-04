@@ -136,8 +136,8 @@ def test_chrono_requires_strictly_later_release_year(client):
     assert [s["movie_id"] for s in steps(client, run_id)] == [1, 2]
 
 
-def test_chrono_still_needs_a_cast_link_but_a_wildcard_can_skip_it(client):
-    run_id = create_run(client, "chrono_climb")
+def test_chrono_hybrid_still_needs_a_cast_link_but_a_wildcard_can_skip_it(client):
+    run_id = create_run(client, "chrono_climb", require_cast_link=True)
     with respx.mock:
         mock_universe(CHRONO)
         log(client, run_id, 1)
@@ -149,8 +149,8 @@ def test_chrono_still_needs_a_cast_link_but_a_wildcard_can_skip_it(client):
     assert forced.json()["transition_metadata"]["wildcard_used"] is True
 
 
-def test_chrono_constraint_and_candidate_pool(client):
-    run_id = create_run(client, "chrono_climb")
+def test_chrono_hybrid_constraint_and_candidate_pool(client):
+    run_id = create_run(client, "chrono_climb", require_cast_link=True)
     with respx.mock:
         mock_universe(CHRONO)
         before = client.get(f"/api/runs/{run_id}/constraint").json()
@@ -180,7 +180,7 @@ BRIDGE_CHRONO = {
 async def test_chrono_bridge_skips_hops_that_go_backwards(config_dir, db_engine):
     with Session(db_engine) as session, respx.mock:
         mock_universe(BRIDGE_CHRONO)
-        constrained = await _solve(session, ChronoClimbEngine, 1, 9, max_depth=3)
+        constrained = await _solve(session, ChronoClimbEngine, 1, 9, max_depth=3, rules={"require_cast_link": True})
         unconstrained = await _solve(session, CineChainEngine, 1, 9, max_depth=3)
 
     result = next(e for e in constrained if e["type"] == "result")
@@ -193,7 +193,7 @@ async def test_chrono_bridge_skips_hops_that_go_backwards(config_dir, db_engine)
 async def test_chrono_bridge_is_impossible_when_the_target_is_older(config_dir, db_engine):
     with Session(db_engine) as session, respx.mock:
         mock_universe(BRIDGE_CHRONO)
-        events = await _solve(session, ChronoClimbEngine, 9, 1, max_depth=3)
+        events = await _solve(session, ChronoClimbEngine, 9, 1, max_depth=3, rules={"require_cast_link": True})
 
     exhausted = next(e for e in events if e["type"] == "exhausted")
     assert exhausted["reason"] == "constraint_impossible"
@@ -226,8 +226,8 @@ def test_passport_blocks_the_same_primary_country(client):
     assert [s["movie_id"] for s in steps(client, run_id)] == [1, 2, 5]
 
 
-def test_passport_pool_drops_same_country_films(client):
-    run_id = create_run(client, "world_passport")
+def test_passport_hybrid_pool_drops_same_country_films(client):
+    run_id = create_run(client, "world_passport", require_cast_link=True)
     with respx.mock:
         mock_universe(PASSPORT)
         log(client, run_id, 1)
@@ -239,9 +239,9 @@ def test_passport_pool_drops_same_country_films(client):
     assert constraint["title"] == "Next film must be from a country other than US"
 
 
-def test_passport_pool_flags_films_it_could_not_verify(client, monkeypatch):
+def test_passport_hybrid_pool_flags_films_it_could_not_verify(client, monkeypatch):
     monkeypatch.setattr(mutators, "HYDRATE_BUDGET", 1)
-    run_id = create_run(client, "world_passport")
+    run_id = create_run(client, "world_passport", require_cast_link=True)
     with respx.mock:
         mock_universe(PASSPORT)
         log(client, run_id, 1)
@@ -264,7 +264,7 @@ BRIDGE_PASSPORT = {
 async def test_passport_bridge_verifies_lazily_discovered_countries(config_dir, db_engine):
     with Session(db_engine) as session, respx.mock:
         mock_universe(BRIDGE_PASSPORT)
-        events = await _solve(session, WorldPassportEngine, 1, 9, max_depth=3)
+        events = await _solve(session, WorldPassportEngine, 1, 9, max_depth=3, rules={"require_cast_link": True})
 
     result = next(e for e in events if e["type"] == "result")
     assert [n.movie_id for n in result["path"]] == [1, 5, 9]  # 6 is US -> US: rejected

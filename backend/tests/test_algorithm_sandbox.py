@@ -176,10 +176,10 @@ def mock_universe(movies: dict[int, dict]) -> dict[int, respx.Route]:
     return posters
 
 
-def create_run(client, game_type):
+def create_run(client, game_type, **extra_rules):
     resp = client.post("/api/runs", json={"name": "Run", "game_type": game_type, "rules_config": {
         "allow_repeats": "strict", "no_consecutive_actor": False, "min_runtime": 0,
-        "wildcards_budget": 2}})
+        "wildcards_budget": 2, **extra_rules}})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -245,8 +245,8 @@ def test_aesthetic_never_blocks_a_film_without_a_poster(client):
     assert "color_distance" not in (resp.json()["transition_metadata"] or {})
 
 
-def test_aesthetic_pool_is_filtered_and_annotated(client):
-    run_id = create_run(client, "aesthetic_gradient")
+def test_aesthetic_hybrid_pool_is_filtered_and_annotated(client):
+    run_id = create_run(client, "aesthetic_gradient", require_cast_link=True)
     with respx.mock:
         mock_universe(COLORS)
         log(client, run_id, 1)
@@ -311,8 +311,8 @@ def test_semantic_embeddings_are_persisted_and_models_run_in_batches(client, db_
     assert sum(len(batch) for batch in fake_model) == 2  # each overview embedded exactly once
 
 
-def test_semantic_pool_is_filtered_and_scored(client, fake_model):
-    run_id = create_run(client, "semantic_trope")
+def test_semantic_hybrid_pool_is_filtered_and_scored(client, fake_model):
+    run_id = create_run(client, "semantic_trope", require_cast_link=True)
     with respx.mock:
         mock_universe(PLOTS)
         log(client, run_id, 1)

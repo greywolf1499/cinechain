@@ -1,4 +1,6 @@
-import { Clapperboard, Star, User } from "lucide-react";
+import { ArrowDown, ArrowUp, Clapperboard, Star, User } from "lucide-react";
+import { countryName } from "../lib/countryNames";
+import { isoToFlagEmoji } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
 import { SemanticMatchBadge } from "./ColorSwatch";
 import type { RunStep } from "../types/api";
@@ -14,10 +16,21 @@ interface TransitionMeta {
   character_in_to?: string | null;
   semantic_score?: number;
   color_distance?: number;
+  year_delta?: number;
+  from_country?: string | null;
+  to_country?: string | null;
 }
 
 /** Renders on the vertical spine track between two station cards. */
-export default function ChainLink({ step, isKeystone }: { step: RunStep; isKeystone: boolean }) {
+export default function ChainLink({
+  step,
+  isKeystone,
+  castLinked = true,
+}: {
+  step: RunStep;
+  isKeystone: boolean;
+  castLinked?: boolean;
+}) {
   const meta = step.transition_metadata as TransitionMeta | null;
   const isDirector = meta?.connection_type === "director";
   const actorName = isDirector ? meta?.director_name : meta?.actor_name;
@@ -64,8 +77,10 @@ export default function ChainLink({ step, isKeystone }: { step: RunStep; isKeyst
               {characters && <p className="truncate text-[10px] text-zinc-500">{characters}</p>}
             </div>
           </>
-        ) : (
+        ) : castLinked ? (
           <p className="text-[10px] text-zinc-600">Chain broken — no shared cast</p>
+        ) : (
+          <RuleLink meta={meta} />
         )}
         <SemanticMatchBadge score={meta?.semantic_score} className="ml-auto shrink-0" />
         {meta?.color_distance !== undefined && (
@@ -81,3 +96,34 @@ export default function ChainLink({ step, isKeystone }: { step: RunStep; isKeyst
   );
 }
 
+
+/** The hop's rule evidence for modes with no cast link: year jump, country change, colour/plot match. */
+function RuleLink({ meta }: { meta: TransitionMeta | null }) {
+  if (meta?.year_delta !== undefined) {
+    const up = meta.year_delta > 0;
+    const Icon = up ? ArrowUp : ArrowDown;
+    return (
+      <p className="flex items-center gap-1.5 text-xs font-medium text-violet-300">
+        <Icon className="h-3.5 w-3.5" />
+        {Math.abs(meta.year_delta)} year{Math.abs(meta.year_delta) === 1 ? "" : "s"} {up ? "later" : "earlier"}
+      </p>
+    );
+  }
+  if (meta?.from_country || meta?.to_country) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs font-medium text-teal-300">
+        {flagAndName(meta.from_country)}
+        <span className="text-zinc-500">→</span>
+        {flagAndName(meta.to_country)}
+      </p>
+    );
+  }
+  if (meta?.semantic_score !== undefined || meta?.color_distance !== undefined) {
+    return <p className="text-xs text-zinc-500">Linked by the mode's rule</p>;
+  }
+  return <p className="text-[10px] text-zinc-600">Linked by the mode's rule</p>;
+}
+
+function flagAndName(code: string | null | undefined): string {
+  return code ? `${isoToFlagEmoji(code)} ${countryName(code, code)}` : "Unknown";
+}

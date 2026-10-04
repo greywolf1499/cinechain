@@ -753,3 +753,82 @@ def test_discover_user_lists_parses_cards(tmp_path, monkeypatch):
     assert first["preview_slugs"] == ["seven-samurai-1954", "stalker-1979"]
     assert second["total_films"] == 12
     assert result["partial"] is False
+
+
+# ---------------------------------------------------------
+# Watchlists (Phase 22a): no /detail/ view exists for them
+# ---------------------------------------------------------
+def test_watchlist_scrape_uses_the_plain_grid_url_not_detail(tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    monkeypatch.setattr(letterboxd, "resolve_tmdb_multipass",
+                        _resolver_by_slug({"dune-2021": 1, "amelie-2001": 2}))
+    grid = _SeqResponse(GRID_HTML + '<div class="paginate-pages"><a class="next" href="/p2/">Next</a></div>')
+    session = _SeqSession({
+        "https://letterboxd.com/rsrax/watchlist/": grid,
+        "https://letterboxd.com/rsrax/watchlist/page/2/": _SeqResponse(GRID_HTML),
+        # what Letterboxd really serves for the old (broken) URL shape
+        "https://letterboxd.com/rsrax/watchlist/detail/": _SeqResponse(status_code=404),
+    })
+    monkeypatch.setattr(letterboxd, "new_session", lambda: session)
+
+    result = letterboxd.scrape_letterboxd_watchlist("/rsrax/", tmdb_api_key="k")
+
+    assert result["total_films"] == 2
+    assert session.requested == [
+        "https://letterboxd.com/rsrax/watchlist/", "https://letterboxd.com/rsrax/watchlist/page/2/"]
+
+
+def test_watchlist_404_on_the_first_page_is_reported_as_not_found(tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    monkeypatch.setattr(letterboxd, "new_session", lambda: _SeqSession({}))
+
+    with pytest.raises(letterboxd.WatchlistNotFound):
+        letterboxd.scrape_letterboxd_watchlist("ghost", tmdb_api_key="k")
+
+
+def test_build_paginated_url_collapses_double_slashes():
+    assert letterboxd.build_paginated_url(
+        "https://letterboxd.com//rsrax///watchlist", 2) == "https://letterboxd.com/rsrax/watchlist/page/2/"
+
+
+def test_sessions_follow_redirects():
+    session = letterboxd.new_session()
+    assert session.allow_redirects is True and session.max_redirects == 5
+
+
+# ---------------------------------------------------------
+# Curator list cards (Phase 22a): title lives in `h2.name a`, not the poster overlay link
+# ---------------------------------------------------------
+LIST_CARD_HTML = """
+<article class="list-summary js-list-summary">
+  <figure class="figure posterset">
+    <a class="poster-list-link" href="/criterion/list/october-leaving-soon/">
+      <ul class="posterlist"><li class="posteritem">
+        <div data-item-slug="stalker-1979"><img class="image" src="https://s.ltrbxd.com/static/img/empty-poster-70.png"></div>
+      </li></ul>
+    </a>
+  </figure>
+  <div class="body"><h2 class="name prettify">
+    <a href="/criterion/list/october-leaving-soon/">October Leaving Soon | Criterion</a></h2>
+    <span class="value">28 films</span></div>
+</article>
+"""
+
+
+def test_parse_list_card_takes_the_title_from_the_headline_not_the_poster_overlay():
+    card = BeautifulSoup(LIST_CARD_HTML, "html.parser").select_one("article")
+    entry = letterboxd._parse_list_card(card)
+
+    assert entry["title"] == "October Leaving Soon | Criterion"
+    assert entry["total_films"] == 28
+    assert entry["preview_slugs"] == ["stalker-1979"]
+    assert entry["preview_posters"] == []  # lazy-load placeholder is not a poster
+
+
+def test_parse_list_card_falls_back_to_a_readable_title():
+    html = ('<article><a class="poster-list-link" href="/x/list/best-of-2020/">'
+            '<img src="p.jpg"></a></article>')
+    entry = letterboxd._parse_list_card(BeautifulSoup(html, "html.parser").select_one("article"))
+    assert entry["title"] == "Best Of 2020"

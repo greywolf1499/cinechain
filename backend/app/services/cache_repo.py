@@ -415,6 +415,23 @@ async def get_actor_credits(
     return await anyio.to_thread.run_sync(repo.upsert_actor_credits, actor_id, credits_)
 
 
+async def store_stubs(session: Session, stubs: list[TMDBPersonCredit]) -> list[CachedMovie]:
+    """Cache credit-shaped search/discover results as stubs (never overwriting a fully
+    fetched row). Sequential on purpose: one Session must not be shared across threads."""
+    repo = CacheRepo(session)
+    return await anyio.to_thread.run_sync(lambda: [repo.upsert_movie_stub(c) for c in stubs])
+
+
+async def discover_movies(session: Session, tmdb: TMDBClient, **params) -> list[CachedMovie]:
+    """Popular films matching raw TMDB discover filters (`pages` bounds the size)."""
+    return await store_stubs(session, await tmdb.discover_movies(**params))
+
+
+async def get_related_movies(session: Session, tmdb: TMDBClient, tmdb_id: int) -> list[CachedMovie]:
+    """TMDB recommendations + similar titles for a film."""
+    return await store_stubs(session, await tmdb.get_related_movies(tmdb_id))
+
+
 async def get_genres(session: Session, tmdb: TMDBClient) -> list[CachedGenre]:
     repo = CacheRepo(session)
     cached = await anyio.to_thread.run_sync(repo.get_cached_genres)

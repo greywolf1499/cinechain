@@ -38,6 +38,10 @@ line-length = 100
 target-version = "py312"
 extend-exclude = ["migrations/versions"]
 
+[tool.ruff.lint.per-file-ignores]
+# Reuses pytest fixtures imported from sibling test modules.
+"tests/test_standalone_modes.py" = ["F401", "F811"]
+
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's Depends()/Query()/etc. are meant to be called in argument defaults.
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.Path"]

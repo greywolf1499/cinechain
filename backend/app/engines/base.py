@@ -86,7 +86,8 @@ class BaseChallengeEngine(ABC):
         """Candidate next films reachable from `current_movie_id`."""
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None
+        self, tail_movie_id: int | None, previous_transition: dict | None,
+        rules: dict | None = None,
     ) -> ConstraintInfo | None:
         """The rule that currently shapes the run's next hop, for the UI. None = unconstrained."""
         return None

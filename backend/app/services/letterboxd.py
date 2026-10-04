@@ -204,7 +204,7 @@ def build_paginated_url(base_url: str, page_num: int, detail_mode: bool = False)
       standard:  /{path}/         ->  /{path}/page/2/
     """
     parsed = urlparse(base_url)
-    path = parsed.path.strip('/')
+    path = re.sub(r'/{2,}', '/', parsed.path).strip('/')
     path = re.sub(r'/page/\d+', '', path)
     had_detail = path == 'detail' or path.endswith('/detail')
     if had_detail:
@@ -512,8 +512,9 @@ def cache_dir() -> Path:
 
 
 def new_session() -> curl_requests.Session:
+    # Letterboxd 302s slash-less / differently-cased URLs to the canonical one.
     session = curl_requests.Session(
-        impersonate=IMPERSONATE_PROFILE, timeout=15.0)
+        impersonate=IMPERSONATE_PROFILE, timeout=15.0, allow_redirects=True, max_redirects=5)
     session.headers.update(BROWSER_HEADERS)
     return session
 
@@ -884,8 +885,9 @@ def scrape_letterboxd_list(
     title/year/director, far fewer requests) unless `deep` is set, which instead
     visits every film page for TMDB/IMDb ids and the Letterboxd rating."""
     path = urlparse(url).path
-    is_list = '/list/' in path or '/watchlist' in path
-    detail_mode = is_list and not deep
+    # Only user lists have the inline `/detail/` view; watchlists 404 on it and
+    # are scraped from the plain poster grid.
+    detail_mode = '/list/' in path and not deep
 
     def parse_page(soup: BeautifulSoup) -> list[dict[str, Any]]:
         entries = parse_detail_entries(soup) if detail_mode else []
@@ -1360,8 +1362,28 @@ def discover_user_lists(
             "partial": error is not None, "error": error}
 
 
+def title_from_slug(slug_or_url: str) -> str:
+    """Readable fallback title ("my-great-list" -> "My Great List") for a list with no scraped one."""
+    slug = urlparse(slug_or_url).path.strip('/').split('/')[-1] if '/' in slug_or_url else slug_or_url
+    words = [w for w in re.split(r'[-_\s]+', slug) if w]
+    return " ".join(w if w.isdigit() else w.capitalize() for w in words) or slug_or_url
+
+
+def _list_card_link(card: Tag) -> Tag | None:
+    """The link carrying the list's *title*. The poster-stack overlay also links to the
+    list (with no text) and comes first in the DOM, so it must not win."""
+    for selector in ("h1 a", "h2 a", "h3 a"):
+        for link in card.select(selector):
+            if link.get_text(strip=True) and '/list/' in (attr_str(link, "href") or ""):
+                return link
+    for link in card.select("a[href*='/list/']"):
+        if link.get_text(strip=True) and not link.select_one("img, ul"):
+            return link
+    return card.select_one("a[href*='/list/']")
+
+
 def _parse_list_card(card: Tag) -> dict[str, Any] | None:
-    link_el = card.select_one("h2 a, h3 a, a[href*='/list/']")
+    link_el = _list_card_link(card)
     href = attr_str(link_el, "href")
     if not href or '/list/' not in href:
         return None
@@ -1378,20 +1400,24 @@ def _parse_list_card(card: Tag) -> dict[str, Any] | None:
     preview_posters: list[str] = []
     preview_slugs: list[str] = []
     for preview in card.select(
-            "ul.poster-list li, li.poster-container, li.griditem, .film-list-summary")[:5]:
+            "ul.poster-list li, ul.posterlist li, li.posteritem, li.poster-container, "
+            "li.griditem")[:5]:
         poster_node = preview.select_one("img")
         if poster_node:
             poster_src = attr_str(poster_node, "src") or attr_str(
                 poster_node, "data-src")
-            if poster_src and poster_src not in preview_posters:
+            # lazy-loaded posters ship a grey placeholder until the page's JS swaps it in
+            if (poster_src and "empty-poster" not in poster_src
+                    and poster_src not in preview_posters):
                 preview_posters.append(urljoin(BASE_URL, poster_src))
-        for attr in ("data-film-slug", "data-item-slug"):
-            slug = normalize_slug(attr_str(preview, attr))
-            if slug and slug not in preview_slugs:
-                preview_slugs.append(slug)
+        for holder in (preview, *preview.select("[data-film-slug], [data-item-slug]")):
+            for attr in ("data-film-slug", "data-item-slug"):
+                slug = normalize_slug(attr_str(holder, attr))
+                if slug and slug not in preview_slugs:
+                    preview_slugs.append(slug)
 
     return {
-        "title": link_el.get_text(strip=True) if link_el else list_url,
+        "title": (link_el.get_text(strip=True) if link_el else "") or title_from_slug(list_url),
         "slug": list_url.strip('/').split('/')[-1],
         "url": list_url,
         "total_films": int(digits) if digits else 0,

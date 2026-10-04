@@ -30,3 +30,5 @@ class DiscoveryCandidate(BaseModel):
     # semantic (plot) similarity to the frontier film, 0..1.
     dominant_color: str | None = None
     semantic_score: float | None = None
+    # Chrono modes: release year minus the frontier film's (negative on a descent).
+    year_delta: int | None = None

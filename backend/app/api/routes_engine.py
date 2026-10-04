@@ -295,6 +295,8 @@ async def bridge_stream(
     excluded_movie_ids, cast_limit, min_runtime = _run_solve_context(
         session, run_id, current_user)
     start_connection_type = _tail_connection_type(session, run_id, from_movie_id)
+    run = session.get(Run, run_id) if run_id else None
+    run_rules = run.rules_config if run is not None else None
 
     overrides = settings_repo.get_overrides(session)
     raw_max_duration = overrides.get("bridge_max_duration_seconds")
@@ -311,6 +313,7 @@ async def bridge_stream(
             max_duration_seconds=max_duration_seconds,
             min_hops=min_hops,
             start_connection_type=start_connection_type,
+            rules=run_rules,
         )
         try:
             async for event in agen:

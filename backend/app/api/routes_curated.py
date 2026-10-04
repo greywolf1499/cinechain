@@ -105,7 +105,7 @@ class CuratedListOut(BaseModel):
         return cls(
             id=row.id,
             preset_key=row.preset_key,
-            title=row.title,
+            title=(row.title or "").strip() or letterboxd.title_from_slug(row.slug or row.url),
             url=row.url,
             badge_prefix=row.badge_prefix,
             badge_color=row.badge_color,
@@ -335,7 +335,7 @@ def create_custom_list(
         session.refresh(existing)
         return _list_out(session, existing)
     curated_list = CuratedList(
-        title=payload.title or badge_prefix,
+        title=(payload.title or "").strip() or letterboxd.title_from_slug(payload.url),
         url=payload.url,
         badge_prefix=badge_prefix,
         badge_color=payload.badge_color,
@@ -942,7 +942,9 @@ def _persist_discovered_lists(
                                       entry["url"]),
                                   is_enabled=False)
             _prepare_new_list(session, row, slug_hint=_list_slug_hint(entry["url"], entry["title"]))
-        elif row.preset_key is None and row.last_synced_at is None:
+        elif entry["title"] and (
+            (row.preset_key is None and row.last_synced_at is None) or not (row.title or "").strip()
+        ):
             row.title = entry["title"]
         row.source_account_id = account.id
         if row.slug is None:

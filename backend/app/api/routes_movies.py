@@ -16,8 +16,9 @@ from app.schemas.movies import (
     MovieRatings,
     MovieSearchResponse,
     MovieSummary,
+    SeedSuggestionOut,
 )
-from app.services import cache_repo
+from app.services import cache_repo, seed_suggestions
 from app.services.cache_repo import CastEntry
 from app.services.movie_filters import passes_filters
 from app.services.tmdb import TMDBClient
@@ -102,6 +103,22 @@ async def list_genres(
 ) -> list[GenreOut]:
     genres = await cache_repo.get_genres(session, tmdb)
     return [GenreOut(id=g.id, name=g.name) for g in genres]
+
+
+@router.get("/movies/seed-suggestion", response_model=SeedSuggestionOut | None)
+def get_seed_suggestion(
+    exclude: str = Query(default="", description="Comma-separated TMDB ids already offered"),
+    game_type: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
+) -> SeedSuggestionOut | None:
+    """A random well-regarded film from the local cache (canon-listed or highly rated,
+    else simply popular) to start a run with. Null when the cache has nothing to offer."""
+    skipped = {int(part) for part in exclude.split(",") if part.strip().isdigit()}
+    suggestion = seed_suggestions.suggest_seed(session, skipped, game_type)
+    if suggestion is None:
+        return None
+    return SeedSuggestionOut(**_movie_to_summary(suggestion.movie).model_dump(), reason=suggestion.reason)
 
 
 @router.get("/movies/{tmdb_id}", response_model=MovieDetail)

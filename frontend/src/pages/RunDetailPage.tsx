@@ -46,6 +46,7 @@ import {
   useUsers,
 } from "../lib/queries";
 import type { ActorClickPayload } from "../components/actorClickTypes";
+import { STANDALONE_MODES, gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import type { CuratedListSummary, RulesConfig, RunStats, RunStatus, RunStep } from "../types/api";
 
 export default function RunDetailPage() {
@@ -96,8 +97,11 @@ export default function RunDetailPage() {
   const locked = run.status !== "active";
   const engine = engines?.find((e) => e.game_type === run.game_type);
   // Until /engines loads, assume the classic graph engine can do everything.
-  const capabilities =
-    engine?.capabilities ?? (run.game_type === "cinechain" ? ["discover_candidates", "solve_bridge"] : []);
+  const castLinked = usesCastLinks(run.game_type, run.rules_config);
+  // A bridge is a chain of shared-cast hops, so it only exists for cast-linked runs.
+  const capabilities = (
+    engine?.capabilities ?? (run.game_type === "cinechain" ? ["discover_candidates", "solve_bridge"] : [])
+  ).filter((capability) => capability !== "solve_bridge" || castLinked);
   const lastStep = run.steps[run.steps.length - 1];
   const participantNames = run.participants
     .map((p) => users?.find((u) => u.id === p.user_id)?.display_name ?? p.user_id)
@@ -133,12 +137,11 @@ export default function RunDetailPage() {
             <h1 className="text-xl font-semibold tracking-tight text-zinc-100">{run.name}</h1>
             <StatusBadge status={run.status} />
             {run.game_type !== "cinechain" && (
-              <span className="rounded-full border border-accent/40 bg-accent/10 px-2.5 py-0.5 text-xs font-medium text-accent">
-                {engine?.display_name ?? run.game_type}
-                {modeDetail(run.game_type, run.rules_config, curatedLists) && (
-                  <> &middot; {modeDetail(run.game_type, run.rules_config, curatedLists)}</>
-                )}
-              </span>
+              <ModeChip
+                gameType={run.game_type}
+                label={engine?.display_name ?? run.game_type}
+                detail={modeDetail(run.game_type, run.rules_config, curatedLists)}
+              />
             )}
           </div>
           <p className="mt-1 text-sm text-zinc-500">{participantNames || "No participants"}</p>
@@ -177,6 +180,7 @@ export default function RunDetailPage() {
                 steps={run.steps}
                 locked={locked}
                 capabilities={capabilities}
+                gameType={run.game_type}
               />
             </div>
           )}
@@ -193,9 +197,16 @@ export default function RunDetailPage() {
               steps={run.steps}
               locked={locked}
               capabilities={capabilities}
+              gameType={run.game_type}
             />
-            <MiniPassportWidget stats={stats} rules={run.rules_config} />
-            <RulesSummaryCard runId={run.id} rules={run.rules_config} steps={run.steps} />
+            <MiniPassportWidget stats={stats} rules={run.rules_config} castLinked={castLinked} />
+            <RulesSummaryCard
+              runId={run.id}
+              rules={run.rules_config}
+              steps={run.steps}
+              gameType={run.game_type}
+              castLinked={castLinked}
+            />
           </div>
 
           <div className="order-2 min-w-0 lg:order-1 lg:col-span-7 lg:col-start-1 xl:col-span-8">
@@ -204,6 +215,7 @@ export default function RunDetailPage() {
               runId={run.id}
               steps={run.steps}
               keystoneActorIds={keystoneActorIds}
+              castLinked={castLinked}
               onActorClick={(actor) => {
                 // Actor forks assume the unconstrained shared-cast engine.
                 if (!locked && run.game_type === "cinechain") setActiveActor(actor);
@@ -324,12 +336,34 @@ export default function RunDetailPage() {
   );
 }
 
+function ModeChip({ gameType, label, detail }: { gameType: string; label: string; detail: string | null }) {
+  const style = gameModeStyle(gameType);
+  const Icon = style.icon;
+  return (
+    <span
+      className={cn(
+        "flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium",
+        style.bubble,
+      )}
+    >
+      <Icon className="h-3 w-3" />
+      {label}
+      {detail && <> &middot; {detail}</>}
+    </span>
+  );
+}
+
 /** Short "what is this run restricted to" label for the header chip. */
 function modeDetail(
   gameType: string,
   rules: RulesConfig,
   lists: CuratedListSummary[] | undefined,
 ): string | null {
+  if (gameType === "chrono_climb") {
+    const label = rules.direction === "descent" ? "Descent" : "Climb";
+    return rules.require_cast_link ? `${label} + cast link` : label;
+  }
+  if (STANDALONE_MODES.has(gameType) && rules.require_cast_link) return "+ cast link";
   if (gameType === "decade_sieve" && rules.target_decade) return `${rules.target_decade}s`;
   if (gameType === "canon_island" && rules.allowed_curated_list_id) {
     return lists?.find((l) => l.id === rules.allowed_curated_list_id)?.title ?? null;
@@ -486,6 +520,7 @@ function ActiveFrontierCard({
   steps,
   locked,
   capabilities,
+  gameType,
 }: {
   runId: string;
   tailStep: RunStep | undefined;
@@ -493,6 +528,7 @@ function ActiveFrontierCard({
   steps: RunStep[];
   locked: boolean;
   capabilities: string[];
+  gameType: string;
 }) {
   const navigate = useNavigate();
   const [showHub, setShowHub] = useState(false);
@@ -599,6 +635,7 @@ function ActiveFrontierCard({
           frontierStep={tailStep}
           rulesConfig={rulesConfig}
           steps={steps}
+          gameType={gameType}
         />
       )}
     </div>
@@ -641,7 +678,15 @@ function ConstraintIcon({ kind }: { kind: string }) {
   }
 }
 
-function MiniPassportWidget({ stats, rules }: { stats: RunStats | undefined; rules: RulesConfig }) {
+function MiniPassportWidget({
+  stats,
+  rules,
+  castLinked,
+}: {
+  stats: RunStats | undefined;
+  rules: RulesConfig;
+  castLinked: boolean;
+}) {
   const topActor = stats?.keystone_actors[0];
 
   return (
@@ -671,12 +716,14 @@ function MiniPassportWidget({ stats, rules }: { stats: RunStats | undefined; rul
             <span className="text-zinc-400">Decades</span>
             <span className="text-zinc-200">{stats.decades.length}</span>
           </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="shrink-0 text-zinc-400">Keystone Actor</span>
-            <span className="max-w-[65%] truncate rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
-              {topActor ? topActor.actor_name : "—"}
-            </span>
-          </div>
+          {castLinked && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="shrink-0 text-zinc-400">Keystone Actor</span>
+              <span className="max-w-[65%] truncate rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
+                {topActor ? topActor.actor_name : "—"}
+              </span>
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-zinc-400">Wildcards Left</span>
             <span className="text-zinc-200">
@@ -693,10 +740,14 @@ function RulesSummaryCard({
   runId,
   rules,
   steps,
+  gameType,
+  castLinked,
 }: {
   runId: string;
   rules: RulesConfig;
   steps: RunStep[];
+  gameType: string;
+  castLinked: boolean;
 }) {
   const [showEdit, setShowEdit] = useState(false);
   const wildcardsConsumed = steps.filter(
@@ -721,12 +772,28 @@ function RulesSummaryCard({
           <span className="text-zinc-400">Preset</span>
           <span className="capitalize text-zinc-200">{rules.preset}</span>
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-zinc-400">Cast Depth</span>
-          <span className="text-zinc-200">
-            {rules.max_cast_order != null ? `Top ${rules.max_cast_order}` : "—"}
-          </span>
-        </div>
+        {gameType === "chrono_climb" && (
+          <div className="flex items-center justify-between">
+            <span className="text-zinc-400">Direction</span>
+            <span className="text-zinc-200">
+              {rules.direction === "descent" ? "▼ Descent (older each film)" : "▲ Climb (newer each film)"}
+            </span>
+          </div>
+        )}
+        {STANDALONE_MODES.has(gameType) && (
+          <div className="flex items-center justify-between">
+            <span className="text-zinc-400">Shared Cast</span>
+            <span className="text-zinc-200">{castLinked ? "Required (hybrid)" : "Not required"}</span>
+          </div>
+        )}
+        {castLinked && (
+          <div className="flex items-center justify-between">
+            <span className="text-zinc-400">Cast Depth</span>
+            <span className="text-zinc-200">
+              {rules.max_cast_order != null ? `Top ${rules.max_cast_order}` : "—"}
+            </span>
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <span className="text-zinc-400">Repeat Movies</span>
           <span className="text-zinc-200">
@@ -755,6 +822,7 @@ function RulesSummaryCard({
           onClose={() => setShowEdit(false)}
           runId={runId}
           currentRules={rules}
+          gameType={gameType}
         />
       )}
     </div>

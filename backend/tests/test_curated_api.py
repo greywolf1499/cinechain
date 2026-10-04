@@ -612,3 +612,12 @@ def test_account_enabled_counts_are_real_numbers_not_booleans(client):
     listed = next(a for a in client.get("/api/curated/accounts").json() if a["username"] == "countme")
     assert (browsed["discovered_lists"], browsed["enabled_lists"]) == (3, 2)
     assert (listed["discovered_lists"], listed["enabled_lists"]) == (3, 2)
+
+
+def test_blank_stored_titles_are_never_serialized_empty():
+    from app.api.routes_curated import CuratedListOut
+    from app.models.curated import CuratedList
+
+    row = CuratedList(title="  ", url="https://letterboxd.com/a/list/hidden-gems/",
+                      badge_prefix="HG", slug="hidden-gems")
+    assert CuratedListOut.from_model(row).title == "Hidden Gems"

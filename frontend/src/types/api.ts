@@ -41,6 +41,10 @@ export interface RulesConfig {
 	allowed_curated_list_id?: string;
 	/** Decade Sieve: the decade start (e.g. 1970) every film must fall in. */
 	target_decade?: number;
+	/** Standalone modes: also require a shared actor/director between hops (hybrid play). */
+	require_cast_link?: boolean;
+	/** Chrono Climb / Descent: which way time must move. */
+	direction?: "climb" | "descent";
 	win_condition?: RunCondition | RunCondition[];
 	fail_condition?: RunCondition | RunCondition[];
 }
@@ -162,6 +166,12 @@ export interface ValidationResult {
 	connections: SharedActorConnection[];
 	/** A hard rule violation (canon list / decade) - a wildcard can't override it. */
 	blocked?: boolean;
+	/** Semantic Trope Web: cosine similarity of the two plots (-1..1). */
+	similarity?: number | null;
+	/** Aesthetic Gradient: RGB distance between the two posters' colours. */
+	color_distance?: number | null;
+	/** Rule evidence for the hop (Chrono year delta, Passport countries). */
+	mechanic?: Record<string, unknown> | null;
 }
 
 export interface RouletteMovie {
@@ -300,6 +310,8 @@ export interface DiscoveryCandidate {
 	dominant_color?: string | null;
 	/** Semantic Trope Web: plot similarity to the frontier film, 0..1. */
 	semantic_score?: number | null;
+	/** Chrono modes: release year minus the frontier film's (negative on a descent). */
+	year_delta?: number | null;
 }
 
 // --- integrations (schemas/integrations.py) ---
@@ -565,4 +577,9 @@ export interface BackfillResult {
 	looked_up: number;
 	failed: number;
 	total: number;
+}
+
+/** A random well-regarded cached film to start a run with (`GET /movies/seed-suggestion`). */
+export interface SeedSuggestion extends MovieSummary {
+	reason: string;
 }

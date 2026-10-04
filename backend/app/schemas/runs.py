@@ -41,6 +41,9 @@ class RunRulesUpdate(BaseModel):
     max_cast_order: int = 15
     min_runtime: int = 40
     wildcards_budget: int = 2  # -1 = unlimited
+    # Standalone modes (Chrono, Passport, Aesthetic, Semantic): only sent when set.
+    require_cast_link: bool | None = None
+    direction: Literal["climb", "descent"] | None = None
 
 
 class RunStepCreate(BaseModel):

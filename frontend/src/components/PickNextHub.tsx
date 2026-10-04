@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowDownAZ,
   ArrowLeft,
+  ArrowUp,
   ArrowUpAZ,
   Check,
   Clapperboard,
@@ -26,9 +28,18 @@ import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { profileUrl } from "../lib/tmdbImage";
+import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
+import { countryName } from "../lib/countryNames";
+import { gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { connectionMetadata } from "../lib/connections";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
-import { useCanonBadgesBulk, useCreateStep, useDiscoverCandidates, useMovieDetail } from "../lib/queries";
+import {
+  useCanonBadgesBulk,
+  useCreateStep,
+  useDiscoverCandidates,
+  useMovieDetail,
+  useRunConstraint,
+} from "../lib/queries";
 import type {
   CastMember,
   DiscoveryCandidate,
@@ -43,7 +54,7 @@ import type {
 } from "../types/api";
 
 type CoStarMode = "or" | "and";
-type SortBy = "year" | "popularity" | "imdb" | "rt";
+type SortBy = "match" | "year" | "popularity" | "imdb" | "rt";
 type SortDir = "asc" | "desc";
 
 /** Navigation stack for the in-dialog drill-down (grid -> movie -> actor ->
@@ -104,6 +115,7 @@ export default function PickNextHub({
   frontierStep,
   rulesConfig,
   steps,
+  gameType = "cinechain",
 }: {
   open: boolean;
   onClose: () => void;
@@ -111,7 +123,9 @@ export default function PickNextHub({
   frontierStep: RunStep;
   rulesConfig: RulesConfig;
   steps: RunStep[];
+  gameType?: string;
 }) {
+  const castLinked = usesCastLinks(gameType, rulesConfig);
   const [stack, setStack] = useState<Screen[]>([{ kind: "grid", label: "Pick Next" }]);
   const activeScreen = stack[stack.length - 1];
 
@@ -170,6 +184,8 @@ export default function PickNextHub({
             runId={runId}
             frontierStep={frontierStep}
             rulesConfig={rulesConfig}
+            gameType={gameType}
+            castLinked={castLinked}
             onOpenMovie={(screen) => pushScreen(screen)}
             onClose={handleClose}
           />
@@ -184,6 +200,7 @@ export default function PickNextHub({
             frontierMovieTitle={frontierStep.movie_title}
             rulesConfig={rulesConfig}
             steps={steps}
+            castLinked={castLinked}
             onOpenActor={(screen) => pushScreen(screen)}
             onClose={handleClose}
           />
@@ -208,12 +225,17 @@ function DiscoveryGrid({
   runId,
   frontierStep,
   rulesConfig,
+  gameType,
+  castLinked,
   onOpenMovie,
   onClose,
 }: {
   runId: string;
   frontierStep: RunStep;
   rulesConfig: RulesConfig;
+  gameType: string;
+  /** False for standalone modes: no actor network, the card shows the mode's own mechanic. */
+  castLinked: boolean;
   onOpenMovie: (screen: Screen & { kind: "movie" }) => void;
   onClose: () => void;
 }) {
@@ -222,7 +244,8 @@ function DiscoveryGrid({
   const [search, setSearch] = useState("");
   const [genreId, setGenreId] = useState<number | null>(null);
   const [decadeKey, setDecadeKey] = useState("all");
-  const [sortBy, setSortBy] = useState<SortBy>("year");
+  const defaultSort: SortBy = castLinked ? "year" : "match";
+  const [sortBy, setSortBy] = useState<SortBy>(defaultSort);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
 
@@ -231,7 +254,7 @@ function DiscoveryGrid({
     setSearch("");
     setGenreId(null);
     setDecadeKey("all");
-    setSortBy("year");
+    setSortBy(defaultSort);
     setSortDir("desc");
   }
 
@@ -241,7 +264,9 @@ function DiscoveryGrid({
   const { data: cast } = useQuery({
     queryKey: ["movies", frontierStep.movie_id, "cast"],
     queryFn: () => api.get<CastMember[]>(`/movies/${frontierStep.movie_id}/cast`),
+    enabled: castLinked,
   });
+  const { data: constraint } = useRunConstraint(runId);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
@@ -313,6 +338,7 @@ function DiscoveryGrid({
       );
     }
 
+    if (sortBy === "match") return sortDir === "desc" ? list : [...list].reverse();
     const direction = sortDir === "asc" ? -1 : 1;
     return [...list].sort((a, b) => {
       if (sortBy === "year") return direction * ((b.release_year ?? 0) - (a.release_year ?? 0));
@@ -356,7 +382,16 @@ function DiscoveryGrid({
 
   return (
     <div className="flex flex-col gap-4">
-      {cast && cast.length > 0 && (
+      {!castLinked && (
+        <RuleBanner
+          gameType={gameType}
+          title={constraint?.title}
+          detail={constraint?.detail}
+          frontierTitle={frontierStep.movie_title}
+        />
+      )}
+
+      {castLinked && cast && cast.length > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {cast.map((member) => (
             <button
@@ -391,6 +426,7 @@ function DiscoveryGrid({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
+        {castLinked && (
         <div className="inline-flex rounded-full border border-app-border bg-app-surface p-1 text-xs font-medium">
           <button
             type="button"
@@ -413,13 +449,14 @@ function DiscoveryGrid({
             AND - Co-stars reunite
           </button>
         </div>
+        )}
 
         <div className="flex min-w-[180px] flex-1 items-center gap-2 rounded-md border border-app-border bg-app-bg px-3 py-2">
           <Search className="h-4 w-4 shrink-0 text-zinc-500" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search title or character..."
+            placeholder={castLinked ? "Search title or character..." : "Search title..."}
             className="w-full bg-transparent text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
           />
         </div>
@@ -442,6 +479,7 @@ function DiscoveryGrid({
           onChange={(e) => setSortBy(e.target.value as SortBy)}
           className="rounded-md border border-app-border bg-app-bg px-2.5 py-2 text-sm text-zinc-200 focus:border-accent focus:outline-none"
         >
+          {!castLinked && <option value="match">Sort: Best match</option>}
           <option value="year">Sort: Year</option>
           <option value="popularity">Sort: Popularity</option>
           <option value="imdb">Sort: IMDb Rating</option>
@@ -511,6 +549,8 @@ function DiscoveryGrid({
               genres={genres}
               ratings={ratingsMap?.[String(candidate.movie_id)]}
               badges={badgesMap?.[String(candidate.movie_id)]}
+              gameType={gameType}
+              castLinked={castLinked}
               allowRepeats={allowRepeats}
               onServer={jellyfinStatus?.[String(candidate.movie_id)]?.on_server}
               pending={pendingMovieId === candidate.movie_id && createStep.isPending}
@@ -540,6 +580,8 @@ function CandidateCard({
   genres,
   ratings,
   badges,
+  gameType,
+  castLinked,
   allowRepeats,
   onServer,
   pending,
@@ -551,6 +593,8 @@ function CandidateCard({
   genres: GenreOut[] | undefined;
   ratings: MovieRatings | null | undefined;
   badges: { badge_label: string; badge_color: string }[] | undefined;
+  gameType: string;
+  castLinked: boolean;
   allowRepeats: boolean;
   onServer: boolean | null | undefined;
   pending: boolean;
@@ -606,8 +650,8 @@ function CandidateCard({
           )}
         </div>
 
-        <ConnectionBadge connections={candidate.connections} />
-        <SemanticMatchBadge score={candidate.semantic_score} />
+        {castLinked && <ConnectionBadge connections={candidate.connections} />}
+        <MechanicBadge candidate={candidate} gameType={gameType} />
         {candidate.constraint_unverified && (
           <span
             title="This run's rule couldn't be checked for this film yet - logging will check it."
@@ -652,6 +696,79 @@ function CandidateCard({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** The game's own mechanic for a candidate: year jump, country, poster colour or plot match. */
+function MechanicBadge({
+  candidate,
+  gameType,
+}: {
+  candidate: DiscoveryCandidate;
+  gameType: string;
+}) {
+  if (gameType === "chrono_climb" && candidate.year_delta != null) {
+    const up = candidate.year_delta > 0;
+    const Icon = up ? ArrowUp : ArrowDown;
+    return (
+      <span
+        title={`Released ${Math.abs(candidate.year_delta)} year(s) ${up ? "after" : "before"} the last film`}
+        className="flex w-fit items-center gap-1 rounded-full bg-violet-950 px-2 py-0.5 text-[10px] font-semibold text-violet-300"
+      >
+        <Icon className="h-3 w-3" />
+        {up ? "+" : "−"}
+        {Math.abs(candidate.year_delta)} yr{Math.abs(candidate.year_delta) === 1 ? "" : "s"}
+      </span>
+    );
+  }
+  if (gameType === "world_passport") {
+    const countries = parseOriginCountries(candidate.origin_country);
+    if (countries.length === 0) return null;
+    return (
+      <span
+        title={countries.map((c) => countryName(c, c)).join(", ")}
+        className="flex w-fit items-center gap-1 rounded-full bg-teal-950 px-2 py-0.5 text-[10px] font-semibold text-teal-300"
+      >
+        <span className="text-sm leading-none">{isoToFlagEmoji(countries[0])}</span>
+        <span className="truncate">{countryName(countries[0], countries[0])}</span>
+      </span>
+    );
+  }
+  if (gameType === "aesthetic_gradient" && candidate.dominant_color) {
+    return (
+      <span className="flex w-fit items-center gap-1.5 rounded-full bg-app-surface-hover px-2 py-0.5 text-[10px] font-semibold text-zinc-300">
+        <ColorSwatch color={candidate.dominant_color} className="h-3 w-3 border" />
+        {candidate.dominant_color}
+      </span>
+    );
+  }
+  return <SemanticMatchBadge score={candidate.semantic_score} />;
+}
+
+/** Explains what makes a film eligible, in place of the actor network. */
+function RuleBanner({
+  gameType,
+  title,
+  detail,
+  frontierTitle,
+}: {
+  gameType: string;
+  title: string | undefined;
+  detail: string | null | undefined;
+  frontierTitle: string;
+}) {
+  const style = gameModeStyle(gameType);
+  const Icon = style.icon;
+  return (
+    <div role="note" className={cn("flex items-start gap-3 rounded-lg px-3.5 py-3", style.bubble)}>
+      <Icon className="mt-0.5 h-5 w-5 shrink-0" />
+      <div className="min-w-0">
+        <p className="text-sm font-semibold">{title ?? "Films that fit this mode's rule"}</p>
+        <p className="text-[11px] opacity-75">
+          {detail ? `${detail} ` : ""}Showing films that follow {frontierTitle} - no shared cast needed.
+        </p>
       </div>
     </div>
   );
@@ -715,6 +832,7 @@ function MovieScreenView({
   frontierMovieTitle,
   rulesConfig,
   steps,
+  castLinked,
   onOpenActor,
   onClose,
 }: {
@@ -724,6 +842,7 @@ function MovieScreenView({
   frontierMovieTitle: string;
   rulesConfig: RulesConfig;
   steps: RunStep[];
+  castLinked: boolean;
   onOpenActor: (screen: Screen & { kind: "actor" }) => void;
   onClose: () => void;
 }) {
@@ -792,10 +911,9 @@ function MovieScreenView({
     }
     setGuard({ state: "checking" });
     try {
-      const result = await api.post<ValidationResult>("/engine/validate", {
-        game_type: "cinechain",
-        from_movie_id: frontierMovieId,
-        to_movie_id: screen.movieId,
+      // Run-scoped, so the run's own engine and rules decide (not plain CineChain).
+      const result = await api.post<ValidationResult>(`/runs/${runId}/validate`, {
+        movie_id: screen.movieId,
       });
       if (result.valid) {
         await handleAdd(watched, result.connections[0]);
@@ -858,8 +976,9 @@ function MovieScreenView({
         </p>
       ) : screen.guaranteedConnected ? (
         <div className="flex items-center gap-2 rounded-md bg-emerald-950 px-3 py-2 text-xs font-medium text-emerald-400">
-          <Check className="h-3.5 w-3.5" /> Connects to Frontier
-          {screen.directConnection && ` via ${screen.directConnection.actor_name}`}
+          <Check className="h-3.5 w-3.5" />{" "}
+          {castLinked ? "Connects to Frontier" : "Fits this mode's rule"}
+          {castLinked && screen.directConnection && ` via ${screen.directConnection.actor_name}`}
         </div>
       ) : (
         <FrontierGuardPanel
@@ -867,13 +986,16 @@ function MovieScreenView({
           frontierMovieTitle={frontierMovieTitle}
           wildcardsRemaining={wildcardsRemaining}
           wildcardsExhausted={wildcardsExhausted}
+          castLinked={castLinked}
           onBuildBridge={() => navigate(`/tools/bridge?from=${frontierMovieId}&to=${screen.movieId}`)}
         />
       )}
 
       {!isLockedDuplicate && (() => {
         const lockedByWildcards =
-          !screen.guaranteedConnected && guard?.state === "no-connect" && wildcardsExhausted;
+          !screen.guaranteedConnected &&
+          guard?.state === "no-connect" &&
+          (wildcardsExhausted || !!guard.result.blocked);
         const disabled = createStep.isPending || guard?.state === "checking" || lockedByWildcards;
         return (
           <div className="flex gap-2">
@@ -949,25 +1071,38 @@ function FrontierGuardPanel({
   frontierMovieTitle,
   wildcardsRemaining,
   wildcardsExhausted,
+  castLinked,
   onBuildBridge,
 }: {
   guard: GuardStatus | null;
   frontierMovieTitle: string;
   wildcardsRemaining: number;
   wildcardsExhausted: boolean;
+  castLinked: boolean;
   onBuildBridge: () => void;
 }) {
   if (guard?.state === "checking") {
     return (
       <div className="flex items-center gap-1.5 rounded-md bg-app-surface-hover px-3 py-2 text-xs text-zinc-400">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking connection to frontier...
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />{" "}
+        {castLinked ? "Checking connection to frontier..." : "Checking this film against the rule..."}
       </div>
     );
   }
   if (guard?.state !== "no-connect") {
     return (
       <p className="rounded-md bg-app-surface-hover px-3 py-2 text-xs text-zinc-400">
-        Connection to the frontier is unknown yet - click Queue Up Next or Log Watched to check.
+        {castLinked
+          ? "Connection to the frontier is unknown yet - click Queue Up Next or Log Watched to check."
+          : "This film hasn't been checked against the rule yet - click Queue Up Next or Log Watched to check."}
+      </p>
+    );
+  }
+  if (guard.result.blocked) {
+    return (
+      <p className="flex items-center gap-1.5 rounded-md border border-red-900/50 bg-red-950/30 p-3 text-xs font-medium text-red-400">
+        <Lock className="h-3.5 w-3.5 shrink-0" />
+        {guard.result.reason ?? "This film isn't allowed in this run."}
       </p>
     );
   }

@@ -391,7 +391,7 @@ def update_run_rules(
             )
     # Merge instead of replace so V2 keys the form doesn't know about
     # (win_condition, fail_condition, raw JSON overrides) survive an edit.
-    run.rules_config = {**(run.rules_config or {}), **payload.model_dump()}
+    run.rules_config = {**(run.rules_config or {}), **payload.model_dump(exclude_none=True)}
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -607,7 +607,8 @@ async def get_run_constraint(
     tail = _last_step(session, run.id)
     return await engine.describe_constraint(
         tail.movie_id if tail is not None else None,
-        tail.transition_metadata if tail is not None else None)
+        tail.transition_metadata if tail is not None else None,
+        _run_rules(run))
 
 
 @router.get("/{run_id}/suggestions", response_model=list[Suggestion])

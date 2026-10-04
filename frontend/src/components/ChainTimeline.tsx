@@ -48,6 +48,7 @@ export default function ChainTimeline({
   onActorClick,
   onRequestDeleteStep,
   locked = false,
+  castLinked = true,
 }: {
   runId: string;
   steps: RunStep[];
@@ -56,6 +57,8 @@ export default function ChainTimeline({
   onRequestDeleteStep: (stepId: string) => void;
   /** Finished runs (completed/failed/forfeited) can't log or alter the chain. */
   locked?: boolean;
+  /** False for standalone modes: links show the mode's rule evidence instead of a cast link. */
+  castLinked?: boolean;
 }) {
   const [order, setOrder] = useState<Order>(() => {
     if (typeof window === "undefined") return "story";
@@ -123,6 +126,7 @@ export default function ChainTimeline({
               key={`connector-${row.step.id}`}
               step={row.step}
               isKeystone={isKeystoneConnector(row.step, keystoneActorIds)}
+              castLinked={castLinked}
             />
           ),
         )}

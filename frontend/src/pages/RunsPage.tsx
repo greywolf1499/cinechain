@@ -6,12 +6,15 @@ import PageHeading from "../components/PageHeading";
 import EmptyState from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import Modal from "../components/Modal";
-import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
+import GameModePicker from "../components/GameModePicker";
+import ModeOptions from "../components/ModeOptions";
+import SeedMoviePicker from "../components/SeedMoviePicker";
 import RawRulesEditor, { RAW_RULES_EXAMPLE, parseRawRules } from "../components/RawRulesEditor";
 import RulesetFields, { RULE_PRESETS } from "../components/RulesetFields";
 import { api } from "../lib/api";
 import { useCreateRun, useCuratedLists, useRuns, useUsers } from "../lib/queries";
 import { cn } from "../lib/cn";
+import { STANDALONE_MODES, usesCastLinks } from "../lib/gameModes";
 import { useAuthStore } from "../store/authStore";
 import type { EngineMeta, MovieSummary, RulesConfig } from "../types/api";
 
@@ -121,8 +124,12 @@ function NewRunModal({
   // A canon list with no synced films would block every pick.
   const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
 
+  const isStandalone = STANDALONE_MODES.has(gameType);
+  const castLinked = usesCastLinks(gameType, rules);
   const formRules: RulesConfig = {
     ...(isTracker ? TRACKER_RULES : rules),
+    ...(isStandalone ? { require_cast_link: !!rules.require_cast_link } : {}),
+    ...(gameType === "chrono_climb" ? { direction: rules.direction ?? "climb" } : {}),
     ...(needsCanonList ? { allowed_curated_list_id: canonListId } : {}),
     ...(needsDecade ? { target_decade: targetDecade } : {}),
   };
@@ -179,6 +186,7 @@ function NewRunModal({
         onClose();
       }}
       title="Start a new run"
+      widthClassName="max-w-4xl"
     >
       <div className="flex flex-col gap-4">
         <Field label="Run name">
@@ -190,22 +198,10 @@ function NewRunModal({
           />
         </Field>
 
-        <Field label="Game type">
-          <select
-            value={gameType}
-            onChange={(e) => setGameType(e.target.value)}
-            className={inputClass}
-          >
-            {(engines ?? [{ game_type: "cinechain", display_name: "CineChain" }]).map((engine) => (
-              <option key={engine.game_type} value={engine.game_type}>
-                {engine.display_name}
-              </option>
-            ))}
-          </select>
-          {selectedEngine && (
-            <span className="text-[11px] font-normal text-zinc-500">{selectedEngine.description}</span>
-          )}
-        </Field>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-zinc-400">Game mode</span>
+          <GameModePicker engines={engines} value={gameType} onChange={setGameType} />
+        </div>
 
         {needsCanonList && (
           <Field label="Canon list (every film must be on it)">
@@ -245,6 +241,8 @@ function NewRunModal({
           </Field>
         )}
 
+        {isStandalone && <ModeOptions gameType={gameType} value={rules} onChange={setRules} />}
+
         <Field label="Participants">
           <div className="flex flex-col gap-1.5 rounded-md border border-app-border bg-app-bg p-2">
             {users?.map((user) => (
@@ -264,9 +262,10 @@ function NewRunModal({
           </div>
         </Field>
 
-        <Field label="Seed movie (optional)">
-          <MovieSearchAutocomplete onSelect={setSeedMovie} placeholder="Search for a starting film..." />
-        </Field>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-zinc-400">Seed movie (optional)</span>
+          <SeedMoviePicker value={seedMovie} onChange={setSeedMovie} gameType={gameType} />
+        </div>
 
         {isAdmin && engineSupportsRaw && (
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-app-border px-3 py-2">
@@ -299,7 +298,13 @@ function NewRunModal({
         {rawEnabled ? (
           <RawRulesEditor text={rawText} onChange={setRawText} />
         ) : (
-          !isTracker && <RulesetFields value={rules} onChange={setRules} />
+          !isTracker && (
+            <RulesetFields
+              value={rules}
+              onChange={(next) => setRules({ ...rules, ...next })}
+              castRules={castLinked}
+            />
+          )
         )}
 
         {createRun.isError && (

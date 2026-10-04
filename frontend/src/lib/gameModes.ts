@@ -1,0 +1,135 @@
+import {
+  Clapperboard,
+  Compass,
+  Dices,
+  Globe2,
+  Hourglass,
+  Landmark,
+  CalendarRange,
+  Network,
+  Palette,
+  Sparkles,
+  type LucideIcon,
+} from "lucide-react";
+import type { RulesConfig } from "../types/api";
+
+/** Visual identity for a game mode's card. Classes are spelled out in full so Tailwind keeps them. */
+export interface GameModeStyle {
+  icon: LucideIcon;
+  /** One-line hook shown under the name. */
+  tagline: string;
+  /** Short chips: how films link in this mode. */
+  tags: string[];
+  /** Tinted icon bubble + selected-card ring/glow. */
+  bubble: string;
+  ring: string;
+  text: string;
+}
+
+export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
+  cinechain: {
+    icon: Network,
+    tagline: "Six Degrees of Kevin Bacon",
+    tags: ["Shared cast"],
+    bubble: "bg-amber-500/15 text-amber-300",
+    ring: "border-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.6),0_8px_30px_-8px_rgba(251,191,36,0.35)]",
+    text: "text-amber-300",
+  },
+  auteur_relay: {
+    icon: Clapperboard,
+    tagline: "Actor, director, actor, director...",
+    tags: ["Shared cast", "Shared director"],
+    bubble: "bg-orange-500/15 text-orange-300",
+    ring: "border-orange-400 shadow-[0_0_0_1px_rgba(251,146,60,0.6),0_8px_30px_-8px_rgba(251,146,60,0.35)]",
+    text: "text-orange-300",
+  },
+  canon_island: {
+    icon: Landmark,
+    tagline: "Stay on the canon",
+    tags: ["Shared cast", "One curated list"],
+    bubble: "bg-emerald-500/15 text-emerald-300",
+    ring: "border-emerald-400 shadow-[0_0_0_1px_rgba(52,211,153,0.6),0_8px_30px_-8px_rgba(52,211,153,0.35)]",
+    text: "text-emerald-300",
+  },
+  decade_sieve: {
+    icon: CalendarRange,
+    tagline: "One decade, no escape",
+    tags: ["Any film", "One decade"],
+    bubble: "bg-sky-500/15 text-sky-300",
+    ring: "border-sky-400 shadow-[0_0_0_1px_rgba(56,189,248,0.6),0_8px_30px_-8px_rgba(56,189,248,0.35)]",
+    text: "text-sky-300",
+  },
+  roulette: {
+    icon: Dices,
+    tagline: "Let the wheel decide",
+    tags: ["Random pick"],
+    bubble: "bg-pink-500/15 text-pink-300",
+    ring: "border-pink-400 shadow-[0_0_0_1px_rgba(244,114,182,0.6),0_8px_30px_-8px_rgba(244,114,182,0.35)]",
+    text: "text-pink-300",
+  },
+  chrono_climb: {
+    icon: Hourglass,
+    tagline: "Climb or descend through time",
+    tags: ["Any film", "Release year"],
+    bubble: "bg-violet-500/15 text-violet-300",
+    ring: "border-violet-400 shadow-[0_0_0_1px_rgba(167,139,250,0.6),0_8px_30px_-8px_rgba(167,139,250,0.35)]",
+    text: "text-violet-300",
+  },
+  world_passport: {
+    icon: Globe2,
+    tagline: "A new country every film",
+    tags: ["Any film", "Country"],
+    bubble: "bg-teal-500/15 text-teal-300",
+    ring: "border-teal-400 shadow-[0_0_0_1px_rgba(45,212,191,0.6),0_8px_30px_-8px_rgba(45,212,191,0.35)]",
+    text: "text-teal-300",
+  },
+  aesthetic_gradient: {
+    icon: Palette,
+    tagline: "Fade poster to poster",
+    tags: ["Any film", "Poster colour"],
+    bubble: "bg-rose-500/15 text-rose-300",
+    ring: "border-rose-400 shadow-[0_0_0_1px_rgba(251,113,133,0.6),0_8px_30px_-8px_rgba(251,113,133,0.35)]",
+    text: "text-rose-300",
+  },
+  semantic_trope: {
+    icon: Sparkles,
+    tagline: "Follow the plot, not the cast",
+    tags: ["Any film", "Plot similarity"],
+    bubble: "bg-indigo-500/15 text-indigo-300",
+    ring: "border-indigo-400 shadow-[0_0_0_1px_rgba(129,140,248,0.6),0_8px_30px_-8px_rgba(129,140,248,0.35)]",
+    text: "text-indigo-300",
+  },
+};
+
+export const FALLBACK_MODE_STYLE: GameModeStyle = {
+  icon: Compass,
+  tagline: "A custom challenge",
+  tags: [],
+  bubble: "bg-zinc-500/15 text-zinc-300",
+  ring: "border-zinc-400 shadow-[0_0_0_1px_rgba(161,161,170,0.6)]",
+  text: "text-zinc-300",
+};
+
+export function gameModeStyle(gameType: string): GameModeStyle {
+  return GAME_MODE_STYLES[gameType] ?? FALLBACK_MODE_STYLE;
+}
+
+/** Modes that play on their own rule (year, country, colour, plot); shared cast is an opt-in modifier. */
+export const STANDALONE_MODES = new Set([
+  "chrono_climb",
+  "world_passport",
+  "aesthetic_gradient",
+  "semantic_trope",
+]);
+
+/** Modes with no film-to-film graph at all (SQL trackers). */
+const TRACKER_MODES = new Set(["decade_sieve", "roulette"]);
+
+/** Does this run link films through shared cast/directors? Drives the Pick Next layout. */
+export function usesCastLinks(
+  gameType: string,
+  rules: Pick<RulesConfig, "require_cast_link"> | null | undefined,
+): boolean {
+  if (STANDALONE_MODES.has(gameType)) return !!rules?.require_cast_link;
+  return !TRACKER_MODES.has(gameType);
+}

@@ -33,9 +33,12 @@ export const RULE_PRESETS: Record<"standard" | "purist" | "casual", RulesConfig>
 export default function RulesetFields({
   value,
   onChange,
+  castRules = true,
 }: {
   value: RulesConfig;
   onChange: (rules: RulesConfig) => void;
+  /** False for runs that don't link films by cast: hides the actor-only options. */
+  castRules?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -96,27 +99,31 @@ export default function RulesetFields({
             </div>
           </div>
 
-          <label className="flex items-center justify-between text-xs text-zinc-300">
-            No consecutive actor reuse
-            <input
-              type="checkbox"
-              checked={value.no_consecutive_actor}
-              onChange={(e) => update("no_consecutive_actor", e.target.checked)}
-              className="accent-accent"
-            />
-          </label>
+          {castRules && (
+            <>
+            <label className="flex items-center justify-between text-xs text-zinc-300">
+              No consecutive actor reuse
+              <input
+                type="checkbox"
+                checked={value.no_consecutive_actor}
+                onChange={(e) => update("no_consecutive_actor", e.target.checked)}
+                className="accent-accent"
+              />
+            </label>
 
-          <label className="flex items-center justify-between text-xs text-zinc-300">
-            Max cast depth
-            <input
-              type="number"
-              min={5}
-              max={30}
-              value={value.max_cast_order}
-              onChange={(e) => update("max_cast_order", Number(e.target.value))}
-              className={numberInputClass}
-            />
-          </label>
+            <label className="flex items-center justify-between text-xs text-zinc-300">
+              Max cast depth
+              <input
+                type="number"
+                min={5}
+                max={30}
+                value={value.max_cast_order}
+                onChange={(e) => update("max_cast_order", Number(e.target.value))}
+                className={numberInputClass}
+              />
+            </label>
+            </>
+          )}
 
           <label className="flex items-center justify-between text-xs text-zinc-300">
             Min runtime (minutes, 0 = no limit)

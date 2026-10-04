@@ -202,6 +202,36 @@ class TMDBClient:
             return None
         return response.content
 
+    async def discover_movies(self, pages: int = 1, **params: Any) -> list[TMDBPersonCredit]:
+        """`/discover/movie`, most popular first, as credit-shaped stubs. `params` are raw
+        TMDB filters (`with_origin_country`, `primary_release_date.gte`, `with_genres`...)."""
+        query: dict[str, Any] = {
+            "sort_by": "popularity.desc", "include_adult": "false", "include_video": "false",
+            **params,
+        }
+        stubs: list[TMDBPersonCredit] = []
+        for page in range(1, pages + 1):
+            data = await self._get("/discover/movie", params={**query, "page": page})
+            stubs.extend(_normalize_person_credit(entry) for entry in data.get("results", []))
+            if page >= data.get("total_pages", 1):
+                break
+        return stubs
+
+    async def get_related_movies(self, tmdb_id: int) -> list[TMDBPersonCredit]:
+        """TMDB's recommendations for a film, then its "similar" titles (deduped)."""
+        seen: set[int] = set()
+        related: list[TMDBPersonCredit] = []
+        for path in (f"/movie/{tmdb_id}/recommendations", f"/movie/{tmdb_id}/similar"):
+            try:
+                data = await self._get(path)
+            except TMDBNotFoundError:
+                continue
+            for entry in data.get("results", []):
+                if entry["id"] not in seen and entry["id"] != tmdb_id:
+                    seen.add(entry["id"])
+                    related.append(_normalize_person_credit(entry))
+        return related
+
     async def get_movie(self, tmdb_id: int) -> TMDBMovie:
         data = await self._get(f"/movie/{tmdb_id}")
         return _normalize_movie_detail(data)

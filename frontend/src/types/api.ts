@@ -97,6 +97,41 @@ export interface RulesConfig {
 	curated_list_id?: string;
 	target_country?: string;
 	expedition?: Expedition;
+	/** Bounty Board (any mode but the bracket / Rabbit Hole): wildcards are earned by completing
+	 * bounties instead of being budgeted. The server draws `active_bounties`. */
+	bounty_board?: boolean;
+	active_bounties?: BountyId[];
+	completed_bounties?: BountyId[];
+	/** The Rotten Tomatoes Split: first team to this many points wins; scores are server-owned. */
+	target_points?: number;
+	split_scores?: { team_a: number; team_b: number };
+	split_players?: { team_a: string | null; team_b: string | null };
+}
+
+export type BountyId =
+	| "short_king"
+	| "time_capsule"
+	| "hidden_gem"
+	| "foreign_horizon"
+	| "female_gaze"
+	| "epic_odyssey";
+
+export interface SplitCandidate {
+	movie_id: number;
+	title: string;
+	year: number | null;
+	poster_path: string | null;
+	critic_score: number;
+	audience_score: number;
+	divergence: number;
+	favours: "critics" | "audience";
+}
+
+export interface SplitPool {
+	omdb_enabled: boolean;
+	min_divergence: number;
+	scanned: number;
+	candidates: SplitCandidate[];
 }
 
 export type BracketRound = "round_of_16" | "quarterfinals" | "semifinals" | "finals";

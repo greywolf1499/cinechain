@@ -22,6 +22,8 @@ import { METHOD_ACTOR } from "../lib/careerTrack";
 import { AUTEUR_MARATHON } from "../lib/auteurTrack";
 import { EXPEDITION_COUNTRIES, REGIONAL_DEEP_DIVE } from "../lib/expedition";
 import { isoToFlagEmoji } from "../lib/countries";
+import { NO_BOUNTY_MODES } from "../lib/bounties";
+import { DEFAULT_TARGET_POINTS, RT_SPLIT } from "../lib/splitScore";
 import ActorPicker from "../components/ActorPicker";
 import BracketSeedPicker from "../components/BracketSeedPicker";
 import GenreCycleInput from "../components/GenreCycleInput";
@@ -129,6 +131,8 @@ function NewRunModal({
   const [diveListId, setDiveListId] = useState("");
   const [diveCountry, setDiveCountry] = useState("");
   const [diveDecade, setDiveDecade] = useState("");
+  const [bountyBoard, setBountyBoard] = useState(false);
+  const [splitTarget, setSplitTarget] = useState(DEFAULT_TARGET_POINTS);
   const [rawMode, setRawMode] = useState(false);
   const [rawText, setRawText] = useState("");
 
@@ -150,6 +154,8 @@ function NewRunModal({
   const isMethodActor = gameType === METHOD_ACTOR;
   const isAuteur = gameType === AUTEUR_MARATHON;
   const isDive = gameType === REGIONAL_DEEP_DIVE;
+  const isSplit = gameType === RT_SPLIT;
+  const canBounty = !NO_BOUNTY_MODES.has(gameType);
   // A canon list with no synced films would block every pick.
   const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
 
@@ -158,6 +164,8 @@ function NewRunModal({
     ...(isBracket ? { bracket_movie_ids: bracketFilms.map((film) => film.tmdb_id) } : {}),
     ...(isMethodActor && actor ? { actor_id: actor.person_id } : {}),
     ...(isAuteur && director ? { director_id: director.person_id } : {}),
+    ...(isSplit ? { target_points: splitTarget } : {}),
+    ...(bountyBoard && canBounty ? { bounty_board: true } : {}),
     ...(isDive
       ? {
           curated_list_id: diveListId,
@@ -227,6 +235,8 @@ function NewRunModal({
     setDiveListId("");
     setDiveCountry("");
     setDiveDecade("");
+    setBountyBoard(false);
+    setSplitTarget(DEFAULT_TARGET_POINTS);
     setRawMode(false);
     setRawText("");
     createRun.reset();
@@ -282,6 +292,49 @@ function NewRunModal({
             }}
           />
         </div>
+
+        {canBounty && (
+          <label
+            className={cn(
+              "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
+              bountyBoard ? "border-amber-400/60 bg-amber-500/10" : "border-app-border bg-app-bg/60",
+            )}
+          >
+            <input
+              type="checkbox"
+              checked={bountyBoard}
+              onChange={(e) => setBountyBoard(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-amber-400"
+            />
+            <span className="flex flex-col gap-0.5">
+              <span className="text-sm font-semibold text-zinc-100">📜 Bounty Board</span>
+              <span className="text-xs font-normal text-zinc-400">
+                Start with 0 wildcards and 3 cinephile bounties (a short, a pre-1960 film, a hidden
+                gem...). Every bounty you complete earns a 🎟️ wildcard.
+              </span>
+            </span>
+          </label>
+        )}
+
+        {isSplit && (
+          <div className="flex flex-col gap-3 rounded-lg border border-pink-400/30 bg-pink-500/5 p-3">
+            <p className="text-xs text-zinc-400">
+              🍅 The run's owner is Team Critic, the first partner Team Audience 🍿. Only films whose
+              Rotten Tomatoes score and IMDb rating are 25+ points apart count (scores come from OMDb).
+              After each film the household agrees one rating: the closer side wins the point.
+            </p>
+            <Field label="First to (points)">
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={splitTarget}
+                onChange={(e) => setSplitTarget(Math.min(20, Math.max(1, Number(e.target.value) || 1)))}
+                className={inputClass}
+              />
+            </Field>
+          </div>
+        )}
 
         {needsCanonList && (
           <Field label="Canon list (every film must be on it)">

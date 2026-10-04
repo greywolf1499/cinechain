@@ -34,6 +34,7 @@ import type {
 	RulesConfig,
 	RequestConfig,
 	RunStep,
+	SplitPool,
 	StepStatus,
 	UserSummary,
 } from "../types/api";
@@ -405,7 +406,9 @@ export function useCreateStep(runId: string) {
 			watched_at?: string | null;
 			/** Meet in the Middle: which end of the tunnel this film extends. */
 			tunnel_side?: TunnelSide;
-		}) => api.post(`/runs/${runId}/steps`, payload),
+			/** Rotten Tomatoes Split: the household's joint rating (1-100). */
+			household_score?: number;
+		}) => api.post<RunStep>(`/runs/${runId}/steps`, payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 			// A logged step can end the run (win/fail), which changes the list badge.
@@ -547,5 +550,15 @@ export function useConvertDailyToRun() {
 			void queryClient.invalidateQueries({ queryKey: DAILY_KEY });
 			void queryClient.invalidateQueries({ queryKey: ["runs"] });
 		},
+	});
+}
+
+/** The Rotten Tomatoes Split: cached films critics and audiences disagree about. `scan` first
+ * rates up to that many more cached films through OMDb. */
+export function useSplitPool(runId: string, scan = 0) {
+	return useQuery({
+		queryKey: [...queryKeys.run(runId), "split-pool", scan],
+		queryFn: () => api.get<SplitPool>(`/runs/${runId}/split-pool?scan=${scan}`),
+		staleTime: 30_000,
 	});
 }

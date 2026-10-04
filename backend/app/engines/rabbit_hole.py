@@ -141,6 +141,7 @@ def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
 
 class RabbitHoleEngine(CineChainEngine):
     game_type = RABBIT_HOLE
+    supports_bounty_board = False
     display_name = "The Rabbit Hole"
     description = (
         "Survive the descent: classic cast links, but every five films a nastier rule kicks in "

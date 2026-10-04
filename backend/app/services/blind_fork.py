@@ -20,6 +20,8 @@ SERVER_OWNED_RULES = (
     # Built by the March Madness / Method Actor / Auteur Marathon / Regional Deep Dive engines
     # when the run is created.
     "bracket", "bracket_films", "actor", "filmography", "director", "expedition",
+    # Bounty Board state and Rotten Tomatoes Split scoreboard.
+    "active_bounties", "completed_bounties", "split_scores", "split_players",
 )
 
 

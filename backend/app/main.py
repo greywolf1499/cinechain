@@ -19,6 +19,7 @@ from app.api.routes_passport import router as passport_router
 from app.api.routes_puzzles import router as puzzles_router
 from app.api.routes_runs import router as runs_router
 from app.api.routes_settings import router as settings_router
+from app.api.routes_split import router as split_router
 from app.api.routes_system import router as system_router
 from app.api.routes_tasks import router as tasks_router
 from app.api.routes_tools import router as tools_router
@@ -70,6 +71,7 @@ app.include_router(auth_router, prefix=api_router_prefix)
 app.include_router(users_router, prefix=api_router_prefix)
 app.include_router(runs_router, prefix=api_router_prefix)
 app.include_router(bracket_router, prefix=api_router_prefix)
+app.include_router(split_router, prefix=api_router_prefix)
 app.include_router(engine_router, prefix=api_router_prefix)
 app.include_router(integrations_router, prefix=api_router_prefix)
 app.include_router(movies_router, prefix=api_router_prefix)

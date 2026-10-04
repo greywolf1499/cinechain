@@ -14,6 +14,7 @@ from app.engines.method_actor import MethodActorEngine
 from app.engines.mutators import AuteurRelayEngine, ChronoClimbEngine, WorldPassportEngine
 from app.engines.rabbit_hole import RabbitHoleEngine
 from app.engines.regional_deep_dive import RegionalDeepDiveEngine
+from app.engines.rt_split import RottenTomatoesSplitEngine
 from app.engines.trackers import DecadeSieveEngine, RouletteEngine
 from app.engines.tug_of_war import TugOfWarEngine
 from app.services.tmdb import TMDBClient
@@ -32,6 +33,7 @@ ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
         MethodActorEngine,
         AuteurMarathonEngine,
         RegionalDeepDiveEngine,
+        RottenTomatoesSplitEngine,
         DecadeSieveEngine,
         RouletteEngine,
         ChronoClimbEngine,

@@ -67,6 +67,8 @@ class RunStepCreate(BaseModel):
     watched_at: datetime | None = None
     # Meet in the Middle: which end of the tunnel this film extends.
     tunnel_side: Literal["head", "tail"] | None = None
+    # Rotten Tomatoes Split: the household's joint rating of the film (required there).
+    household_score: int | None = Field(default=None, ge=1, le=100)
 
 
 class StepValidateRequest(BaseModel):

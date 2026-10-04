@@ -41,3 +41,43 @@
 		color: #1a1408;
 	}
 }
+
+@keyframes bounty-pop {
+	0% {
+		opacity: 0;
+		transform: scale(0.85) translateY(8px);
+	}
+	60% {
+		opacity: 1;
+		transform: scale(1.04);
+	}
+	100% {
+		transform: scale(1);
+	}
+}
+
+@keyframes bounty-slide-in {
+	from {
+		opacity: 0;
+		transform: translateX(24px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+.animate-bounty-pop {
+	animation: bounty-pop 0.5s ease-out;
+}
+
+.animate-bounty-slide-in {
+	animation: bounty-slide-in 0.45s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-bounty-pop,
+	.animate-bounty-slide-in {
+		animation: none;
+	}
+}

@@ -37,6 +37,8 @@ import ForkOfferPanel from "../components/ForkOfferPanel";
 import TugOfWarMeter from "../components/TugOfWarMeter";
 import PendulumMeter from "../components/PendulumMeter";
 import AuteurTrack from "../components/AuteurTrack";
+import BountyBoardPanel from "../components/BountyBoardPanel";
+import SplitBoard from "../components/SplitBoard";
 import BracketView from "../components/BracketView";
 import ExpeditionBoard from "../components/ExpeditionBoard";
 import CareerTrack from "../components/CareerTrack";
@@ -70,6 +72,7 @@ import { MARCH_MADNESS } from "../lib/bracket";
 import { AUTEUR_MARATHON } from "../lib/auteurTrack";
 import { METHOD_ACTOR } from "../lib/careerTrack";
 import { REGIONAL_DEEP_DIVE } from "../lib/expedition";
+import { RT_SPLIT } from "../lib/splitScore";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import { STANDALONE_MODES, gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
@@ -197,6 +200,8 @@ export default function RunDetailPage() {
         />
       )}
 
+      {run.rules_config.bounty_board && <BountyBoardPanel run={run} />}
+
       {run.game_type === TUG_OF_WAR && (
         <TugOfWarMeter
           rules={run.rules_config}
@@ -230,6 +235,8 @@ export default function RunDetailPage() {
         <AuteurTrack run={run} />
       ) : run.game_type === REGIONAL_DEEP_DIVE && run.rules_config.expedition ? (
         <ExpeditionBoard run={run} />
+      ) : run.game_type === RT_SPLIT ? (
+        <SplitBoard run={run} users={users} />
       ) : run.game_type === MEET_IN_THE_MIDDLE && run.steps.length > 0 ? (
         <div className="flex flex-col gap-6">
           <TunnelTimeline

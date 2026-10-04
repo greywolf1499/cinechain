@@ -65,6 +65,9 @@ class BaseChallengeEngine(ABC):
     # Survival modes: a forced (rule-breaking) step costs one of `rules_config["lives_remaining"]`
     # instead of a wildcard.
     uses_lives: ClassVar[bool] = False
+    # May the Bounty Board (earn wildcards by completing bounties) run on top of this mode? Not when
+    # steps are logged outside the normal route or wildcards don't exist.
+    supports_bounty_board: ClassVar[bool] = True
 
     def __init__(self, session: Session, tmdb: TMDBClient) -> None:
         self.session = session

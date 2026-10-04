@@ -130,6 +130,7 @@ def seed_from_watchlist(session: Session, user_id: str, rng: random.Random | Non
 
 class MarchMadnessEngine(TrackerEngine):
     game_type = MARCH_MADNESS
+    supports_bounty_board = False
     display_name = "Watchlist March Madness"
     description = (
         "A 16-film single-elimination tournament: pit watchlist films head to head, advance the "

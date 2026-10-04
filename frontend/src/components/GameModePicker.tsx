@@ -19,6 +19,7 @@ const MODE_ORDER = [
   "method_actor",
   "auteur_marathon",
   "regional_deep_dive",
+  "rt_split",
   "chrono_climb",
   "genre_pendulum",
   "world_passport",

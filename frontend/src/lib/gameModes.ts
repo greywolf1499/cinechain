@@ -11,6 +11,7 @@ import {
   Network,
   Swords,
   Palette,
+  Popcorn,
   Skull,
   Trophy,
   VenetianMask,
@@ -169,6 +170,15 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     ring: "border-lime-400 shadow-[0_0_0_1px_rgba(163,230,53,0.6),0_8px_30px_-8px_rgba(163,230,53,0.35)]",
     text: "text-lime-300",
   },
+  rt_split: {
+    icon: Popcorn,
+    tagline: "🍅 Critics vs 🍿 Audience",
+    tags: ["Tomatometer split", "Head to head", "Household rating"],
+    progression: ["🍅 Critic points", "🍿 Audience points", "🏆 First to 3"],
+    bubble: "bg-pink-500/15 text-pink-300",
+    ring: "border-pink-400 shadow-[0_0_0_1px_rgba(244,114,182,0.6),0_8px_30px_-8px_rgba(244,114,182,0.35)]",
+    text: "text-pink-300",
+  },
   aesthetic_gradient: {
     icon: Palette,
     tagline: "Fade poster to poster",
@@ -217,6 +227,7 @@ export const TRACKER_MODES = new Set([
   "method_actor",
   "auteur_marathon",
   "regional_deep_dive",
+  "rt_split",
 ]);
 
 /** Does this run link films through shared cast/directors? Drives the Pick Next layout. */

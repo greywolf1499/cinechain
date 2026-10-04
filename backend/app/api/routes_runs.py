@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 
-from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
+from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client, run_participant_guard
 from app.db import get_session
 from app.engines import rabbit_hole
 from app.engines.base import RunSetupError
@@ -13,12 +13,17 @@ from app.engines.meet_in_middle import (
     split_sides,
 )
 from app.engines.registry import ENGINE_REGISTRY, get_engine
+from app.engines.rt_split import RT_SPLIT, RottenTomatoesSplitEngine
+from app.engines.rt_split import VICTORY_PREFIX as SPLIT_VICTORY_PREFIX
+from app.engines.rt_split import compute_scores as compute_split_scores
+from app.engines.rt_split import winning_team as split_winner
 from app.engines.tug_of_war import (
     TUG_OF_WAR,
     VICTORY_PREFIX,
     compute_scores,
     leading_team,
 )
+from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie
 from app.models.run import (
     DEFAULT_RULES_CONFIG,
@@ -62,7 +67,7 @@ from app.schemas.runs import (
     RunUpdate,
     StepValidateRequest,
 )
-from app.services import blind_fork, cache_repo
+from app.services import blind_fork, bounties, cache_repo
 from app.services.tmdb import TMDBClient
 from app.services.veto import consume_veto_token
 from app.utils.dates import parse_release_year
@@ -101,7 +106,10 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
 
 # Metadata keys only the server may set: a client-supplied `collision` would be a free win.
 SERVER_OWNED_METADATA = (
-    "tunnel_side", "collision", "collision_with", "golden_reunion", "character_hop")
+    "tunnel_side", "collision", "collision_with", "golden_reunion", "character_hop",
+    # Bounty Board awards and Rotten Tomatoes Split settlements: a client could mint wildcards/points.
+    "completed_bounty", "bounty_replacement",
+    "household_score", "critic_score", "audience_score", "divergence", "point_to")
 # Link bonuses the engine detected: stamped from its own validation, never from the client.
 BONUS_LINK_KEYS = ("golden_reunion", "character_hop")
 
@@ -404,6 +412,7 @@ async def create_run(
     if engine_class is not None:
         engine = engine_class(session, tmdb)
         problems = engine.validate_rules_config(rules_config)
+        problems += _bounty_board_problems(engine_class, rules_config)
         if rules_config.get(blind_fork.BLIND_FORK_KEY):
             problems += _blind_fork_problems(engine_class)
         if problems:
@@ -414,6 +423,8 @@ async def create_run(
             rules_config = await engine.prepare_run(rules_config, current_user.id)
         except RunSetupError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if bounties.board_enabled(rules_config):
+            rules_config = bounties.prepare_board(rules_config)
         if payload.game_type == MEET_IN_THE_MIDDLE:
             if payload.seed_movie_id is None or payload.tail_seed_movie_id is None:
                 raise HTTPException(
@@ -511,7 +522,9 @@ def update_run_rules(
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
 ):
-    if payload.wildcards_budget != -1:
+    # A Bounty Board run earns its wildcards: the budget isn't editable.
+    bounty_run = bounties.board_enabled(run.rules_config)
+    if payload.wildcards_budget != -1 and not bounty_run:
         consumed = _count_wildcards_consumed(session, run.id)
         if payload.wildcards_budget < consumed:
             raise HTTPException(
@@ -524,6 +537,8 @@ def update_run_rules(
     # Merge instead of replace so V2 keys the form doesn't know about
     # (win_condition, fail_condition, raw JSON overrides) survive an edit.
     update = payload.model_dump(exclude_none=True)
+    if bounty_run:
+        update.pop("wildcards_budget", None)
     # Modifiers can be switched off again: an explicit null is stored (and means "unset").
     update.update({
         key: None for key in MODIFIER_UPDATE_KEYS
@@ -604,12 +619,28 @@ def remove_participant(
 
 
 async def _log_step(
-    session: Session, tmdb: TMDBClient, run: Run, user: User, payload: RunStepCreate
+    session: Session, tmdb: TMDBClient, run: Run, user: User, payload: RunStepCreate,
+    omdb: OMDbClient | None = None,
 ) -> RunStep:
     """Validate and add one step, then evaluate the run's outcome. Caller commits."""
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id)
+    split = run.game_type == RT_SPLIT
+    if split:
+        if payload.status != "watched" or payload.household_score is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Log a split film as watched, with the household's rating (1-100)")
+        if omdb is not None:  # the scores the split is judged on come from OMDb
+            await cache_repo.get_movie_ratings(session, tmdb, omdb, movie.tmdb_id)
     extra_metadata, linked_metadata = await _enforce_run_rules(
         session, tmdb, run, movie, payload)
+    if split:
+        extra_metadata.update(RottenTomatoesSplitEngine(session, tmdb).settle(
+            movie.tmdb_id, payload.household_score))
+    bounty = await bounties.evaluate(session, tmdb, run.rules_config, movie)
+    if bounty is not None:
+        extra_metadata[bounties.COMPLETED_METADATA_KEY] = bounty[0]
+        extra_metadata[bounties.REPLACEMENT_METADATA_KEY] = bounty[1]
 
     transition_metadata = _without_server_keys(
         linked_metadata if linked_metadata is not None else payload.transition_metadata)
@@ -631,6 +662,9 @@ async def _log_step(
     )
     session.add(step)
     session.flush()
+    if bounty is not None:
+        run.rules_config = bounties.award(run.rules_config or {}, *bounty)
+        session.add(run)
     _apply_run_outcome(session, tmdb, run)
     return step
 
@@ -642,10 +676,11 @@ async def create_step(
     current_user: User = Depends(get_current_user),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
+    omdb: OMDbClient = Depends(get_omdb_client),
 ):
     _ensure_run_open(run)
     _ensure_no_pending_fork(run)
-    step = await _log_step(session, tmdb, run, current_user, payload)
+    step = await _log_step(session, tmdb, run, current_user, payload, omdb)
     session.commit()
     session.refresh(step)
     return _step_public(step, _step_colors(session, [step]))
@@ -717,9 +752,16 @@ def update_step(
 
 def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) -> None:
     """Delete the latest step, undoing any outcome it caused. Caller commits."""
-    collided = bool((step.transition_metadata or {}).get("collision"))
+    metadata = step.transition_metadata or {}
+    collided = bool(metadata.get("collision"))
     session.delete(step)
     session.flush()
+    if metadata.get(bounties.COMPLETED_METADATA_KEY):
+        # The step earned a wildcard for a bounty: take both back.
+        run.rules_config = bounties.revoke(
+            run.rules_config or {}, metadata[bounties.COMPLETED_METADATA_KEY],
+            metadata.get(bounties.REPLACEMENT_METADATA_KEY))
+        session.add(run)
     reopen = collided and run.status == RUN_STATUS_COMPLETED
     remaining = _run_history(session, run.id)
     engine_class = ENGINE_REGISTRY.get(run.game_type)
@@ -730,6 +772,13 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
         and run.status == RUN_STATUS_COMPLETED
         and (run.status_reason or "").startswith(VICTORY_PREFIX)
         and leading_team(compute_scores(remaining, run.rules_config), run.rules_config) is None
+    ):
+        reopen = True
+    if (
+        run.game_type == RT_SPLIT
+        and run.status == RUN_STATUS_COMPLETED
+        and (run.status_reason or "").startswith(SPLIT_VICTORY_PREFIX)
+        and split_winner(compute_split_scores(remaining), run.rules_config) is None
     ):
         reopen = True
     if reopen:
@@ -760,6 +809,17 @@ def delete_step(
         )
     _remove_step(session, tmdb, run, step)
     session.commit()
+
+
+def _bounty_board_problems(engine_class: type, rules: dict) -> list[str]:
+    toggle = rules.get(bounties.BOUNTY_BOARD_KEY)
+    if toggle is None or toggle is False:
+        return []
+    if toggle is not True:
+        return [f"{bounties.BOUNTY_BOARD_KEY} must be true or false"]
+    if not engine_class.supports_bounty_board:
+        return [f"{engine_class.display_name} can't run with the Bounty Board"]
+    return []
 
 
 def _blind_fork_problems(engine_class: type) -> list[str]:

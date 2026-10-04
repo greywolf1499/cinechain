@@ -5,7 +5,7 @@ import MoviePoster from "./MoviePoster";
 import { cn } from "../lib/cn";
 import { ApiError } from "../lib/api";
 import { BRACKET_ROUNDS, isActiveMatchup } from "../lib/bracket";
-import { useAdvanceBracket, useBracketVote } from "../lib/queries";
+import { useAdvanceBracket, useBracketVote, useLlmStatus, useMatchupCommentary } from "../lib/queries";
 import type { Bracket, BracketFilm, BracketMatchup, RunDetail } from "../types/api";
 
 type Films = Record<string, BracketFilm>;
@@ -66,6 +66,7 @@ export default function BracketView({
           users={users}
           participantIds={run.participants.map((p) => p.user_id)}
           currentUserId={currentUserId}
+          cachedCommentary={run.rules_config.bracket_commentary?.[open.id] ?? null}
           onClose={() => setOpenId(null)}
         />
       )}
@@ -164,6 +165,7 @@ function MatchupCard({
   users,
   participantIds,
   currentUserId,
+  cachedCommentary,
   onClose,
 }: {
   runId: string;
@@ -172,9 +174,14 @@ function MatchupCard({
   users: { id: string; display_name: string }[] | undefined;
   participantIds: string[];
   currentUserId: string | undefined;
+  /** The AI announcer's line for this matchup, if one was already generated. */
+  cachedCommentary: string | null;
   onClose: () => void;
 }) {
   const advance = useAdvanceBracket(runId);
+  const { data: llm } = useLlmStatus();
+  const tape = useMatchupCommentary(runId);
+  const commentary = cachedCommentary || tape.data?.commentary || null;
   const castVote = useBracketVote(runId);
   const [error, setError] = useState<string | null>(null);
   const partners = participantIds.length > 1;
@@ -204,7 +211,36 @@ function MatchupCard({
           return (
             <div key={id} className="contents">
               {index === 1 && (
-                <div className="flex items-center justify-center text-lg font-black text-zinc-600">VS</div>
+                <div className="flex flex-col items-center justify-center gap-3 sm:w-44">
+                  <span className="text-lg font-black text-zinc-600">VS</span>
+                  {commentary ? (
+                    <blockquote
+                      aria-label="Tale of the Tape"
+                      className="rounded-lg border border-fuchsia-400/40 bg-fuchsia-500/5 px-3 py-2 text-center font-serif text-xs italic leading-relaxed text-fuchsia-100"
+                    >
+                      “{commentary}”
+                    </blockquote>
+                  ) : (
+                    llm?.enabled && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={tape.isPending}
+                          onClick={() => tape.mutate(matchup.id)}
+                          className="flex items-center gap-1.5 rounded-md border border-fuchsia-400/50 bg-fuchsia-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-fuchsia-200 transition-colors hover:bg-fuchsia-500/20 disabled:opacity-60"
+                        >
+                          {tape.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <span aria-hidden>🎙️</span>}
+                          Tale of the Tape
+                        </button>
+                        {tape.isError && (
+                          <p role="alert" className="text-center text-[10px] text-amber-400">
+                            {tape.error instanceof ApiError ? tape.error.message : "The announcer lost their voice."}
+                          </p>
+                        )}
+                      </>
+                    )
+                  )}
+                </div>
               )}
               <article className="flex flex-col gap-3 rounded-xl border border-app-border bg-app-bg p-3">
                 <MoviePoster path={film.poster_path} title={film.title} className="mx-auto w-36" />

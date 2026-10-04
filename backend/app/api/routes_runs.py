@@ -1136,6 +1136,24 @@ def _ensure_chaos_allowed(run: Run) -> None:
             detail="The Chaos Button needs a mode with a Pick Next pool")
 
 
+@router.post("/{run_id}/bounties/custom", response_model=RunDetail)
+async def roll_custom_bounty(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    """"✨ Roll Custom Bounty": the AI writes a new bounty (with a programmatic rule) that takes
+    the oldest slot on the Bounty Board."""
+    _ensure_run_open(run)
+    try:
+        run.rules_config = await bounties.roll_custom(session, run.rules_config)
+    except bounties.BountyError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
 @router.post("/{run_id}/chaos", response_model=RunDetail)
 def roll_chaos(
     session: Session = Depends(get_session),

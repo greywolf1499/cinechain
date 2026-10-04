@@ -13,7 +13,7 @@ from app.engines import march_madness
 from app.models.run import RUN_STATUS_COMPLETED, Run, RunParticipant, RunStep
 from app.models.user import User
 from app.schemas.runs import RunDetail
-from app.services import cache_repo
+from app.services import cache_repo, llm
 from app.utils.ids import utcnow
 
 router = APIRouter(prefix="/runs", tags=["bracket"])
@@ -27,6 +27,20 @@ class AdvanceRequest(BaseModel):
 class VoteRequest(BaseModel):
     matchup_id: str
     movie_id: int
+
+
+class CommentaryRequest(BaseModel):
+    matchup_id: str
+
+
+class CommentaryOut(BaseModel):
+    matchup_id: str
+    commentary: str  # "" = the AI model is off
+    enabled: bool
+    cached: bool = False
+
+
+COMMENTARY_KEY = "bracket_commentary"
 
 
 def _bracket_of(run: Run) -> dict:
@@ -116,3 +130,46 @@ async def vote_in_bracket(
         session.commit()
         session.refresh(run)
     return _to_run_detail(session, run)
+
+
+@router.post("/{run_id}/bracket/commentary", response_model=CommentaryOut)
+async def matchup_commentary(
+    payload: CommentaryRequest,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+) -> CommentaryOut:
+    """The AI announcer's one-sentence "Tale of the Tape" for a matchup whose two films are known.
+    Generated once and kept in `rules_config["bracket_commentary"][matchup_id]`; with the model
+    off the answer is empty (and nothing is stored)."""
+    bracket = _bracket_of(run)
+    _ensure_run_open(run)
+    try:
+        _, _, matchup = march_madness.find_matchup(bracket, payload.matchup_id)
+    except march_madness.BracketError as exc:
+        raise _bracket_error(exc) from exc
+    if matchup["a"] is None or matchup["b"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Both films must be in the matchup first")
+    stored = (run.rules_config or {}).get(COMMENTARY_KEY) or {}
+    if payload.matchup_id in stored:
+        return CommentaryOut(
+            matchup_id=payload.matchup_id, commentary=stored[payload.matchup_id], enabled=True,
+            cached=True)
+
+    config = llm.load_config(session)
+    if not config.enabled:
+        return CommentaryOut(matchup_id=payload.matchup_id, commentary="", enabled=False)
+    films = (run.rules_config or {}).get("bracket_films") or {}
+    try:
+        text = await llm.generate_matchup_commentary(
+            films.get(str(matchup["a"]), {}), films.get(str(matchup["b"]), {}), config)
+    except llm.LlmUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    session.refresh(run)  # a partner may have generated it meanwhile: the first one wins
+    rules = copy.deepcopy(run.rules_config or {})
+    kept = rules.setdefault(COMMENTARY_KEY, {})
+    text = kept.setdefault(payload.matchup_id, text)
+    run.rules_config = rules
+    session.add(run)
+    session.commit()
+    return CommentaryOut(matchup_id=payload.matchup_id, commentary=text, enabled=True)

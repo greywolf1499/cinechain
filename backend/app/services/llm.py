@@ -502,3 +502,45 @@ async def _generate_tropes(config: LlmConfig, overview: str) -> list[str]:
     if not tropes:
         raise LlmUnavailable("The model returned no usable tropes")
     return tropes
+
+
+COMMENTARY_SYSTEM = (
+    "You are a witty cinephile ring announcer calling a boxing match between two films. In "
+    "exactly one punchy 'Tale of the Tape' sentence of at most 35 words, preview the "
+    "head-to-head clash and name both films. No preamble, no lists, no spoilers, no quotation "
+    "marks."
+)
+
+
+def _card_blurb(movie: dict[str, Any]) -> str:
+    """A bracket film card ({title, release_year, runtime, overview, tagline}) as prompt text."""
+    title = str(movie.get("title") or "Unknown film")
+    year = movie.get("release_year")
+    head = f"{title} ({year})" if year else title
+    extras = [f"{movie['runtime']} min"] if movie.get("runtime") else []
+    if movie.get("tagline"):
+        extras.append(f"tagline: {str(movie['tagline'])[:120]}")
+    plot = str(movie.get("overview") or "").strip()[:300]
+    return f"{head}{' [' + '; '.join(extras) + ']' if extras else ''}{': ' + plot if plot else ''}"
+
+
+async def generate_matchup_commentary(
+    movie_a: dict[str, Any], movie_b: dict[str, Any], config: LlmConfig | None = None
+) -> str:
+    """One sentence of boxing-announcer hype for a March Madness matchup ("Tale of the Tape").
+
+    `config` defaults to the `.env` settings; pass `load_config(session)` to honour the admin's
+    saved ones. Returns `""` when the model is off; raises `LlmUnavailable` when it is on but fails
+    (so callers never cache a failure)."""
+    config = config or _env_config()
+    if not config.enabled:
+        return ""
+    key = f"{config.fingerprint}|tape|{_card_blurb(movie_a)}|{_card_blurb(movie_b)}"
+    if key in _cache:
+        return _cache[key]
+    prompt = (
+        f"In the left corner - {_card_blurb(movie_a)}\n"
+        f"In the right corner - {_card_blurb(movie_b)}\n"
+        "Announce the Tale of the Tape in one sentence."
+    )
+    return _remember(key, await generate(config, COMMENTARY_SYSTEM, prompt, max_tokens=90))

@@ -1,4 +1,4 @@
-import type { BountyId, RunStep } from "../types/api";
+import type { BountyId, RulesConfig, RunStep } from "../types/api";
 
 export interface BountyInfo {
   id: BountyId;
@@ -6,6 +6,8 @@ export interface BountyInfo {
   icon: string;
   /** The criterion, as shown on the card (mirrors services/bounties.py). */
   criteria: string;
+  /** Written by the AI rather than part of the fixed catalogue. */
+  ai?: boolean;
 }
 
 export const BOUNTIES: Record<BountyId, BountyInfo> = {
@@ -27,8 +29,15 @@ export const NO_BOUNTY_MODES = new Set(["march_madness", "rabbit_hole"]);
 
 export const WILDCARD_REWARD = "+1 🎟️ Wildcard";
 
+/** A bounty's display info: the static catalogue, or the run's stored AI definition. */
+export function bountyInfo(id: BountyId, rules: Pick<RulesConfig, "custom_bounties">): BountyInfo | null {
+  if (BOUNTIES[id]) return BOUNTIES[id];
+  const custom = rules.custom_bounties?.[id];
+  return custom ? { id, title: custom.title, icon: custom.icon, criteria: custom.description, ai: true } : null;
+}
+
 /** The bounty a logged step completed, if any. */
-export function completedBountyOf(step: RunStep): BountyInfo | null {
+export function completedBountyOf(step: RunStep, rules: Pick<RulesConfig, "custom_bounties">): BountyInfo | null {
   const id = (step.transition_metadata as { completed_bounty?: BountyId } | null)?.completed_bounty;
-  return id ? (BOUNTIES[id] ?? null) : null;
+  return id ? bountyInfo(id, rules) : null;
 }

@@ -466,6 +466,33 @@ export function useBracketVote(runId: string) {
 	});
 }
 
+export interface MatchupCommentary {
+	matchup_id: string;
+	/** "" when the AI model is off. */
+	commentary: string;
+	enabled: boolean;
+	cached: boolean;
+}
+
+/** March Madness: the AI announcer's "Tale of the Tape" for a matchup (generated once, then cached on the run). */
+export function useMatchupCommentary(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (matchupId: string) =>
+			api.post<MatchupCommentary>(`/runs/${runId}/bracket/commentary`, { matchup_id: matchupId }),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) }),
+	});
+}
+
+/** Bounty Board: "✨ Roll Custom Bounty" - the AI writes a new bounty for the board. */
+export function useRollCustomBounty(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => api.post<RunDetail>(`/runs/${runId}/bounties/custom`),
+		onSuccess: (run) => queryClient.setQueryData(queryKeys.run(runId), run),
+	});
+}
+
 export function useMarkStepWatched(runId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({

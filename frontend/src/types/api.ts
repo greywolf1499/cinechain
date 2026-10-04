@@ -102,6 +102,10 @@ export interface RulesConfig {
 	bounty_board?: boolean;
 	active_bounties?: BountyId[];
 	completed_bounties?: BountyId[];
+	/** AI bounty definitions by id (server-owned). */
+	custom_bounties?: Record<BountyId, CustomBounty>;
+	/** AI "Tale of the Tape" lines by matchup id (server-owned). */
+	bracket_commentary?: Record<string, string>;
 	/** The Rotten Tomatoes Split: first team to this many points wins; scores are server-owned. */
 	target_points?: number;
 	split_scores?: { team_a: number; team_b: number };
@@ -116,13 +120,16 @@ export interface ActiveChaos {
 	label: string;
 }
 
-export type BountyId =
-	| "short_king"
-	| "time_capsule"
-	| "hidden_gem"
-	| "foreign_horizon"
-	| "female_gaze"
-	| "epic_odyssey";
+/** A static bounty id ("short_king"...) or an AI bounty's ("ai_3f9a2c"). */
+export type BountyId = string;
+
+/** An AI-written bounty; its programmatic `rule` is evaluated server-side. */
+export interface CustomBounty {
+	id: BountyId;
+	title: string;
+	icon: string;
+	description: string;
+}
 
 export interface SplitCandidate {
 	movie_id: number;

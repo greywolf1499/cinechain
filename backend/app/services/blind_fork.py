@@ -24,6 +24,8 @@ SERVER_OWNED_RULES = (
     "active_bounties", "completed_bounties", "split_scores", "split_players",
     # The Chaos Button's one-step handicap is only ever rolled by the server.
     "active_chaos",
+    # AI March Madness commentary and the Bounty Board's AI-generated bounty definitions.
+    "bracket_commentary", "custom_bounties",
 )
 
 

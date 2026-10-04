@@ -66,6 +66,9 @@ export interface RulesConfig {
 	/** Era dimension cut-offs: Team A = before `era_a_before`, Team B = after `era_b_after`. */
 	era_a_before?: number;
 	era_b_after?: number;
+	/** Genre Pendulum: the genres the target swings through, and steps spent on each. */
+	genre_cycle?: string[];
+	swing_frequency?: number;
 	/** Server-owned Tug of War state: points per team and who plays each side. */
 	tug_scores?: { team_a: number; team_b: number };
 	tug_players?: { team_a: string | null; team_b: string | null };
@@ -184,7 +187,7 @@ export interface EngineMeta {
 }
 
 /** How two films are linked. `kind: "director"` reuses the shape: actor_id/actor_name hold the director. */
-export type ConnectionKind = "actor" | "director" | "craft";
+export type ConnectionKind = "actor" | "director" | "craft" | "character";
 
 /** What a person was on a film (Crew & Craft Trail). */
 export type CraftRole = "actor" | "composer" | "cinematographer" | "writer" | "director";

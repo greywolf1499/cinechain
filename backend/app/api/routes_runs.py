@@ -98,7 +98,10 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
 
 
 # Metadata keys only the server may set: a client-supplied `collision` would be a free win.
-SERVER_OWNED_METADATA = ("tunnel_side", "collision", "collision_with")
+SERVER_OWNED_METADATA = (
+    "tunnel_side", "collision", "collision_with", "golden_reunion", "character_hop")
+# Link bonuses the engine detected: stamped from its own validation, never from the client.
+BONUS_LINK_KEYS = ("golden_reunion", "character_hop")
 
 
 def _without_server_keys(metadata: dict | None) -> dict | None:
@@ -256,6 +259,10 @@ async def _enforce_run_rules(
                     status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
             broke_a_rule = True
         linked_metadata = engine.link_metadata(result, payload.transition_metadata)
+        if result.valid:
+            for key in BONUS_LINK_KEYS:
+                if result.mechanic and key in result.mechanic:
+                    extra_metadata[key] = result.mechanic[key]
         # Collision Victory: a *valid* link to this end that also connects the opposite end.
         if (
             result.valid and isinstance(engine, MeetInTheMiddleEngine)

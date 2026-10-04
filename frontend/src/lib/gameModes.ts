@@ -3,6 +3,7 @@ import {
   Combine,
   Compass,
   Dices,
+  Drama,
   Globe2,
   Hourglass,
   Landmark,
@@ -53,6 +54,14 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     bubble: "bg-cyan-500/15 text-cyan-300",
     ring: "border-cyan-400 shadow-[0_0_0_1px_rgba(34,211,238,0.6),0_8px_30px_-8px_rgba(34,211,238,0.35)]",
     text: "text-cyan-300",
+  },
+  genre_pendulum: {
+    icon: Drama,
+    tagline: "The genre swings as you go",
+    tags: ["Any film", "Genre cycle", "Genre overlap"],
+    bubble: "bg-red-500/15 text-red-300",
+    ring: "border-red-400 shadow-[0_0_0_1px_rgba(248,113,113,0.6),0_8px_30px_-8px_rgba(248,113,113,0.35)]",
+    text: "text-red-300",
   },
   crew_craft: {
     icon: SwatchBook,
@@ -147,6 +156,7 @@ export const STANDALONE_MODES = new Set([
   "world_passport",
   "aesthetic_gradient",
   "semantic_trope",
+  "genre_pendulum",
 ]);
 
 /** Modes with no film-to-film graph at all (SQL trackers). */

@@ -5,6 +5,7 @@ import { isoToFlagEmoji } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
 import { ROLE_STYLES, stepCraftLink } from "../lib/crewRoles";
 import { SemanticMatchBadge } from "./ColorSwatch";
+import LinkBonusBadges from "./LinkBonusBadges";
 import RoleBadge from "./RoleBadge";
 import PitchButton from "./PitchButton";
 import type { RunStep } from "../types/api";
@@ -22,6 +23,9 @@ interface TransitionMeta {
   profile_path?: string | null;
   character_in_from?: string | null;
   character_in_to?: string | null;
+  character_hop?: string;
+  pendulum_genre?: string;
+  pendulum_step?: number;
   semantic_score?: number;
   color_distance?: number;
   year_delta?: number;
@@ -105,8 +109,11 @@ export default function ChainLink({
                 )}
               </div>
               {characters && <p className="truncate text-[10px] text-zinc-500">{characters}</p>}
+              <LinkBonusBadges meta={step.transition_metadata} className="mt-1" />
             </div>
           </>
+        ) : meta?.character_hop ? (
+          <p className="text-xs font-medium text-fuchsia-300">🎭 Character Hop: {meta.character_hop}</p>
         ) : castLinked ? (
           <p className="text-[10px] text-zinc-600">Chain broken — no shared cast</p>
         ) : (
@@ -137,6 +144,14 @@ export default function ChainLink({
 
 /** The hop's rule evidence for modes with no cast link: year jump, country change, colour/plot match. */
 function RuleLink({ meta }: { meta: TransitionMeta | null }) {
+  if (meta?.pendulum_genre) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs font-medium text-red-300">
+        🎯 {meta.pendulum_genre}
+        <span className="text-[10px] font-normal text-zinc-500">swing step {meta.pendulum_step}</span>
+      </p>
+    );
+  }
   if (meta?.year_delta !== undefined) {
     const up = meta.year_delta > 0;
     const Icon = up ? ArrowUp : ArrowDown;

@@ -20,6 +20,14 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from app.engines.cinechain import CineChainEngine
+from app.engines.reunions import (
+    CHARACTER_HOP_KEY,
+    GOLDEN_REUNION_KEY,
+    CastCredit,
+    Person,
+    find_character_hop,
+    find_golden_reunion,
+)
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
 from app.schemas.engine import (
@@ -32,6 +40,7 @@ from app.schemas.engine import (
 from app.services import cache_repo
 from app.services.crew_roles import (
     ROLE_ACTOR,
+    ROLE_DIRECTOR,
     ROLE_LABELS,
     ROLE_PRIORITY,
     role_for_job,
@@ -54,6 +63,17 @@ class PersonCredits:
     name: str
     profile_path: str | None = None
     roles: dict[str, str | None] = field(default_factory=dict)
+    cast_order: int | None = None  # billing position, when they are in the cast
+
+
+def actors_of(people: dict[int, PersonCredits]) -> list[CastCredit]:
+    return [
+        CastCredit(p.person_id, p.name, p.roles[ROLE_ACTOR], p.cast_order)
+        for p in people.values() if ROLE_ACTOR in p.roles]
+
+
+def directors_of(people: dict[int, PersonCredits]) -> list[Person]:
+    return [Person(p.person_id, p.name) for p in people.values() if ROLE_DIRECTOR in p.roles]
 
 
 def role_pairs(roles_a: set[str], roles_b: set[str]) -> list[tuple[str, str]]:
@@ -94,6 +114,7 @@ class CrewCraftEngine(CineChainEngine):
             person = people.setdefault(member["actor_id"], PersonCredits(
                 member["actor_id"], member["name"], member["profile_path"]))
             person.roles[ROLE_ACTOR] = member["character_name"]
+            person.cast_order = member["cast_order"]
         for credit in await cache_repo.get_movie_crew(self.session, self.tmdb, movie_id):
             role = role_for_job(credit.job)
             if role is None:
@@ -126,14 +147,29 @@ class CrewCraftEngine(CineChainEngine):
                     character_in_from=a.roles.get(role_from) if role_from == ROLE_ACTOR else None,
                     character_in_to=b.roles.get(role_to) if role_to == ROLE_ACTOR else None,
                     role_in_from=role_from, role_in_to=role_to))
+        hop = find_character_hop(actors_of(earlier), actors_of(later))
+        if hop is not None and not connections and self.character_hop_links:
+            connections.append(SharedActorConnection(
+                kind="craft", actor_id=hop.actor_to.person_id,
+                actor_name=f"{hop.actor_from.name} \u2192 {hop.actor_to.name}",
+                character_in_from=hop.actor_from.character,
+                character_in_to=hop.actor_to.character,
+                role_in_from=ROLE_ACTOR, role_in_to=ROLE_ACTOR))
         if not connections:
             return ValidationResult(
                 valid=False, connections=[],
                 reason="No shared cast or crew (composer, cinematographer, writer, director) found")
+        mechanic: dict = {}
+        if hop is not None:
+            mechanic[CHARACTER_HOP_KEY] = hop.character
+        reunion = find_golden_reunion(
+            directors_of(earlier), actors_of(earlier), directors_of(later), actors_of(later))
+        if reunion is not None:
+            mechanic[GOLDEN_REUNION_KEY] = reunion
         connections.sort(key=lambda c: (
             c.role_in_from != c.role_in_to, ROLE_PRIORITY.index(c.role_in_to or ROLE_ACTOR),
             c.actor_name))
-        return ValidationResult(valid=True, connections=connections)
+        return ValidationResult(valid=True, connections=connections, mechanic=mechanic or None)
 
     def link_metadata(
         self, result: ValidationResult, client_metadata: dict | None

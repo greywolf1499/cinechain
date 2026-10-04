@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   Calendar,
   Clapperboard,
+  Drama,
   Flag,
   GitBranch,
   Globe,
@@ -34,6 +35,7 @@ import TunnelTimeline from "../components/TunnelTimeline";
 import RouletteSpinner from "../components/RouletteSpinner";
 import ForkOfferPanel from "../components/ForkOfferPanel";
 import TugOfWarMeter from "../components/TugOfWarMeter";
+import PendulumMeter from "../components/PendulumMeter";
 import PlayerAvatar from "../components/PlayerAvatar";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
@@ -56,6 +58,7 @@ import {
 } from "../lib/queries";
 import { useAuthStore } from "../store/authStore";
 import { TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar";
+import { GENRE_PENDULUM } from "../lib/pendulum";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import { STANDALONE_MODES, gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
@@ -189,6 +192,10 @@ export default function RunDetailPage() {
           users={users}
           finished={locked}
         />
+      )}
+
+      {run.game_type === GENRE_PENDULUM && (
+        <PendulumMeter rules={run.rules_config} stepsLogged={run.steps.length} finished={locked} />
       )}
 
       <ForkOfferPanel run={run} users={users} frontier={lastStep} />
@@ -424,6 +431,9 @@ function modeDetail(
   }
   if (STANDALONE_MODES.has(gameType) && rules.require_cast_link) return "+ cast link";
   if (gameType === "decade_sieve" && rules.target_decade) return `${rules.target_decade}s`;
+  if (gameType === GENRE_PENDULUM) {
+    return (rules.genre_cycle ?? []).slice(0, 4).join(" → ") + ((rules.genre_cycle?.length ?? 0) > 4 ? " …" : "");
+  }
   if (gameType === TUG_OF_WAR) {
     return `${TUG_DIMENSIONS[rules.dimension ?? "era"].label}, lead of ${rules.target_lead ?? 4}`;
   }
@@ -896,6 +906,8 @@ function ConstraintIcon({ kind }: { kind: string }) {
       return <Palette className={className} />;
     case "semantic":
       return <Sparkles className={className} />;
+    case "genre":
+      return <Drama className={className} />;
     default:
       return <Link2 className={className} />;
   }

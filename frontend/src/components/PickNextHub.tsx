@@ -34,7 +34,7 @@ import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
 import { countryName } from "../lib/countryNames";
 import { gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { connectionMetadata } from "../lib/connections";
-import { connectionRole } from "../lib/crewRoles";
+import { ROLE_STYLES, connectionRole } from "../lib/crewRoles";
 import RoleBadge from "./RoleBadge";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
 import { SIDE_LABELS } from "../lib/tunnel";
@@ -48,6 +48,7 @@ import {
 } from "../lib/queries";
 import type {
   CraftRole,
+  CrewMember,
   TunnelSide,
   CastMember,
   DiscoveryCandidate,
@@ -60,6 +61,8 @@ import type {
   RunStep,
   ValidationResult,
 } from "../types/api";
+
+const CREW_CRAFT = "crew_craft";
 
 type CoStarMode = "or" | "and";
 type SortBy = "match" | "year" | "popularity" | "imdb" | "rt";
@@ -300,6 +303,14 @@ function DiscoveryGrid({
     queryFn: () => api.get<CastMember[]>(`/movies/${frontierStep.movie_id}/cast`),
     enabled: castLinked,
   });
+  // Crew & Craft Trail: the frontier's key crew sit beside its cast as filter chips.
+  const craftMode = gameType === CREW_CRAFT;
+  const { data: crew } = useQuery({
+    queryKey: ["movies", frontierStep.movie_id, "crew"],
+    queryFn: () => api.get<CrewMember[]>(`/movies/${frontierStep.movie_id}/crew`),
+    enabled: castLinked && craftMode,
+  });
+  const people = useMemo(() => mergeFilterPeople(craftMode ? (crew ?? []) : [], cast ?? []), [craftMode, crew, cast]);
   const { data: constraint } = useRunConstraint(runId);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
@@ -453,35 +464,50 @@ function DiscoveryGrid({
         />
       )}
 
-      {castLinked && cast && cast.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {cast.map((member) => (
+      {castLinked && people.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Filter by person">
+          {people.map((person) => (
             <button
-              key={member.actor_id}
+              key={person.id}
               type="button"
-              onClick={() => toggleActor(member.actor_id)}
-              title={member.name}
+              onClick={() => toggleActor(person.id)}
+              aria-pressed={selectedActorIds.has(person.id)}
+              title={person.roles.map((role) => `${ROLE_STYLES[role].label}: ${person.name}`).join(" / ")}
               className={cn(
-                "flex w-16 shrink-0 flex-col items-center gap-1 rounded-lg border px-1.5 py-1.5 text-center transition-colors",
-                selectedActorIds.has(member.actor_id)
+                "flex w-20 shrink-0 flex-col items-center gap-1 rounded-lg border px-1.5 py-1.5 text-center transition-colors",
+                selectedActorIds.has(person.id)
                   ? "border-accent bg-accent/10"
                   : "border-app-border hover:border-zinc-600",
               )}
             >
-              {member.profile_path ? (
+              {person.profile_path ? (
                 <img
-                  src={profileUrl(member.profile_path) ?? undefined}
-                  alt={member.name}
+                  src={profileUrl(person.profile_path) ?? undefined}
+                  alt={person.name}
                   className="h-10 w-10 rounded-full object-cover"
                 />
               ) : (
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-app-surface-hover text-zinc-500">
-                  <User className="h-4 w-4" />
+                <div
+                  className={cn(
+                    "flex h-10 w-10 items-center justify-center rounded-full bg-app-surface-hover text-zinc-500",
+                    person.roles[0] !== "actor" && ROLE_STYLES[person.roles[0]].className,
+                  )}
+                >
+                  {person.roles[0] === "actor" ? (
+                    <User className="h-4 w-4" />
+                  ) : (
+                    <span className="text-lg" aria-hidden>
+                      {ROLE_STYLES[person.roles[0]].emoji}
+                    </span>
+                  )}
                 </div>
               )}
-              <span className="line-clamp-2 text-[10px] leading-tight text-zinc-300">
-                {member.name}
-              </span>
+              <span className="line-clamp-2 text-[10px] leading-tight text-zinc-300">{person.name}</span>
+              {craftMode && (
+                <span className="text-[11px] leading-none" aria-hidden>
+                  {person.roles.map((role) => ROLE_STYLES[role].emoji).join("")}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -498,7 +524,7 @@ function DiscoveryGrid({
               mode === "or" ? "bg-accent text-zinc-950" : "text-zinc-400 hover:text-zinc-200",
             )}
           >
-            OR - Any shared actor
+            OR - Any shared {craftMode ? "person" : "actor"}
           </button>
           <button
             type="button"
@@ -508,7 +534,7 @@ function DiscoveryGrid({
               mode === "and" ? "bg-accent text-zinc-950" : "text-zinc-400 hover:text-zinc-200",
             )}
           >
-            AND - Co-stars reunite
+            AND - {craftMode ? "Reunite several people" : "Co-stars reunite"}
           </button>
         </div>
         )}
@@ -900,6 +926,31 @@ function RuleBanner({
       </div>
     </div>
   );
+}
+
+/** One filter chip per person: crew first (director, composer, DP, writers), then top-billed cast;
+ * someone who is both (a director who acts) is a single chip carrying both roles. */
+interface FilterPerson {
+  id: number;
+  name: string;
+  profile_path: string | null;
+  roles: CraftRole[];
+}
+
+function mergeFilterPeople(crew: CrewMember[], cast: CastMember[]): FilterPerson[] {
+  const order: CraftRole[] = ["director", "composer", "cinematographer", "writer", "actor"];
+  const byId = new Map<number, FilterPerson>();
+  const add = (id: number, name: string, profile: string | null, role: CraftRole) => {
+    const person = byId.get(id) ?? { id, name, profile_path: profile, roles: [] };
+    if (!person.roles.includes(role)) person.roles.push(role);
+    person.profile_path = person.profile_path ?? profile;
+    byId.set(id, person);
+  };
+  for (const member of [...crew].sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role))) {
+    add(member.person_id, member.name, member.profile_path, member.role);
+  }
+  for (const member of cast) add(member.actor_id, member.name, member.profile_path, "actor");
+  return [...byId.values()].map((p) => ({ ...p, roles: p.roles.sort((a, b) => order.indexOf(a) - order.indexOf(b)) }));
 }
 
 function sharedLabel(connections: DiscoveryConnection[]): string {

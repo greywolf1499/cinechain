@@ -6,6 +6,7 @@ from app.engines.base import BaseChallengeEngine
 from app.engines.canon_island import CanonIslandEngine
 from app.engines.cinechain import CineChainEngine
 from app.engines.crew_craft import CrewCraftEngine
+from app.engines.genre_pendulum import GenrePendulumEngine
 from app.engines.meet_in_middle import MeetInTheMiddleEngine
 from app.engines.mutators import AuteurRelayEngine, ChronoClimbEngine, WorldPassportEngine
 from app.engines.trackers import DecadeSieveEngine, RouletteEngine
@@ -18,6 +19,7 @@ ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
         CineChainEngine,
         CanonIslandEngine,
         CrewCraftEngine,
+        GenrePendulumEngine,
         MeetInTheMiddleEngine,
         TugOfWarEngine,
         DecadeSieveEngine,

@@ -16,6 +16,8 @@ import { cn } from "../lib/cn";
 import { usesCastLinks } from "../lib/gameModes";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
 import { DEFAULT_TARGET_LEAD, TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar";
+import { DEFAULT_GENRE_CYCLE, DEFAULT_SWING_FREQUENCY, GENRE_PENDULUM } from "../lib/pendulum";
+import GenreCycleInput from "../components/GenreCycleInput";
 import { clearModifiers, modifierPayload } from "../lib/modifiers";
 import { useAuthStore } from "../store/authStore";
 import type { EngineMeta, MovieSummary, RulesConfig, TugDimension } from "../types/api";
@@ -112,6 +114,8 @@ function NewRunModal({
   const [targetDecade, setTargetDecade] = useState(1970);
   const [tugDimension, setTugDimension] = useState<TugDimension>("era");
   const [tugLead, setTugLead] = useState(DEFAULT_TARGET_LEAD);
+  const [genreCycle, setGenreCycle] = useState<string[]>([...DEFAULT_GENRE_CYCLE]);
+  const [swingFrequency, setSwingFrequency] = useState(DEFAULT_SWING_FREQUENCY);
   const [rawMode, setRawMode] = useState(false);
   const [rawText, setRawText] = useState("");
 
@@ -128,6 +132,7 @@ function NewRunModal({
   const needsCanonList = gameType === "canon_island";
   const needsDecade = gameType === "decade_sieve";
   const isTug = gameType === TUG_OF_WAR;
+  const isPendulum = gameType === GENRE_PENDULUM;
   // A canon list with no synced films would block every pick.
   const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
 
@@ -138,6 +143,12 @@ function NewRunModal({
     ...(needsCanonList ? { allowed_curated_list_id: canonListId } : {}),
     ...(needsDecade ? { target_decade: targetDecade } : {}),
     ...(isTug ? { dimension: tugDimension, target_lead: tugLead } : {}),
+    ...(isPendulum
+      ? {
+          genre_cycle: genreCycle.length > 0 ? genreCycle : DEFAULT_GENRE_CYCLE,
+          swing_frequency: swingFrequency,
+        }
+      : {}),
   };
   const isTunnel = gameType === MEET_IN_THE_MIDDLE;
   const missingMode = (needsCanonList && !canonListId) || (isTunnel && (!seedMovie || !tailSeedMovie));
@@ -175,6 +186,8 @@ function NewRunModal({
     setTargetDecade(1970);
     setTugDimension("era");
     setTugLead(DEFAULT_TARGET_LEAD);
+    setGenreCycle([...DEFAULT_GENRE_CYCLE]);
+    setSwingFrequency(DEFAULT_SWING_FREQUENCY);
     setRawMode(false);
     setRawText("");
     createRun.reset();
@@ -267,6 +280,15 @@ function NewRunModal({
               ))}
             </select>
           </Field>
+        )}
+
+        {isPendulum && (
+          <GenreCycleInput
+            cycle={genreCycle}
+            onCycleChange={setGenreCycle}
+            frequency={swingFrequency}
+            onFrequencyChange={setSwingFrequency}
+          />
         )}
 
         {isTug && (

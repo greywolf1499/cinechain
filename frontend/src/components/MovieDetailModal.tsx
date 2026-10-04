@@ -7,6 +7,9 @@ import MovieCastStrip from "./MovieCastStrip";
 import RatingBadges from "./RatingBadges";
 import AcquisitionControl from "./AcquisitionControl";
 import MovieTagline from "./MovieTagline";
+import LinkBonusBadges from "./LinkBonusBadges";
+import RoleBadge from "./RoleBadge";
+import { stepCraftLink } from "../lib/crewRoles";
 import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
@@ -76,6 +79,8 @@ export default function MovieDetailModal({
   }, [step.id, step.user_notes, step.watched_at]);
 
   const meta = step.transition_metadata as TransitionMeta | null;
+  const craft = stepCraftLink(step);
+  const linkName = craft?.name ?? meta?.actor_name ?? "";
   const countries = parseOriginCountries(movie?.origin_country ?? step.movie_origin_country);
   const genreNames = (movie?.genre_ids ?? [])
     .map((id) => genres?.find((g) => g.id === id)?.name)
@@ -144,12 +149,12 @@ export default function MovieDetailModal({
           </div>
         </div>
 
-        {meta?.actor_name && (
+        {(meta?.actor_name || craft) && (
           <div className="flex items-center gap-2.5 rounded-md border border-app-border bg-app-bg p-2.5">
-            {meta.profile_path ? (
+            {meta?.profile_path ? (
               <img
                 src={profileUrl(meta.profile_path) ?? undefined}
-                alt={meta.actor_name}
+                alt={linkName}
                 className="h-9 w-9 shrink-0 rounded-full object-cover"
               />
             ) : (
@@ -159,8 +164,10 @@ export default function MovieDetailModal({
             )}
             <div className="min-w-0">
               <p className="text-xs text-zinc-500">Connected via</p>
-              <p className="truncate text-sm font-medium text-zinc-200">{meta.actor_name}</p>
+              <p className="truncate text-sm font-medium text-zinc-200">{linkName}</p>
+              {craft && <RoleBadge role={craft.role} name={craft.name} fromRole={craft.fromRole} className="mt-0.5" />}
               {characters && <p className="truncate text-[11px] text-zinc-500">{characters}</p>}
+              <LinkBonusBadges meta={step.transition_metadata} className="mt-1.5" />
             </div>
           </div>
         )}

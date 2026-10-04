@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import MoviePoster from "./MoviePoster";
+import LinkBonusBadges from "./LinkBonusBadges";
 import ChainLink from "./ChainLink";
 import ColorSwatch from "./ColorSwatch";
 import MarkWatchedModal from "./MarkWatchedModal";
@@ -254,6 +255,7 @@ function StationRow({
             </div>
 
             <RuleFlags meta={step.transition_metadata} />
+            <LinkBonusBadges meta={step.transition_metadata} className="mt-1.5" />
           </div>
         </button>
 

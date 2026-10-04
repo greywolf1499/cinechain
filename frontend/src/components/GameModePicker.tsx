@@ -15,6 +15,7 @@ const MODE_ORDER = [
   "meet_in_the_middle",
   "tug_of_war",
   "chrono_climb",
+  "genre_pendulum",
   "world_passport",
   "aesthetic_gradient",
   "semantic_trope",

@@ -157,7 +157,7 @@ class MutatorEngine(CineChainEngine):
             return ValidationResult(valid=True, mechanic=mechanic)
         result = await self._validate_link(
             from_movie_id, to_movie_id, cast_limit, rules, previous_transition)
-        result.mechanic = mechanic
+        result.mechanic = {**(result.mechanic or {}), **(mechanic or {})} or None
         return result
 
     async def _filter_pool(
@@ -480,6 +480,7 @@ class AuteurRelayEngine(MutatorEngine):
 
     game_type = "auteur_relay"
     display_name = "Auteur Relay"
+    character_hop_links = False  # links must be a real actor or director, strictly alternating
     description = "Chain films by alternating links: a shared actor, then a shared director, then an actor..."
 
     def bridge_constraints(

@@ -7,6 +7,7 @@ import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
 import { connectionMetadata } from "../lib/connections";
 import { roleBadgeText } from "../lib/crewRoles";
+import LinkBonusBadges from "./LinkBonusBadges";
 import { useCreateStep } from "../lib/queries";
 import MoviePoster from "./MoviePoster";
 import type { MovieSummary, RulesConfig, RunStep, ValidationResult } from "../types/api";
@@ -143,10 +144,13 @@ export default function MovieSearchAutocomplete({
               <div className="mt-2">
                 {validation.valid ? (
                   <div className="text-xs text-emerald-400">
+                    <LinkBonusBadges meta={validation.mechanic} className="mb-1" />
                     {validation.connections.length > 0
                       ? `Connects to Frontier via ${validation.connections
                           .map((c) =>
-                            c.kind === "craft" && c.role_in_to
+                            c.kind === "character"
+                              ? `${c.actor_name} (same character)`
+                              : c.kind === "craft" && c.role_in_to
                               ? roleBadgeText(c.role_in_to, c.actor_name, c.role_in_from)
                               : c.kind === "director"
                                 ? `${c.actor_name} (director)`

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Clock, Dices, Loader2, Star, Ticket } from "lucide-react";
 import MoviePoster from "./MoviePoster";
+import RouletteFilters, { EMPTY_FILTERS, filtersToParams, type RouletteFilterState } from "./RouletteFilters";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useCreateStep } from "../lib/queries";
@@ -9,13 +10,7 @@ import type { GenreOut, RouletteMovie, RouletteSpinResult } from "../types/api";
 
 const SPIN_MIN_MS = 1400; // the suspense is the point - never reveal instantly
 
-const MAX_RUNTIME_OPTIONS = [90, 105, 120, 150];
-const MIN_RATING_OPTIONS = [6, 7, 7.5, 8];
-
 type Phase = "idle" | "spinning" | "revealed";
-
-const selectClass =
-  "w-full rounded-md border border-app-border bg-app-bg px-2.5 py-1.5 text-xs text-zinc-200 focus:border-accent focus:outline-none";
 
 /** Movie Night Roulette: filter, spin, watch the pick come into focus, then log it. */
 export default function RouletteSpinner({ runId }: { runId: string }) {
@@ -25,9 +20,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
   });
 
-  const [maxRuntime, setMaxRuntime] = useState("");
-  const [minRating, setMinRating] = useState("");
-  const [genre, setGenre] = useState("");
+  const [filters, setFilters] = useState<RouletteFilterState>(EMPTY_FILTERS);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [pick, setPick] = useState<RouletteMovie | null>(null);
@@ -49,10 +42,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
     setFocused(false);
     setMessage(null);
 
-    const params = new URLSearchParams({ run_id: runId });
-    if (maxRuntime) params.set("max_runtime", maxRuntime);
-    if (minRating) params.set("min_rating", minRating);
-    if (genre) params.set("genre", genre);
+    const params = filtersToParams(filters, new URLSearchParams({ run_id: runId }));
 
     const delay = new Promise((resolve) => window.setTimeout(resolve, SPIN_MIN_MS));
     try {
@@ -93,41 +83,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-3 gap-2">
-        <label className="flex flex-col gap-1 text-[11px] font-medium text-zinc-500">
-          Max runtime
-          <select value={maxRuntime} onChange={(e) => setMaxRuntime(e.target.value)} className={selectClass}>
-            <option value="">Any</option>
-            {MAX_RUNTIME_OPTIONS.map((m) => (
-              <option key={m} value={m}>
-                &le; {m} min
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-[11px] font-medium text-zinc-500">
-          Min IMDb
-          <select value={minRating} onChange={(e) => setMinRating(e.target.value)} className={selectClass}>
-            <option value="">Any</option>
-            {MIN_RATING_OPTIONS.map((r) => (
-              <option key={r} value={r}>
-                &ge; {r}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-[11px] font-medium text-zinc-500">
-          Genre
-          <select value={genre} onChange={(e) => setGenre(e.target.value)} className={selectClass}>
-            <option value="">Any</option>
-            {genres?.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      <RouletteFilters value={filters} onChange={setFilters} genres={genres} />
 
       <button
         type="button"

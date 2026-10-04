@@ -1,5 +1,6 @@
 import json
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -169,7 +170,10 @@ async def roulette_spin(
     max_runtime: int | None = Query(default=None, ge=1, le=1000),
     min_runtime: int | None = Query(default=None, ge=1, le=1000),
     min_rating: float | None = Query(default=None, ge=0, le=10, description="IMDb rating"),
-    genre: int | None = Query(default=None, description="TMDB genre id"),
+    max_rating: float | None = Query(default=None, ge=0, le=10, description="IMDb rating"),
+    genre: int | None = Query(default=None, description="Legacy single TMDB genre id"),
+    genre_ids: list[int] = Query(default=[], description="TMDB genre ids (repeat the param)"),
+    genre_operator: Literal["AND", "OR"] = Query(default="OR"),
     run_id: str | None = Query(default=None, description="Skip films already in this run"),
     game_type: str = Query(default="roulette"),
     session: Session = Depends(get_session),
@@ -183,11 +187,19 @@ async def roulette_spin(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{game_type} doesn't support roulette spins")
+    for low, high, label in (
+        (min_runtime, max_runtime, "runtime"), (min_rating, max_rating, "rating"),
+    ):
+        if low is not None and high is not None and low > high:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"min_{label} can't be above max_{label}")
     excluded, _, _ = _run_solve_context(session, run_id, current_user)
 
     spun = engine.spin(SpinFilters(
         max_runtime=max_runtime, min_runtime=min_runtime, min_rating=min_rating,
-        genre_id=genre, exclude_movie_ids=sorted(excluded)))
+        max_rating=max_rating, genre_id=genre, genre_ids=genre_ids,
+        genre_operator=genre_operator, exclude_movie_ids=sorted(excluded)))
     if spun is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -216,8 +228,13 @@ async def bridge_swap_node(
     movie_id: int = Query(..., description="The path film to replace (Movie_B)"),
     from_movie_id: int = Query(..., description="The film before it (Movie_A)"),
     to_movie_id: int = Query(..., description="The film after it (Movie_C)"),
-    actor_in_id: int = Query(..., description="Actor_X: links Movie_A to Movie_B"),
-    actor_out_id: int = Query(..., description="Actor_Y: links Movie_B to Movie_C"),
+    actor_in_id: int | None = Query(
+        default=None, description="Actor_X: links Movie_A to Movie_B (required for mode=same)"),
+    actor_out_id: int | None = Query(
+        default=None, description="Actor_Y: links Movie_B to Movie_C (required for mode=same)"),
+    mode: Literal["same", "broad"] = Query(
+        default="same",
+        description="same = the exact same two actors; broad = any actor shared with A and with C"),
     exclude_movie_ids: str | None = Query(
         default=None, description="Comma-separated films already on the path"),
     game_type: str = Query(default="cinechain"),
@@ -226,13 +243,19 @@ async def bridge_swap_node(
     tmdb: TMDBClient = Depends(get_tmdb_client),
     current_user: User = Depends(get_current_user),
 ) -> SwapNodeResult:
-    """The Same-Actor Swap: alternatives for `movie_id` starring the exact same
-    two connecting actors, i.e. Intersection(Actor_X_Movies, Actor_Y_Movies)."""
+    """Alternatives for `movie_id` on a bridge path. "The Recast" (`mode=same`) keeps
+    both connecting actors: Intersection(Actor_X_Movies, Actor_Y_Movies). "The Broad
+    Detour" (`mode=broad`) only needs *some* actor shared with Movie_A and *some*
+    actor shared with Movie_C, so entirely different cast members may link the path."""
     engine = get_engine(game_type, session, tmdb)
     if "bridge_swap" not in engine.capabilities:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{game_type} doesn't support node swapping")
+    if mode == "same" and (actor_in_id is None or actor_out_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="actor_in_id and actor_out_id are required for mode=same")
     run_excluded, _, _ = _run_solve_context(session, run_id, current_user)
     exclude = {
         movie_id, from_movie_id, to_movie_id,
@@ -240,22 +263,38 @@ async def bridge_swap_node(
     }
     # A run's own history is excluded, but never the path's endpoints themselves.
     exclude |= run_excluded - {from_movie_id, to_movie_id}
+    deadline = time.monotonic() + SWAP_MAX_DURATION_SECONDS
 
     try:
-        await bridge_paths.ensure_filmographies(
-            session, tmdb, [actor_in_id, actor_out_id],
-            time.monotonic() + SWAP_MAX_DURATION_SECONDS)
+        if mode == "broad":
+            actors_from, actors_to = await bridge_paths.ensure_broad_pool(
+                session, tmdb, from_movie_id, to_movie_id, deadline)
+        else:
+            await bridge_paths.ensure_filmographies(
+                session, tmdb, [actor_in_id, actor_out_id], deadline)
     except (DeadlineReached, TMDBError) as exc:
         raise _tmdb_unavailable(exc) from exc
 
-    candidates, total = bridge_paths.find_same_actor_swaps(
-        session,
-        from_movie_id=from_movie_id,
-        to_movie_id=to_movie_id,
-        actor_in_id=actor_in_id,
-        actor_out_id=actor_out_id,
-        exclude_movie_ids=exclude,
-    )
+    if mode == "broad":
+        candidates, total = bridge_paths.find_broad_detours(
+            session,
+            from_movie_id=from_movie_id,
+            to_movie_id=to_movie_id,
+            actors_from=actors_from,
+            actors_to=actors_to,
+            exclude_movie_ids=exclude,
+            same_pair=(actor_in_id, actor_out_id)
+            if actor_in_id is not None and actor_out_id is not None else None,
+        )
+    else:
+        candidates, total = bridge_paths.find_same_actor_swaps(
+            session,
+            from_movie_id=from_movie_id,
+            to_movie_id=to_movie_id,
+            actor_in_id=actor_in_id,
+            actor_out_id=actor_out_id,
+            exclude_movie_ids=exclude,
+        )
     return SwapNodeResult(candidates=candidates, total=total)
 
 

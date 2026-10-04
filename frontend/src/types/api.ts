@@ -258,6 +258,9 @@ export interface SwapCandidate {
 	connection_out: SharedActorConnection;
 }
 
+/** "same": the exact same two connecting actors; "broad": any actor shared with each neighbour. */
+export type SwapMode = "same" | "broad";
+
 export interface SwapNodeResult {
 	candidates: SwapCandidate[];
 	total: number;
@@ -582,4 +585,29 @@ export interface BackfillResult {
 /** A random well-regarded cached film to start a run with (`GET /movies/seed-suggestion`). */
 export interface SeedSuggestion extends MovieSummary {
 	reason: string;
+}
+
+// --- tools: Watchlist Bingo (GET /tools/bingo/watchlist) ---
+
+/** A watchlist film with whatever the local cache knows (null / empty = unknown). */
+export interface BingoFilm {
+	movie_id: number;
+	title: string;
+	year: number | null;
+	poster_path: string | null;
+	runtime: number | null;
+	original_language: string | null;
+	origin_countries: string[];
+	genre_ids: number[];
+	imdb_rating: number | null;
+	popularity: number | null;
+	canon_badges: string[];
+	directed_by_woman: boolean | null;
+}
+
+export interface BingoWatchlist {
+	films: BingoFilm[];
+	total: number;
+	/** Films still missing detail / directors / ratings; request again with `hydrate` to fill more. */
+	pending: number;
 }

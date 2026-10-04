@@ -98,3 +98,5 @@ class CachedMovieDirector(SQLModel, table=True):
     movie_id: int = Field(foreign_key="cached_movies.tmdb_id", primary_key=True)
     person_id: int = Field(primary_key=True, index=True)
     name: str
+    # TMDB gender code (0 unspecified, 1 female, 2 male, 3 non-binary); NULL = cached before it was stored.
+    gender: int | None = None

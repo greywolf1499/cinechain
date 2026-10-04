@@ -293,3 +293,66 @@ def test_stream_validates_min_hops(client):
     resp = client.get("/api/engine/bridge/stream",
                       params={"from_movie_id": 1, "to_movie_id": 3, "min_hops": 99})
     assert resp.status_code == 422
+
+
+# --- broad detour ---
+
+
+def _mock_broad_universe():
+    # A=1 stars X=100 and P=300; C=3 stars Y=200 and Q=400; B=2 is the current node (X, Y).
+    _mock_movie(1, "A", cast=[_cast(100, "X", 0), _cast(300, "P", 1)])
+    _mock_movie(3, "C", cast=[_cast(200, "Y", 0), _cast(400, "Q", 1)])
+    _mock_person(100, [_credit(1, "A"), _credit(2, "B"), _credit(4, "Same Cast", popularity=9.0),
+                       _credit(7, "X And Q", popularity=3.0)])
+    _mock_person(200, [_credit(2, "B"), _credit(3, "C"), _credit(4, "Same Cast", popularity=9.0)])
+    _mock_person(300, [_credit(1, "A"), _credit(6, "P And Q", popularity=7.0),
+                       _credit(8, "Only P", popularity=50.0)])
+    _mock_person(400, [_credit(3, "C"), _credit(6, "P And Q", popularity=7.0),
+                       _credit(7, "X And Q", popularity=3.0)])
+
+
+def test_broad_detour_links_a_and_c_through_different_cast(client):
+    with respx.mock:
+        _mock_broad_universe()
+        resp = client.get(
+            "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "broad"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # The exact-same-actors film (4) belongs to the other tab; a film with only one side (8) never fits.
+    assert [c["node"]["movie_id"] for c in body["candidates"]] == [6, 7]
+    assert body["total"] == 2
+    entirely_different = body["candidates"][0]
+    assert entirely_different["connection_in"]["actor_id"] == 300
+    assert entirely_different["connection_out"]["actor_id"] == 400
+    assert entirely_different["connection_in"]["character_in_from"] == "P role"
+    mixed = body["candidates"][1]
+    assert (mixed["connection_in"]["actor_id"], mixed["connection_out"]["actor_id"]) == (100, 400)
+
+
+def test_broad_detour_does_not_need_the_path_actors(client):
+    with respx.mock:
+        _mock_broad_universe()
+        resp = client.get("/api/engine/bridge/swap-node", params={
+            "movie_id": 2, "from_movie_id": 1, "to_movie_id": 3, "mode": "broad"})
+
+    assert resp.status_code == 200
+    assert [c["node"]["movie_id"] for c in resp.json()["candidates"]] == [4, 6, 7]
+
+
+def test_broad_detour_tolerates_a_partial_filmography_pool(client):
+    with respx.mock:
+        _mock_broad_universe()
+        respx.get(f"{TMDB_BASE}/person/400/movie_credits").mock(return_value=httpx.Response(200, json={
+            "id": 400, "cast": []}))
+        resp = client.get(
+            "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "broad"})
+    assert resp.status_code == 200
+    assert resp.json()["candidates"] == []
+
+
+def test_same_mode_still_requires_both_actors_and_rejects_unknown_modes(client):
+    params = {"movie_id": 2, "from_movie_id": 1, "to_movie_id": 3}
+    assert client.get("/api/engine/bridge/swap-node", params=params).status_code == 422
+    assert client.get(
+        "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "wild"}).status_code == 422

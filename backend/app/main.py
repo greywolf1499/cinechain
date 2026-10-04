@@ -19,6 +19,7 @@ from app.api.routes_runs import router as runs_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_system import router as system_router
 from app.api.routes_tasks import router as tasks_router
+from app.api.routes_tools import router as tools_router
 from app.api.routes_users import router as users_router
 from app.config import get_settings
 from app.integrations.omdb import OMDbClient
@@ -74,6 +75,7 @@ app.include_router(curated_router, prefix=api_router_prefix)
 app.include_router(images_router, prefix=api_router_prefix)
 app.include_router(tasks_router, prefix=api_router_prefix)
 app.include_router(passport_router, prefix=api_router_prefix)
+app.include_router(tools_router, prefix=api_router_prefix)
 
 # Serve built frontend assets (JS/CSS/images) under /assets.
 assets_dir = STATIC_DIR / "assets"

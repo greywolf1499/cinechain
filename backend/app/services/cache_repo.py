@@ -144,7 +144,8 @@ class CacheRepo:
             self.session.delete(existing)
         self.session.flush()
         rows = [
-            CachedMovieDirector(movie_id=movie_id, person_id=d["id"], name=d["name"])
+            CachedMovieDirector(
+                movie_id=movie_id, person_id=d["id"], name=d["name"], gender=d.get("gender"))
             for d in directors
         ]
         self.session.add_all(rows)

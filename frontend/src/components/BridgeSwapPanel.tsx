@@ -2,14 +2,33 @@ import { Check, Loader2, Shuffle, X } from "lucide-react";
 import MoviePoster from "./MoviePoster";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { cn } from "../lib/cn";
-import type { JellyfinItemSummary, SwapCandidate } from "../types/api";
+import type { JellyfinItemSummary, SwapCandidate, SwapMode } from "../types/api";
 
-export type SwapState =
-  | { index: number; status: "loading" }
-  | { index: number; status: "error"; message: string }
-  | { index: number; status: "ready"; candidates: SwapCandidate[]; total: number };
+export type SwapTabState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; candidates: SwapCandidate[]; total: number };
 
-/** Alternatives for one path film that keep both of its actor links (the "Same-Actor Swap"). */
+/** One open swap: which path film, which tab is showing, and each tab's lookup. */
+export interface SwapState {
+  index: number;
+  tab: SwapMode;
+  same: SwapTabState;
+  broad: SwapTabState;
+}
+
+function readyTotal(tab: SwapTabState): number | null {
+  return tab.status === "ready" ? tab.total : null;
+}
+
+const TABS: { mode: SwapMode; label: string }[] = [
+  { mode: "same", label: "👥 Same Actors" },
+  { mode: "broad", label: "🔀 Broad Detour" },
+];
+
+/** Alternatives for one path film: "Same Actors" keeps both of its actor links, "Broad Detour"
+ * reconnects its neighbours through any other cast members. */
 export default function BridgeSwapPanel({
   movieTitle,
   actorNames,
@@ -17,6 +36,7 @@ export default function BridgeSwapPanel({
   onServerMap,
   applying,
   onPick,
+  onTabChange,
   onClose,
 }: {
   movieTitle: string;
@@ -25,8 +45,10 @@ export default function BridgeSwapPanel({
   onServerMap?: Record<number, JellyfinItemSummary>;
   applying: boolean;
   onPick: (candidate: SwapCandidate) => void;
+  onTabChange: (mode: SwapMode) => void;
   onClose: () => void;
 }) {
+  const tab = state[state.tab];
   return (
     <section
       aria-label="Swap movie"
@@ -39,7 +61,9 @@ export default function BridgeSwapPanel({
             Swap <span className="truncate text-accent">{movieTitle}</span>
           </p>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Other films starring both {actorNames[0]} and {actorNames[1]} - the rest of the path stays put.
+            {state.tab === "same"
+              ? `Other films starring both ${actorNames[0]} and ${actorNames[1]} - the rest of the path stays put.`
+              : "Films that share at least one actor with the film before and one with the film after - even if they're completely different actors."}
           </p>
         </div>
         <button
@@ -52,24 +76,49 @@ export default function BridgeSwapPanel({
         </button>
       </div>
 
-      {state.status === "loading" && (
+      <div role="tablist" aria-label="Swap type" className="mb-3 inline-flex rounded-full border border-app-border bg-app-surface p-1 text-xs font-medium">
+        {TABS.map(({ mode, label }) => (
+          <button
+            key={mode}
+            type="button"
+            role="tab"
+            aria-selected={state.tab === mode}
+            onClick={() => onTabChange(mode)}
+            className={cn(
+              "rounded-full px-3 py-1.5 transition-colors",
+              state.tab === mode ? "bg-accent text-zinc-950" : "text-zinc-400 hover:text-zinc-200",
+            )}
+          >
+            {label}
+            {readyTotal(state[mode]) !== null && (
+              <span className="ml-1.5 opacity-70">{readyTotal(state[mode])}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {tab.status === "loading" && (
         <p className="flex items-center gap-2 text-sm text-zinc-400">
           <Loader2 className="h-4 w-4 animate-spin text-accent" />
-          Finding films with the same two actors...
+          {state.tab === "same"
+            ? "Finding films with the same two actors..."
+            : "Searching the casts of both neighbours for a detour..."}
         </p>
       )}
 
-      {state.status === "error" && <p className="text-sm text-red-400">{state.message}</p>}
+      {tab.status === "error" && <p className="text-sm text-red-400">{tab.message}</p>}
 
-      {state.status === "ready" &&
-        (state.candidates.length === 0 ? (
+      {tab.status === "ready" &&
+        (tab.candidates.length === 0 ? (
           <p className="text-sm text-zinc-400">
-            No other film stars both {actorNames[0]} and {actorNames[1]}.
+            {state.tab === "same"
+              ? `No other film stars both ${actorNames[0]} and ${actorNames[1]}.`
+              : "No film in the cache links these two neighbours through different cast."}
           </p>
         ) : (
           <>
             <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {state.candidates.map((candidate) => {
+              {tab.candidates.map((candidate) => {
                 const onServer = onServerMap?.[candidate.node.movie_id]?.on_server;
                 return (
                   <li
@@ -89,6 +138,14 @@ export default function BridgeSwapPanel({
                         {candidate.node.title}
                       </p>
                       <p className="text-xs text-zinc-500">{candidate.node.release_year ?? "—"}</p>
+                      {state.tab === "broad" && (
+                        <p
+                          className="truncate text-[10px] text-accent"
+                          title={`${candidate.connection_in.actor_name} / ${candidate.connection_out.actor_name}`}
+                        >
+                          {candidate.connection_in.actor_name} → {candidate.connection_out.actor_name}
+                        </p>
+                      )}
                       <OnServerBadge onServer={onServer} />
                     </div>
                     <button
@@ -104,9 +161,9 @@ export default function BridgeSwapPanel({
                 );
               })}
             </ul>
-            {state.total > state.candidates.length && (
+            {tab.total > tab.candidates.length && (
               <p className="mt-2 text-xs text-zinc-500">
-                Showing the {state.candidates.length} most popular of {state.total} matches.
+                Showing the {tab.candidates.length} most popular of {tab.total} matches.
               </p>
             )}
           </>

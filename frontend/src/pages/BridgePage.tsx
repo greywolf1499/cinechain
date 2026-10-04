@@ -19,7 +19,7 @@ import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
 import MoviePreviewModal from "../components/MoviePreviewModal";
 import BridgePathView, { PathTagChips } from "../components/BridgePathView";
-import BridgeSwapPanel, { type SwapState } from "../components/BridgeSwapPanel";
+import BridgeSwapPanel, { type SwapState, type SwapTabState } from "../components/BridgeSwapPanel";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { connectionMetadata } from "../lib/connections";
@@ -31,6 +31,7 @@ import type {
   MovieSummary,
   PathTagsResult,
   SwapCandidate,
+  SwapMode,
   SwapNodeResult,
 } from "../types/api";
 
@@ -361,18 +362,17 @@ export default function BridgePage() {
     setActivePathIndex(index);
   }
 
-  async function handleSwap(index: number) {
+  async function loadSwapTab(index: number, mode: SwapMode) {
     if (!activePath) return;
-    if (swap?.index === index) {
-      setSwap(null);
-      return;
-    }
     const connectionIn = activePath.connections[index - 1];
     const connectionOut = activePath.connections[index];
     if (!connectionIn || !connectionOut) return;
 
-    const requestId = ++swapRequestRef.current;
-    setSwap({ index, status: "loading" });
+    // A new generation starts whenever a swap is opened/closed; both tabs share it.
+    const requestId = swapRequestRef.current;
+    const setTab = (tab: SwapTabState) =>
+      setSwap((prev) => (prev && prev.index === index ? { ...prev, [mode]: tab } : prev));
+    setTab({ status: "loading" });
     const params = new URLSearchParams({
       movie_id: String(activePath.path[index].movie_id),
       from_movie_id: String(activePath.path[index - 1].movie_id),
@@ -381,21 +381,39 @@ export default function BridgePage() {
       actor_out_id: String(connectionOut.actor_id),
       exclude_movie_ids: activePath.path.map((node) => node.movie_id).join(","),
       game_type: solveGameType,
+      mode,
     });
     if (runIdFromQuery) params.set("run_id", runIdFromQuery);
     try {
       const data = await api.get<SwapNodeResult>(`/engine/bridge/swap-node?${params.toString()}`);
       if (requestId !== swapRequestRef.current) return;
-      setSwap({ index, status: "ready", candidates: data.candidates, total: data.total });
+      setTab({ status: "ready", candidates: data.candidates, total: data.total });
       void lookupOnServer(data.candidates.map((candidate) => candidate.node.movie_id));
     } catch (err) {
       if (requestId !== swapRequestRef.current) return;
-      setSwap({
-        index,
+      setTab({
         status: "error",
         message: err instanceof ApiError ? err.message : "Couldn't look up alternatives.",
       });
     }
+  }
+
+  function handleSwap(index: number) {
+    if (!activePath) return;
+    if (swap?.index === index) {
+      setSwap(null);
+      return;
+    }
+    if (!activePath.connections[index - 1] || !activePath.connections[index]) return;
+    swapRequestRef.current += 1;
+    setSwap({ index, tab: "same", same: { status: "loading" }, broad: { status: "idle" } });
+    void loadSwapTab(index, "same");
+  }
+
+  function handleSwapTab(mode: SwapMode) {
+    if (!swap) return;
+    setSwap({ ...swap, tab: mode });
+    if (swap[mode].status === "idle" || swap[mode].status === "error") void loadSwapTab(swap.index, mode);
   }
 
   async function applySwap(candidate: SwapCandidate) {
@@ -809,6 +827,7 @@ export default function BridgePage() {
                 onServerMap={onServerMap}
                 applying={applyingSwap}
                 onPick={applySwap}
+                onTabChange={handleSwapTab}
                 onClose={() => {
                   swapRequestRef.current += 1;
                   setSwap(null);

@@ -62,9 +62,10 @@ class TMDBCastMember(TypedDict):
     order: int
 
 
-class TMDBDirector(TypedDict):
+class TMDBDirector(TypedDict, total=False):
     id: int
     name: str
+    gender: int  # TMDB: 0 unspecified, 1 female, 2 male, 3 non-binary
 
 
 class TMDBPersonCredit(TypedDict, total=False):
@@ -257,7 +258,9 @@ class TMDBClient:
         for member in data.get("crew", []):
             if member.get("job") == "Director" and member["id"] not in seen:
                 seen.add(member["id"])
-                directors.append(TMDBDirector(id=member["id"], name=member.get("name", "")))
+                directors.append(TMDBDirector(
+                    id=member["id"], name=member.get("name", ""),
+                    gender=member.get("gender", 0)))
         return directors
 
     async def get_person_movie_credits(self, person_id: int) -> list[TMDBPersonCredit]:

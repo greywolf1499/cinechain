@@ -25,17 +25,17 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "map",
-		name: "Map Generator",
-		description: "Plot a run's films by country of origin on a world map.",
+		name: "Run Map",
+		description: "Trace a run's marathon on a world map: countries lit up, numbered stops in order.",
 		icon: MapIcon,
-		to: null,
+		to: "/tools/map",
 	},
 	{
 		id: "bingo",
-		name: "Bingo Generator",
-		description: "Turn curated lists and genres into a printable watch-along bingo card.",
+		name: "Watchlist Bingo",
+		description: "A randomised 5x5 card of cinephile challenges, filled from your Letterboxd watchlist.",
 		icon: Dices,
-		to: null,
+		to: "/tools/bingo",
 	},
 ];
 

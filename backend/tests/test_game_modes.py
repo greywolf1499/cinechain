@@ -311,3 +311,55 @@ def test_win_conditions_work_in_tracker_modes(client):
         _log(client, run_id, 1)
         _log(client, run_id, 2)
     assert client.get(f"/api/runs/{run_id}").json()["status"] == "completed"
+
+
+# --- Roulette filter matrix (Phase 22b) ---
+
+
+def _seed_matrix(db_engine):
+    rows = [
+        # id, runtime, genres, imdb
+        (11, 120, [35, 10749], "4.8"),  # bad rom-com
+        (12, 105, [28, 12], "5.4"),  # bad action-adventure
+        (13, 160, [18], "8.4"),  # epic drama
+        (14, 85, [35, 16], "7.2"),  # animated comedy
+    ]
+    with Session(db_engine) as session:
+        for tmdb_id, runtime, genres, _ in rows:
+            session.add(CachedMovie(tmdb_id=tmdb_id, title=f"M{tmdb_id}", runtime=runtime,
+                                    genre_ids=genres, release_date="2000-01-01", status="Released"))
+        session.commit()
+        for tmdb_id, _, _, imdb in rows:
+            session.add(CachedMovieRating(movie_id=tmdb_id, imdb_rating=imdb))
+        session.commit()
+
+
+def test_spin_rating_and_runtime_ranges(client, db_engine):
+    _seed_matrix(db_engine)
+    assert _spin_ids(client, min_rating=1.0, max_rating=5.5) == {11, 12}  # a "bad movie night"
+    assert _spin_ids(client, min_runtime=100, max_runtime=130, max_rating=5.5) == {11, 12}
+    assert _spin_ids(client, min_runtime=150, min_rating=8) == {13}
+    assert _spin_ids(client, max_rating=5.0) == {11}
+
+
+def test_spin_genre_and_requires_every_genre_or_any(client, db_engine):
+    _seed_matrix(db_engine)
+    assert _spin_ids(client, genre_ids=[35, 16], genre_operator="AND") == {14}
+    assert _spin_ids(client, genre_ids=[35, 18], genre_operator="OR") == {11, 13, 14}
+
+
+def test_spin_genre_and_with_no_film_having_all_is_a_404(client, db_engine):
+    _seed_matrix(db_engine)
+    resp = client.get("/api/engine/roulette/spin", params={
+        "genre_ids": [35, 18], "genre_operator": "AND"})
+    assert resp.status_code == 404
+
+
+def test_spin_rejects_inverted_ranges_and_bad_operators(client, db_engine):
+    _seed_matrix(db_engine)
+    assert client.get("/api/engine/roulette/spin", params={
+        "min_runtime": 200, "max_runtime": 100}).status_code == 422
+    assert client.get("/api/engine/roulette/spin", params={
+        "min_rating": 8, "max_rating": 3}).status_code == 422
+    assert client.get("/api/engine/roulette/spin", params={
+        "genre_ids": [35], "genre_operator": "XOR"}).status_code == 422

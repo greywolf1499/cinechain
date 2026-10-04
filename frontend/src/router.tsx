@@ -7,6 +7,8 @@ import RunDetailPage from "./pages/RunDetailPage";
 import BridgePage from "./pages/BridgePage";
 import PassportPage from "./pages/PassportPage";
 import ToolsPage from "./pages/ToolsPage";
+import BingoPage from "./pages/BingoPage";
+import MapPage from "./pages/MapPage";
 import SettingsLayout from "./pages/settings/SettingsLayout";
 import {
   EngineSettings,
@@ -37,6 +39,8 @@ export const router = createBrowserRouter([
           { path: "runs/:id", element: <RunDetailPage /> },
           { path: "tools", element: <ToolsPage /> },
           { path: "tools/bridge", element: <BridgePage /> },
+          { path: "tools/bingo", element: <BingoPage /> },
+          { path: "tools/map", element: <MapPage /> },
           { path: "bridge", element: <LegacyBridgeRedirect /> },
           { path: "passport", element: <PassportPage /> },
           { path: "lists", element: <ListsPage /> },

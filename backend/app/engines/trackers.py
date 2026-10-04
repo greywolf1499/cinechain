@@ -100,7 +100,10 @@ class SpinFilters:
     max_runtime: int | None = None
     min_runtime: int | None = None
     min_rating: float | None = None  # IMDb, from cached OMDb ratings
-    genre_id: int | None = None
+    max_rating: float | None = None
+    genre_id: int | None = None  # legacy single genre; merged into `genre_ids`
+    genre_ids: Sequence[int] = ()
+    genre_operator: str = "OR"  # AND = every selected genre, OR = any of them
     exclude_movie_ids: Sequence[int] = ()
 
 
@@ -128,19 +131,34 @@ class RouletteEngine(TrackerEngine):
         if filters.min_runtime is not None:
             statement = statement.where(
                 CachedMovie.runtime.is_not(None), CachedMovie.runtime >= filters.min_runtime)  # type: ignore[union-attr]
-        if filters.min_rating is not None:
+        if filters.min_rating is not None or filters.max_rating is not None:
+            rating = cast(CachedMovieRating.imdb_rating, Float)
             statement = statement.join(
                 CachedMovieRating, CachedMovieRating.movie_id == CachedMovie.tmdb_id
             ).where(
                 CachedMovieRating.imdb_rating.is_not(None),  # type: ignore[union-attr]
                 CachedMovieRating.imdb_rating != "N/A",
-                cast(CachedMovieRating.imdb_rating, Float) >= filters.min_rating,
             )
-        if filters.genre_id is not None:
-            statement = statement.where(text(
-                "EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g "
-                "WHERE g.value = :genre_id)"
-            ).bindparams(genre_id=filters.genre_id))
+            if filters.min_rating is not None:
+                statement = statement.where(rating >= filters.min_rating)
+            if filters.max_rating is not None:
+                statement = statement.where(rating <= filters.max_rating)
+        genre_ids = list(dict.fromkeys(
+            [*filters.genre_ids, *([filters.genre_id] if filters.genre_id is not None else [])]))
+        if genre_ids:
+            params = {f"genre_{i}": genre for i, genre in enumerate(genre_ids)}
+            if filters.genre_operator.upper() == "AND":
+                clauses = [
+                    text(f"EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g "
+                         f"WHERE g.value = :{name})").bindparams(**{name: value})
+                    for name, value in params.items()
+                ]
+                statement = statement.where(*clauses)
+            else:
+                placeholders = ", ".join(f":{name}" for name in params)
+                statement = statement.where(text(
+                    "EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g "
+                    f"WHERE g.value IN ({placeholders}))").bindparams(**params))
         if filters.exclude_movie_ids:
             statement = statement.where(
                 CachedMovie.tmdb_id.not_in(list(filters.exclude_movie_ids)))  # type: ignore[union-attr]

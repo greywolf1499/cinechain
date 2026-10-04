@@ -36,6 +36,8 @@ EPIC_RUNTIME_MIN_FILMS = 2
 
 HYDRATE_DEADLINE_SECONDS = 10.0
 SWAP_RESPONSE_CAP = 12
+# Broad Detour: top-billed actors of each endpoint whose filmographies are searched.
+BROAD_CAST_DEPTH = 8
 
 
 def parse_countries(raw: str | None) -> list[str]:
@@ -203,3 +205,76 @@ async def ensure_filmographies(
             lambda actor_id=actor_id: cache_repo.get_actor_credits(session, tmdb, actor_id),
             deadline,
         )
+
+
+async def ensure_broad_pool(
+    session: Session, tmdb: TMDBClient, from_movie_id: int, to_movie_id: int, deadline: float
+) -> tuple[list[int], list[int]]:
+    """Top-billed actors of both path endpoints, with their filmographies cached
+    (as many as the deadline allows - a partial pool still yields detours)."""
+    cast_from = await cache_repo.get_movie_cast(session, tmdb, from_movie_id, BROAD_CAST_DEPTH)
+    cast_to = await cache_repo.get_movie_cast(session, tmdb, to_movie_id, BROAD_CAST_DEPTH)
+    actors_from = [entry["actor_id"] for entry in cast_from[:BROAD_CAST_DEPTH]]
+    actors_to = [entry["actor_id"] for entry in cast_to[:BROAD_CAST_DEPTH]]
+    try:
+        await ensure_filmographies(session, tmdb, [*actors_from, *actors_to], deadline)
+    except DeadlineReached:
+        pass
+    return actors_from, actors_to
+
+
+def find_broad_detours(
+    session: Session,
+    *,
+    from_movie_id: int,
+    to_movie_id: int,
+    actors_from: Sequence[int],
+    actors_to: Sequence[int],
+    exclude_movie_ids: set[int],
+    same_pair: tuple[int, int] | None = None,
+    limit: int = SWAP_RESPONSE_CAP,
+) -> tuple[list[SwapCandidate], int]:
+    """The Broad Detour: films sharing *some* actor with Movie_A and *some* actor
+    with Movie_C, whoever they are. Films that star both of the path's own
+    connecting actors are left to the Same-Actors list."""
+    if not actors_from or not actors_to:
+        return [], 0
+
+    def films_by_actor(actor_ids: Sequence[int]) -> dict[int, list[int]]:
+        by_movie: dict[int, list[int]] = {}
+        rows = session.exec(
+            select(CachedMovieCast.movie_id, CachedMovieCast.actor_id).where(
+                col(CachedMovieCast.actor_id).in_(list(actor_ids)))
+        ).all()
+        for movie_id, actor_id in rows:
+            by_movie.setdefault(movie_id, []).append(actor_id)
+        return by_movie
+
+    into, out_of = films_by_actor(actors_from), films_by_actor(actors_to)
+    skip = exclude_movie_ids | {from_movie_id, to_movie_id}
+    movie_ids = [m for m in into.keys() & out_of.keys() if m not in skip]
+
+    candidates: list[tuple[CachedMovie, int, int]] = []
+    for movie in session.exec(
+        select(CachedMovie).where(col(CachedMovie.tmdb_id).in_(movie_ids))
+    ).all() if movie_ids else []:
+        if not is_reality_eligible(movie):
+            continue
+        # Prefer the most top-billed actor on each side (list order = billing order).
+        actor_in = min(into[movie.tmdb_id], key=actors_from.index)
+        actor_out = min(out_of[movie.tmdb_id], key=actors_to.index)
+        if same_pair is not None and same_pair[0] in into[movie.tmdb_id] \
+                and same_pair[1] in out_of[movie.tmdb_id]:
+            continue
+        candidates.append((movie, actor_in, actor_out))
+    candidates.sort(key=lambda c: (-(c[0].popularity or 0.0), c[0].title))
+
+    swaps = [
+        SwapCandidate(
+            node=make_bridge_node(movie, movie.tmdb_id),
+            connection_in=_connection(session, actor_in, from_movie_id, movie.tmdb_id),
+            connection_out=_connection(session, actor_out, movie.tmdb_id, to_movie_id),
+        )
+        for movie, actor_in, actor_out in candidates[:limit]
+    ]
+    return swaps, len(candidates)

@@ -56,8 +56,23 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
     embedding_model: str = ""
 
+    # --- Generative model for pitches/teasers (opt-in; admin settings override these) ---
+    llm_provider: str = "off"  # off | local_gguf | ollama | openai
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+    # Local GGUF: seconds idle before the model is unloaded (0 = unload right after each call).
+    llm_keep_alive_seconds: int = 300
+    llm_gguf_url: str = (
+        "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf"
+    )
+
     # --- Bridge solver pacing (Phase 15.5) ---
     bridge_max_duration_seconds: int = 45
+
+    @property
+    def llm_model_dir(self) -> Path:
+        return self.config_dir / "models" / "qwen3.5-0.8b"
 
     @property
     def onnx_model_dir(self) -> Path:

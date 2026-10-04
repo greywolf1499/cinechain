@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SharedActorConnection(BaseModel):
@@ -30,6 +30,8 @@ class ValidationResult(BaseModel):
     color_distance: float | None = None  # Aesthetic Gradient, RGB Euclidean distance
     # Rule evidence for this hop (Chrono year delta, Passport countries), stored on the step.
     mechanic: dict[str, Any] | None = None
+    # Meet in the Middle: this film would also connect the opposite end - the chains collide.
+    collision: bool = False
 
 
 class SuggestionFilters(BaseModel):
@@ -136,3 +138,42 @@ class RunStats(BaseModel):
     countries: list[str]
     decades: list[int]
     keystone_actors: list[KeystoneActor]
+
+
+class PitchRequest(BaseModel):
+    previous_movie_id: int
+    candidate_movie_id: int
+    # What links them, if the caller knows (e.g. "Tom Hanks"): grounds the pitch.
+    link_label: str | None = Field(default=None, max_length=120)
+
+
+class PitchResult(BaseModel):
+    pitch: str
+
+
+class TeaserRequest(BaseModel):
+    movie_ids: list[int] = Field(min_length=1, max_length=5)
+
+
+class TeaserResult(BaseModel):
+    # movie id -> spoiler-free teaser; a film whose teaser failed is simply absent.
+    teasers: dict[int, str]
+
+
+class LlmStatus(BaseModel):
+    enabled: bool
+    provider: str
+
+
+class TunnelState(BaseModel):
+    """Meet in the Middle: where the two ends are and how far apart."""
+
+    head_frontier_movie_id: int | None = None
+    tail_frontier_movie_id: int | None = None
+    head_steps: int = 0
+    tail_steps: int = 0
+    collided: bool = False
+    # Movie-hops between the two frontiers: 0 = collided, None = none found within the limits.
+    distance_hops: int | None = None
+    searched_depth: int = 0
+    message: str | None = None

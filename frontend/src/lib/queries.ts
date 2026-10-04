@@ -20,6 +20,9 @@ import type {
 	RunDetail,
 	RunStats,
 	ConstraintInfo,
+	LlmStatus,
+	TunnelSide,
+	TunnelState,
 	RawRulesConfig,
 	RunStatus,
 	RulesConfig,
@@ -78,6 +81,27 @@ export function useRunStats(runId: string | undefined) {
 		queryKey: queryKeys.runStats(runId ?? ""),
 		queryFn: () => api.get<RunStats>(`/runs/${runId}/stats`),
 		enabled: !!runId,
+	});
+}
+
+/** Meet in the Middle: both frontiers and the distance between them. Refetches whenever the
+ * run changes (it lives under the run's key prefix) - `stepCount` keys it so each chain length
+ * is measured once. */
+export function useTunnelState(runId: string | undefined, stepCount: number, enabled = true) {
+	return useQuery({
+		queryKey: [...queryKeys.run(runId ?? ""), "tunnel", stepCount],
+		queryFn: () => api.get<TunnelState>(`/runs/${runId}/tunnel`),
+		enabled: !!runId && enabled,
+		staleTime: 60_000,
+	});
+}
+
+/** Are the opt-in generative features (pitches, teasers) switched on? */
+export function useLlmStatus() {
+	return useQuery({
+		queryKey: ["engine", "llm-status"],
+		queryFn: () => api.get<LlmStatus>("/engine/llm/status"),
+		staleTime: 60_000,
 	});
 }
 
@@ -255,6 +279,8 @@ export function useCreateRun() {
 			game_type: string;
 			participant_user_ids: string[];
 			seed_movie_id?: number | null;
+			/** Meet in the Middle: Partner B's starting film. */
+			tail_seed_movie_id?: number | null;
 			rules_config?: RulesConfig | RawRulesConfig;
 		}) => api.post<RunDetail>("/runs", payload),
 		onSuccess: () => {
@@ -307,6 +333,8 @@ export function useCreateStep(runId: string) {
 			force?: boolean;
 			status?: StepStatus;
 			watched_at?: string | null;
+			/** Meet in the Middle: which end of the tunnel this film extends. */
+			tunnel_side?: TunnelSide;
 		}) => api.post(`/runs/${runId}/steps`, payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });

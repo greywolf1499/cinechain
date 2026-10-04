@@ -1,5 +1,6 @@
 import {
   Clapperboard,
+  Combine,
   Compass,
   Dices,
   Globe2,
@@ -42,6 +43,14 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     bubble: "bg-orange-500/15 text-orange-300",
     ring: "border-orange-400 shadow-[0_0_0_1px_rgba(251,146,60,0.6),0_8px_30px_-8px_rgba(251,146,60,0.35)]",
     text: "text-orange-300",
+  },
+  meet_in_the_middle: {
+    icon: Combine,
+    tagline: "Two partners, one tunnel",
+    tags: ["Shared cast", "Co-op", "Two seeds"],
+    bubble: "bg-cyan-500/15 text-cyan-300",
+    ring: "border-cyan-400 shadow-[0_0_0_1px_rgba(34,211,238,0.6),0_8px_30px_-8px_rgba(34,211,238,0.35)]",
+    text: "text-cyan-300",
   },
   canon_island: {
     icon: Landmark,

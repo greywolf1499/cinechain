@@ -15,13 +15,18 @@ from app.engines.trackers import RouletteEngine, SpinFilters
 from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
 from app.models.user import User
 from app.schemas.engine import (
+    LlmStatus,
     PathTagsResult,
+    PitchRequest,
+    PitchResult,
     RouletteMovie,
     RouletteSpinResult,
     SwapNodeResult,
+    TeaserRequest,
+    TeaserResult,
     ValidationResult,
 )
-from app.services import bridge_paths, settings_repo
+from app.services import bridge_paths, cache_repo, llm, settings_repo
 from app.services.tmdb import TMDBClient, TMDBError
 from app.services.tmdb_backoff import DeadlineReached
 from app.utils.dates import parse_release_year
@@ -164,6 +169,71 @@ def _tmdb_unavailable(exc: Exception) -> HTTPException:
             detail="TMDB is rate limiting us right now - try again in a moment")
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TMDB lookup failed: {exc}")
+
+
+def _llm_config(session: Session) -> llm.LlmConfig:
+    config = llm.load_config(session)
+    if not config.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The generative model is off - an admin can enable it under "
+                   "Settings > Integrations > AI & Embeddings.")
+    return config
+
+
+@router.get("/engine/llm/status", response_model=LlmStatus)
+def llm_status(
+    session: Session = Depends(get_session),
+    _user: User = Depends(get_current_user),
+) -> LlmStatus:
+    """Whether the opt-in generative features (pitches, teasers) are switched on."""
+    config = llm.load_config(session)
+    return LlmStatus(enabled=config.enabled, provider=config.provider)
+
+
+@router.post("/engine/pitch", response_model=PitchResult)
+async def pitch_transition(
+    payload: PitchRequest,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _user: User = Depends(get_current_user),
+) -> PitchResult:
+    """A one-sentence cinephile pitch for why `candidate` follows `previous`."""
+    config = _llm_config(session)
+    try:
+        previous = await cache_repo.get_movie(session, tmdb, payload.previous_movie_id)
+        candidate = await cache_repo.get_movie(session, tmdb, payload.candidate_movie_id)
+    except (TMDBError, DeadlineReached) as exc:
+        raise _tmdb_unavailable(exc) from exc
+    try:
+        text = await llm.pitch(config, previous, candidate, payload.link_label)
+    except llm.LlmUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return PitchResult(pitch=text)
+
+
+@router.post("/engine/teasers", response_model=TeaserResult)
+async def blind_draft_teasers(
+    payload: TeaserRequest,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _user: User = Depends(get_current_user),
+) -> TeaserResult:
+    """Cryptic, spoiler-free one-sentence teasers standing in for the raw TMDB overview."""
+    config = _llm_config(session)
+    teasers: dict[int, str] = {}
+    failure: llm.LlmUnavailable | None = None
+    for movie_id in dict.fromkeys(payload.movie_ids):
+        try:
+            movie = await cache_repo.get_movie(session, tmdb, movie_id)
+            teasers[movie_id] = await llm.teaser(config, movie)
+        except llm.LlmUnavailable as exc:
+            failure = exc
+        except (TMDBError, DeadlineReached) as exc:
+            raise _tmdb_unavailable(exc) from exc
+    if not teasers and failure is not None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(failure))
+    return TeaserResult(teasers=teasers)
 
 
 @router.get("/engine/roulette/spin", response_model=RouletteSpinResult)

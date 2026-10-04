@@ -14,7 +14,7 @@ from app.integrations.radarr import check_radarr_connectivity
 from app.integrations.seerr import DEFAULT_URL as SEERR_DEFAULT_URL
 from app.integrations.seerr import check_seerr_connectivity
 from app.models.user import User
-from app.services import embeddings, settings_repo
+from app.services import embeddings, llm, settings_repo
 from app.services.tmdb import check_tmdb_connectivity
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -42,6 +42,13 @@ class IntegrationConfigOut(BaseModel):
     embedding_base_url: str = ""
     embedding_model: str = ""
     embedding_api_key_masked: str | None = None
+    llm_provider: Literal["off", "local_gguf", "ollama", "openai"] = "off"
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_api_key_masked: str | None = None
+    llm_keep_alive_seconds: int = 300
+    # Is llama-cpp-python installed (the local GGUF provider needs it)?
+    llm_local_available: bool = False
 
 
 class IntegrationConfigUpdate(BaseModel):
@@ -61,6 +68,11 @@ class IntegrationConfigUpdate(BaseModel):
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_model: str | None = None
+    llm_provider: Literal["off", "local_gguf", "ollama", "openai"] | None = None
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str | None = None
+    llm_keep_alive_seconds: int | None = Field(default=None, ge=0, le=llm.MAX_KEEP_ALIVE_SECONDS)
 
 
 class ConnectivityTestResult(BaseModel):
@@ -82,6 +94,25 @@ class EmbeddingTestResult(BaseModel):
     ok: bool
     latency_ms: int | None = None
     dimension: int | None = None
+    provider: str
+    model: str
+    detail: str | None = None
+
+
+class LlmTestRequest(BaseModel):
+    """Candidate generative-model settings; a blank key falls back to the stored one."""
+
+    llm_provider: Literal["off", "local_gguf", "ollama", "openai"]
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str | None = None
+    llm_keep_alive_seconds: int | None = Field(default=None, ge=0, le=llm.MAX_KEEP_ALIVE_SECONDS)
+
+
+class LlmTestResult(BaseModel):
+    ok: bool
+    latency_ms: int | None = None
+    output: str | None = None
     provider: str
     model: str
     detail: str | None = None
@@ -125,6 +156,7 @@ def _build_config(session: Session) -> IntegrationConfigOut:
     radarr_key = overrides.get("radarr_api_key") or base.radarr_api_key
     seerr_key = overrides.get("seerr_api_key") or base.seerr_api_key
     embedding = embeddings.load_config(session)
+    generative = llm.load_config(session)
     profile_id = overrides.get("radarr_default_quality_profile_id")
     seerr_user = overrides.get("seerr_user_id")
     return IntegrationConfigOut(
@@ -154,6 +186,12 @@ def _build_config(session: Session) -> IntegrationConfigOut:
         embedding_base_url=embedding.base_url,
         embedding_model=embedding.model,
         embedding_api_key_masked=_mask(embedding.api_key),
+        llm_provider=generative.provider,  # type: ignore[arg-type]
+        llm_base_url=generative.base_url,
+        llm_model=generative.model,
+        llm_api_key_masked=_mask(generative.api_key),
+        llm_keep_alive_seconds=generative.keep_alive_seconds,
+        llm_local_available=llm.local_runtime_available(),
     )
 
 
@@ -258,6 +296,25 @@ async def test_embedding_provider(
         model=payload.embedding_model or "",
     )
     return EmbeddingTestResult(**await embeddings.check_connection(config))
+
+
+@router.post("/integrations/test-llm", response_model=LlmTestResult)
+async def test_llm_generation(
+    payload: LlmTestRequest,
+    session: Session = Depends(get_session),
+    _admin: User = Depends(get_current_admin),
+) -> LlmTestResult:
+    """Runs one tiny real generation with the candidate settings. The local provider is unloaded
+    again straight afterwards unless it was already resident for real use."""
+    stored = llm.load_config(session)
+    config = llm.LlmConfig(
+        provider=payload.llm_provider,
+        base_url=payload.llm_base_url or "",
+        api_key=payload.llm_api_key or stored.api_key,
+        model=payload.llm_model or "",
+        keep_alive_seconds=0 if payload.llm_keep_alive_seconds is None else payload.llm_keep_alive_seconds,
+    )
+    return LlmTestResult(**await llm.check_connection(config))
 
 
 class SolverConfigOut(BaseModel):

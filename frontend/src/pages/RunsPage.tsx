@@ -14,6 +14,7 @@ import { api } from "../lib/api";
 import { useCreateRun, useCuratedLists, useRuns, useUsers } from "../lib/queries";
 import { cn } from "../lib/cn";
 import { usesCastLinks } from "../lib/gameModes";
+import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
 import { clearModifiers, modifierPayload } from "../lib/modifiers";
 import { useAuthStore } from "../store/authStore";
 import type { EngineMeta, MovieSummary, RulesConfig } from "../types/api";
@@ -103,6 +104,8 @@ function NewRunModal({
   const [gameType, setGameType] = useState("cinechain");
   const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [seedMovie, setSeedMovie] = useState<MovieSummary | null>(null);
+  // Meet in the Middle: Partner B's starting film (Partner A's is `seedMovie`).
+  const [tailSeedMovie, setTailSeedMovie] = useState<MovieSummary | null>(null);
   const [rules, setRules] = useState<RulesConfig>(RULE_PRESETS.standard);
   const [canonListId, setCanonListId] = useState("");
   const [targetDecade, setTargetDecade] = useState(1970);
@@ -131,7 +134,9 @@ function NewRunModal({
     ...(needsCanonList ? { allowed_curated_list_id: canonListId } : {}),
     ...(needsDecade ? { target_decade: targetDecade } : {}),
   };
-  const missingMode = needsCanonList && !canonListId;
+  const isTunnel = gameType === MEET_IN_THE_MIDDLE;
+  const missingMode = (needsCanonList && !canonListId) || (isTunnel && (!seedMovie || !tailSeedMovie));
+  const sameSeeds = isTunnel && !!seedMovie && seedMovie.tmdb_id === tailSeedMovie?.tmdb_id;
 
   // Modifiers belong to one mode: switching modes starts from a clean slate.
   function selectMode(mode: string) {
@@ -159,6 +164,7 @@ function NewRunModal({
     setGameType("cinechain");
     setParticipantIds([]);
     setSeedMovie(null);
+    setTailSeedMovie(null);
     setRules(RULE_PRESETS.standard);
     setCanonListId("");
     setTargetDecade(1970);
@@ -176,6 +182,7 @@ function NewRunModal({
       game_type: gameType,
       participant_user_ids: participantIds,
       seed_movie_id: seedMovie?.tmdb_id ?? null,
+      tail_seed_movie_id: isTunnel ? (tailSeedMovie?.tmdb_id ?? null) : null,
       rules_config: rawEnabled && rawParse.value ? rawParse.value : formRules,
     });
     reset();
@@ -274,10 +281,32 @@ function NewRunModal({
           </div>
         </Field>
 
-        <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-zinc-400">Seed movie (optional)</span>
-          <SeedMoviePicker value={seedMovie} onChange={setSeedMovie} gameType={gameType} />
-        </div>
+        {isTunnel ? (
+          <div className="grid grid-cols-1 gap-4 rounded-lg border border-cyan-400/30 bg-cyan-500/5 p-3 md:grid-cols-2">
+            <p className="text-[11px] text-cyan-200/80 md:col-span-2">
+              Each partner brings a starting film. You will extend your chains towards each other until
+              one film connects both ends.
+            </p>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-sky-300">Partner A&apos;s seed</span>
+              <SeedMoviePicker value={seedMovie} onChange={setSeedMovie} gameType={gameType} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-orange-300">Partner B&apos;s seed</span>
+              <SeedMoviePicker value={tailSeedMovie} onChange={setTailSeedMovie} gameType={gameType} />
+            </div>
+            {sameSeeds && (
+              <p role="alert" className="text-xs text-amber-400 md:col-span-2">
+                The two partners need different starting films.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-zinc-400">Seed movie (optional)</span>
+            <SeedMoviePicker value={seedMovie} onChange={setSeedMovie} gameType={gameType} />
+          </div>
+        )}
 
         {isAdmin && engineSupportsRaw && (
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-app-border px-3 py-2">
@@ -330,7 +359,8 @@ function NewRunModal({
           disabled={
             !name.trim() ||
             createRun.isPending ||
-            (rawEnabled ? rawParse.error !== null : missingMode)
+            sameSeeds ||
+            (rawEnabled ? rawParse.error !== null || (isTunnel && missingMode) : missingMode)
           }
           onClick={handleSubmit}
           className="mt-1 flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"

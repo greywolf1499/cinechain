@@ -7,6 +7,13 @@ import type { RouletteMovie } from "../types/api";
 // Posters and titles stay masked behind a heavy blur until a card is chosen.
 const BLIND_MASK = "backdrop-blur-md filter blur-md";
 
+/** Where the AI-written replacement for each film's plot stands (Cryptic Blind Draft). */
+export type TeaserState =
+  | { status: "off" }
+  | { status: "loading" }
+  | { status: "ready"; byId: Record<string, string> }
+  | { status: "error"; message: string };
+
 function decadeLabel(year: number | null): string | null {
   return year ? `${Math.floor(year / 10) * 10}s` : null;
 }
@@ -18,11 +25,13 @@ export default function BlindDraft({
   poolSize,
   logging,
   onLog,
+  teasers = { status: "off" },
 }: {
   movies: RouletteMovie[];
   poolSize: number;
   logging: boolean;
   onLog: (movie: RouletteMovie, watched: boolean) => void;
+  teasers?: TeaserState;
 }) {
   const [votes, setVotes] = useState<Record<number, number>>({});
   const [chosenId, setChosenId] = useState<number | null>(null);
@@ -95,13 +104,21 @@ export default function BlindDraft({
           : "Blind Draft: vote on the vibe, then reveal. No peeking at posters or titles."}
       </p>
 
+      {teasers.status === "error" && (
+        <p className="text-[11px] text-amber-400">
+          AI teasers unavailable ({teasers.message}) - showing the plain plot instead.
+        </p>
+      )}
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {movies.map((movie, index) => {
           const isChosen = movie.tmdb_id === chosenId;
           const masked = !isChosen || !sharp;
           const count = votes[movie.tmdb_id] ?? 0;
           const decade = decadeLabel(movie.release_year);
-          const logline = movie.overview;
+          // Cryptic mode never shows the raw plot: until the AI teaser arrives there is a placeholder.
+          const aiTeaser = teasers.status === "ready" ? teasers.byId[String(movie.tmdb_id)] : undefined;
+          const logline = teasers.status === "loading" ? null : (aiTeaser ?? movie.overview);
           return (
             <div
               key={movie.tmdb_id}
@@ -158,7 +175,23 @@ export default function BlindDraft({
                 {movie.tagline && (
                   <p className="mt-1.5 text-xs font-medium italic text-zinc-300">&ldquo;{movie.tagline}&rdquo;</p>
                 )}
-                {logline && <p className="mt-1 line-clamp-4 text-[11px] leading-relaxed text-zinc-500">{logline}</p>}
+                {teasers.status === "loading" && (
+                  <p className="mt-1 flex animate-pulse items-center gap-1 text-[11px] text-fuchsia-300/80">
+                    <Sparkles className="h-3 w-3" />
+                    Writing a cryptic teaser...
+                  </p>
+                )}
+                {logline && (
+                  <p
+                    className={cn(
+                      "mt-1 line-clamp-4 text-[11px] leading-relaxed",
+                      aiTeaser ? "italic text-fuchsia-200/90" : "text-zinc-500",
+                    )}
+                  >
+                    {aiTeaser && <span aria-hidden>✨ </span>}
+                    {logline}
+                  </p>
+                )}
               </div>
 
               {!chosen && (

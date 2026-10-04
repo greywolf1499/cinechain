@@ -26,6 +26,8 @@ class RunCreate(BaseModel):
     game_type: str = "cinechain"
     participant_user_ids: list[str] = Field(default_factory=list)
     seed_movie_id: int | None = None
+    # Meet in the Middle: Partner B's starting film (`seed_movie_id` is Partner A's).
+    tail_seed_movie_id: int | None = None
     rules_config: dict[str, Any] | None = None
 
 
@@ -61,10 +63,13 @@ class RunStepCreate(BaseModel):
     status: str = "watched"  # watched | planned
     # ignored (forced null) when status="planned"
     watched_at: datetime | None = None
+    # Meet in the Middle: which end of the tunnel this film extends.
+    tunnel_side: Literal["head", "tail"] | None = None
 
 
 class StepValidateRequest(BaseModel):
     movie_id: int
+    tunnel_side: Literal["head", "tail"] | None = None
 
 
 class MarkWatchedRequest(BaseModel):

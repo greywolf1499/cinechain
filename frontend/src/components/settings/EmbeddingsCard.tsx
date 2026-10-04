@@ -4,7 +4,13 @@ import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import Toast, { type ToastState } from "../Toast";
 import { SettingsCard, inputClass } from "./shared";
 import { ApiError, api } from "../../lib/api";
-import type { EmbeddingProvider, EmbeddingTestResult, IntegrationConfig } from "../../types/api";
+import type {
+  EmbeddingProvider,
+  EmbeddingTestResult,
+  IntegrationConfig,
+  LlmProvider,
+  LlmTestResult,
+} from "../../types/api";
 
 const CONFIG_KEY = ["settings", "integrations"] as const;
 
@@ -199,7 +205,245 @@ export default function EmbeddingsCard() {
           )}
         </div>
       </div>
+      <LlmSection config={config} onToast={setToast} />
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </SettingsCard>
+  );
+}
+
+const LLM_PROVIDERS: { value: LlmProvider; label: string; detail: string }[] = [
+  { value: "off", label: "Off", detail: "No generative features. Nothing is downloaded or loaded." },
+  {
+    value: "local_gguf",
+    label: "Local Qwen 0.8B",
+    detail: "Qwen3.5-0.8B-Instruct (Q4_K_M GGUF, ~530 MB) via llama-cpp-python, downloaded on first use.",
+  },
+  {
+    value: "ollama",
+    label: "Ollama",
+    detail: "A local Ollama server, e.g. `ollama pull qwen3.5:0.8b`.",
+  },
+  {
+    value: "openai",
+    label: "OpenAI-compatible",
+    detail: "Any /v1/chat/completions endpoint: LM Studio, vLLM, LiteLLM, OpenRouter...",
+  },
+];
+
+const LLM_PLACEHOLDERS: Record<LlmProvider, { url: string; model: string }> = {
+  off: { url: "", model: "" },
+  local_gguf: { url: "", model: "Qwen3.5-0.8B-Q4_K_M.gguf" },
+  ollama: { url: "http://localhost:11434", model: "qwen3.5:0.8b" },
+  openai: { url: "http://localhost:1234", model: "qwen3.5-0.8b" },
+};
+
+const KEEP_ALIVE_OPTIONS = [
+  { value: 0, label: "Unload immediately after each generation" },
+  { value: 300, label: "Unload after 5 minutes idle (default)" },
+  { value: 900, label: "Unload after 15 minutes idle" },
+];
+
+/** The opt-in generative model behind "Why this link?" pitches and cryptic Blind Draft teasers. */
+function LlmSection({
+  config,
+  onToast,
+}: {
+  config: IntegrationConfig | undefined;
+  onToast: (toast: ToastState) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [provider, setProvider] = useState<LlmProvider>("off");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [keepAlive, setKeepAlive] = useState(300);
+  const [result, setResult] = useState<LlmTestResult | null>(null);
+
+  useEffect(() => {
+    if (!config) return;
+    setProvider(config.llm_provider);
+    setBaseUrl(config.llm_base_url);
+    setModel(config.llm_model);
+    setKeepAlive(config.llm_keep_alive_seconds);
+  }, [config]);
+
+  const remote = provider === "ollama" || provider === "openai";
+  const placeholders = LLM_PLACEHOLDERS[provider];
+
+  const test = useMutation({
+    mutationFn: () =>
+      api.post<LlmTestResult>("/settings/integrations/test-llm", {
+        llm_provider: provider,
+        llm_base_url: remote ? baseUrl.trim() : "",
+        llm_model: model.trim(),
+        llm_keep_alive_seconds: keepAlive,
+        llm_api_key: apiKey.trim() || undefined,
+      }),
+    onSuccess: setResult,
+    onError: (err) =>
+      onToast({ type: "error", message: err instanceof ApiError ? err.message : "The test failed." }),
+  });
+
+  const save = useMutation({
+    // An empty string clears the stored value, so switching provider drops stale URLs and keys.
+    mutationFn: () =>
+      api.patch<IntegrationConfig>("/settings/integrations", {
+        llm_provider: provider,
+        llm_base_url: remote ? baseUrl.trim() : "",
+        llm_model: provider === "off" ? "" : model.trim(),
+        llm_keep_alive_seconds: keepAlive,
+        ...(provider === "openai" && apiKey.trim() ? { llm_api_key: apiKey.trim() } : {}),
+        ...(provider !== "openai" ? { llm_api_key: "" } : {}),
+      }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(CONFIG_KEY, updated);
+      queryClient.invalidateQueries({ queryKey: ["engine", "llm-status"] });
+      setApiKey("");
+      onToast({ type: "success", message: "Generative model settings saved." });
+    },
+    onError: (err) =>
+      onToast({ type: "error", message: err instanceof ApiError ? err.message : "Failed to save settings." }),
+  });
+
+  return (
+    <div className="flex flex-col gap-4 border-t border-app-border px-5 py-4">
+      <div>
+        <h3 className="text-sm font-medium text-zinc-300">Generative Model (LLM)</h3>
+        <p className="mt-1 rounded-md border border-fuchsia-400/20 bg-fuchsia-500/5 px-3 py-2 text-xs leading-relaxed text-fuchsia-200/90">
+          💡 Opt-In Local LLM: Enables connection pitches and cryptic teasers. Peaks at ~600MB RAM during
+          generation, auto-unloads when idle.
+        </p>
+      </div>
+
+      <div role="radiogroup" aria-label="Generative model provider" className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {LLM_PROVIDERS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={provider === option.value}
+            onClick={() => {
+              setProvider(option.value);
+              setResult(null);
+            }}
+            className={`flex flex-col gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+              provider === option.value ? "border-fuchsia-400 bg-fuchsia-500/10" : "border-app-border hover:border-zinc-600"
+            }`}
+          >
+            <span className={`text-sm font-semibold ${provider === option.value ? "text-fuchsia-300" : "text-zinc-200"}`}>
+              {option.label}
+            </span>
+            <span className="text-[11px] leading-snug text-zinc-500">{option.detail}</span>
+          </button>
+        ))}
+      </div>
+
+      {provider === "local_gguf" && !config?.llm_local_available && (
+        <p role="alert" className="rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
+          llama-cpp-python isn&apos;t installed on this server (<code>pip install llama-cpp-python</code>). Install it
+          to run the model in-process, or choose Ollama / OpenAI-compatible instead.
+        </p>
+      )}
+
+      {provider !== "off" && (
+        <div className="flex flex-col gap-3 sm:flex-row">
+          {remote && (
+            <label className={`${labelClass} flex-1`}>
+              Base URL
+              <input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder={placeholders.url}
+                className={`${inputClass} normal-case`}
+              />
+            </label>
+          )}
+          <label className={`${labelClass} flex-1`}>
+            {provider === "local_gguf" ? "GGUF file (optional)" : "Model"}
+            <input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={placeholders.model}
+              className={`${inputClass} normal-case`}
+            />
+          </label>
+        </div>
+      )}
+
+      {provider === "openai" && (
+        <label className={labelClass}>
+          API Key
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={config?.llm_api_key_masked ? `Currently set: ${config.llm_api_key_masked}` : "Optional"}
+            autoComplete="off"
+            className={`${inputClass} normal-case`}
+          />
+        </label>
+      )}
+
+      {provider === "local_gguf" && (
+        <label className={labelClass}>
+          Memory
+          <select
+            value={keepAlive}
+            onChange={(e) => setKeepAlive(Number(e.target.value))}
+            className={`${inputClass} normal-case`}
+          >
+            {KEEP_ALIVE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          disabled={save.isPending}
+          onClick={() => save.mutate()}
+          className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {save.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Save
+        </button>
+        <button
+          type="button"
+          disabled={test.isPending || provider === "off"}
+          onClick={() => {
+            setResult(null);
+            test.mutate();
+          }}
+          className="flex items-center gap-1.5 rounded-md border border-app-border px-3.5 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {test.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Test LLM Generation
+        </button>
+        {provider === "local_gguf" && test.isPending && (
+          <span className="text-xs text-zinc-500">First run downloads ~530 MB and loads the model...</span>
+        )}
+      </div>
+      {result && (
+        <div
+          role="status"
+          className={`flex items-start gap-1.5 text-xs ${result.ok ? "text-emerald-400" : "text-red-400"}`}
+        >
+          {result.ok ? (
+            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          )}
+          <span>
+            {result.ok
+              ? `${result.model} answered in ${result.latency_ms} ms: "${result.output}"`
+              : (result.detail ?? "Failed")}
+          </span>
+        </div>
+      )}
+    </div>
   );
 }

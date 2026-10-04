@@ -20,6 +20,7 @@ import {
 import Modal from "./Modal";
 import ColorSwatch, { SemanticMatchBadge } from "./ColorSwatch";
 import ModifierChips from "./ModifierChips";
+import PitchButton from "./PitchButton";
 import MoviePoster from "./MoviePoster";
 import AcquisitionControl from "./AcquisitionControl";
 import MovieTagline from "./MovieTagline";
@@ -34,6 +35,7 @@ import { countryName } from "../lib/countryNames";
 import { gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { connectionMetadata } from "../lib/connections";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
+import { SIDE_LABELS } from "../lib/tunnel";
 import {
   useCanonBadgesBulk,
   useCreateStep,
@@ -42,6 +44,7 @@ import {
   useRunConstraint,
 } from "../lib/queries";
 import type {
+  TunnelSide,
   CastMember,
   DiscoveryCandidate,
   DiscoveryConnection,
@@ -117,6 +120,7 @@ export default function PickNextHub({
   rulesConfig,
   steps,
   gameType = "cinechain",
+  tunnelSide,
 }: {
   open: boolean;
   onClose: () => void;
@@ -125,6 +129,8 @@ export default function PickNextHub({
   rulesConfig: RulesConfig;
   steps: RunStep[];
   gameType?: string;
+  /** Meet in the Middle: the end of the tunnel the picked film will extend. */
+  tunnelSide?: TunnelSide;
 }) {
   const castLinked = usesCastLinks(gameType, rulesConfig);
   const [stack, setStack] = useState<Screen[]>([{ kind: "grid", label: "Pick Next" }]);
@@ -145,7 +151,12 @@ export default function PickNextHub({
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title="Pick Next Movie" widthClassName="max-w-5xl">
+    <Modal
+      open={open}
+      onClose={handleClose}
+      title={tunnelSide ? `Pick Next Movie - extend ${SIDE_LABELS[tunnelSide]}'s side` : "Pick Next Movie"}
+      widthClassName="max-w-5xl"
+    >
       <div className="flex flex-col gap-4">
         <div className="flex items-center gap-2 border-b border-app-border pb-3 text-xs">
           {stack.length > 1 && (
@@ -187,6 +198,7 @@ export default function PickNextHub({
             rulesConfig={rulesConfig}
             gameType={gameType}
             castLinked={castLinked}
+            tunnelSide={tunnelSide}
             onOpenMovie={(screen) => pushScreen(screen)}
             onClose={handleClose}
           />
@@ -202,6 +214,7 @@ export default function PickNextHub({
             rulesConfig={rulesConfig}
             steps={steps}
             castLinked={castLinked}
+            tunnelSide={tunnelSide}
             onOpenActor={(screen) => pushScreen(screen)}
             onClose={handleClose}
           />
@@ -228,6 +241,7 @@ function DiscoveryGrid({
   rulesConfig,
   gameType,
   castLinked,
+  tunnelSide,
   onOpenMovie,
   onClose,
 }: {
@@ -237,6 +251,7 @@ function DiscoveryGrid({
   gameType: string;
   /** False for standalone modes: no actor network, the card shows the mode's own mechanic. */
   castLinked: boolean;
+  tunnelSide?: TunnelSide;
   onOpenMovie: (screen: Screen & { kind: "movie" }) => void;
   onClose: () => void;
 }) {
@@ -366,6 +381,7 @@ function DiscoveryGrid({
       await createStep.mutateAsync({
         movie_id: candidate.movie_id,
         force: true,
+        tunnel_side: tunnelSide,
         status: watched ? "watched" : "planned",
         watched_at: watched ? new Date().toISOString() : null,
         transition_metadata: connection
@@ -554,6 +570,7 @@ function DiscoveryGrid({
               badges={badgesMap?.[String(candidate.movie_id)]}
               gameType={gameType}
               castLinked={castLinked}
+              frontierMovieId={frontierStep.movie_id}
               allowRepeats={allowRepeats}
               onServer={jellyfinStatus?.[String(candidate.movie_id)]?.on_server}
               pending={pendingMovieId === candidate.movie_id && createStep.isPending}
@@ -585,6 +602,7 @@ function CandidateCard({
   badges,
   gameType,
   castLinked,
+  frontierMovieId,
   allowRepeats,
   onServer,
   pending,
@@ -598,6 +616,8 @@ function CandidateCard({
   badges: { badge_label: string; badge_color: string }[] | undefined;
   gameType: string;
   castLinked: boolean;
+  /** The film this candidate would follow: the "Why this link?" pitch compares the two. */
+  frontierMovieId: number;
   allowRepeats: boolean;
   onServer: boolean | null | undefined;
   pending: boolean;
@@ -655,6 +675,12 @@ function CandidateCard({
 
         {castLinked && <ConnectionBadge connections={candidate.connections} />}
         <MechanicBadge candidate={candidate} gameType={gameType} />
+        <PitchButton
+          previousMovieId={frontierMovieId}
+          candidateMovieId={candidate.movie_id}
+          linkLabel={candidate.connections[0]?.actor_name}
+          className="w-fit"
+        />
         {candidate.constraint_unverified && (
           <span
             title="This run's rule couldn't be checked for this film yet - logging will check it."
@@ -836,6 +862,7 @@ function MovieScreenView({
   rulesConfig,
   steps,
   castLinked,
+  tunnelSide,
   onOpenActor,
   onClose,
 }: {
@@ -846,6 +873,7 @@ function MovieScreenView({
   rulesConfig: RulesConfig;
   steps: RunStep[];
   castLinked: boolean;
+  tunnelSide?: TunnelSide;
   onOpenActor: (screen: Screen & { kind: "actor" }) => void;
   onClose: () => void;
 }) {
@@ -885,6 +913,7 @@ function MovieScreenView({
     await createStep.mutateAsync({
       movie_id: screen.movieId,
       force: true,
+      tunnel_side: tunnelSide,
       status: watched ? "watched" : "planned",
       watched_at: watched ? new Date().toISOString() : null,
       transition_metadata: connection
@@ -917,6 +946,7 @@ function MovieScreenView({
       // Run-scoped, so the run's own engine and rules decide (not plain CineChain).
       const result = await api.post<ValidationResult>(`/runs/${runId}/validate`, {
         movie_id: screen.movieId,
+        tunnel_side: tunnelSide,
       });
       if (result.valid) {
         await handleAdd(watched, result.connections[0]);

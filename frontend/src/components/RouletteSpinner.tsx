@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Clock, Dices, EyeOff, Loader2, Star, Ticket } from "lucide-react";
-import BlindDraft from "./BlindDraft";
+import { Check, Clock, Dices, EyeOff, Loader2, Sparkles, Star, Ticket } from "lucide-react";
+import BlindDraft, { type TeaserState } from "./BlindDraft";
 import MoviePoster from "./MoviePoster";
 import RouletteFilters, { EMPTY_FILTERS, filtersToParams, type RouletteFilterState } from "./RouletteFilters";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
-import { useCreateStep } from "../lib/queries";
-import type { GenreOut, RouletteMovie, RouletteSpinResult } from "../types/api";
+import { useCreateStep, useLlmStatus } from "../lib/queries";
+import type { GenreOut, RouletteMovie, RouletteSpinResult, TeaserResult } from "../types/api";
 
 const SPIN_MIN_MS = 1400; // the suspense is the point - never reveal instantly
 
@@ -28,6 +28,10 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [pick, setPick] = useState<RouletteMovie | null>(null);
   const [blind, setBlind] = useState(false);
+  // Cryptic Blind Draft: AI-written, spoiler-free teasers instead of the raw TMDB overview.
+  const { data: llmStatus } = useLlmStatus();
+  const [cryptic, setCryptic] = useState(false);
+  const [teasers, setTeasers] = useState<TeaserState>({ status: "off" });
   const [draft, setDraft] = useState<RouletteMovie[]>([]);
   const [drawId, setDrawId] = useState(0); // remounts BlindDraft so votes reset on every new draw
   const [poolSize, setPoolSize] = useState(0);
@@ -64,6 +68,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
         setDraft(result.movies);
         setDrawId((id) => id + 1);
         setPhase("drafted");
+        void loadTeasers(result.movies, token);
       } else {
         setPick(result.movie);
         setPhase("revealed");
@@ -75,6 +80,26 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
       setDraft([]);
       setPhase("idle");
       setMessage(err instanceof ApiError ? err.message : "The wheel jammed - try again.");
+    }
+  }
+
+  async function loadTeasers(movies: RouletteMovie[], token: number) {
+    if (!cryptic || !llmStatus?.enabled) {
+      setTeasers({ status: "off" });
+      return;
+    }
+    setTeasers({ status: "loading" });
+    try {
+      const result = await api.post<TeaserResult>("/engine/teasers", {
+        movie_ids: movies.map((m) => m.tmdb_id),
+      });
+      if (token === spinToken.current) setTeasers({ status: "ready", byId: result.teasers });
+    } catch (err) {
+      if (token !== spinToken.current) return;
+      setTeasers({
+        status: "error",
+        message: err instanceof ApiError ? err.message : "the model didn't answer",
+      });
     }
   }
 
@@ -132,6 +157,39 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
         </button>
       </label>
 
+      {blind && llmStatus?.enabled && (
+        <label className="flex cursor-pointer items-start justify-between gap-3 rounded-md border border-fuchsia-400/30 bg-fuchsia-500/5 px-3 py-2">
+          <span className="flex items-start gap-2">
+            <Sparkles className={cn("mt-0.5 h-4 w-4 shrink-0", cryptic ? "text-fuchsia-300" : "text-zinc-500")} />
+            <span className="flex flex-col">
+              <span className="text-xs font-medium text-zinc-200">Cryptic teasers</span>
+              <span className="text-[11px] text-zinc-500">
+                Swap each plot for a one-sentence, spoiler-free vibe teaser written by the AI.
+              </span>
+            </span>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={cryptic}
+            aria-label="Cryptic teasers"
+            disabled={spinning}
+            onClick={() => setCryptic((v) => !v)}
+            className={cn(
+              "relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors",
+              cryptic ? "bg-fuchsia-400" : "bg-app-surface-hover",
+            )}
+          >
+            <span
+              className={cn(
+                "absolute top-0.5 h-4 w-4 rounded-full bg-zinc-100 transition-all",
+                cryptic ? "left-[18px]" : "left-0.5",
+              )}
+            />
+          </button>
+        </label>
+      )}
+
       <button
         type="button"
         onClick={spin}
@@ -168,6 +226,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
           movies={draft}
           poolSize={poolSize}
           logging={createStep.isPending}
+          teasers={teasers}
           onLog={(movie, watched) => log(movie, watched)}
         />
       )}

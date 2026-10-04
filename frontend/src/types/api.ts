@@ -184,6 +184,48 @@ export interface ValidationResult {
 	color_distance?: number | null;
 	/** Rule evidence for the hop (Chrono year delta, Passport countries). */
 	mechanic?: Record<string, unknown> | null;
+	/** Meet in the Middle: this film would also connect the opposite end - the chains collide. */
+	collision?: boolean;
+}
+
+/** Meet in the Middle: which end of the tunnel a step extends. */
+export type TunnelSide = "head" | "tail";
+
+/** Both frontiers of a Meet in the Middle run and the quick-BFS distance between them. */
+export interface TunnelState {
+	head_frontier_movie_id: number | null;
+	tail_frontier_movie_id: number | null;
+	head_steps: number;
+	tail_steps: number;
+	collided: boolean;
+	/** Movie-hops between the frontiers: 0 = collided, null = none found within the limits. */
+	distance_hops: number | null;
+	searched_depth: number;
+	message: string | null;
+}
+
+export interface LlmStatus {
+	enabled: boolean;
+	provider: string;
+}
+
+export interface PitchResult {
+	pitch: string;
+}
+
+export interface TeaserResult {
+	teasers: Record<string, string>;
+}
+
+export type LlmProvider = "off" | "local_gguf" | "ollama" | "openai";
+
+export interface LlmTestResult {
+	ok: boolean;
+	latency_ms: number | null;
+	output: string | null;
+	provider: string;
+	model: string;
+	detail: string | null;
 }
 
 export interface RouletteMovie {
@@ -401,6 +443,12 @@ export interface IntegrationConfig {
 	embedding_base_url: string;
 	embedding_model: string;
 	embedding_api_key_masked: string | null;
+	llm_provider: LlmProvider;
+	llm_base_url: string;
+	llm_model: string;
+	llm_api_key_masked: string | null;
+	llm_keep_alive_seconds: number;
+	llm_local_available: boolean;
 }
 
 export type EmbeddingProvider = "local_onnx" | "ollama" | "openai";

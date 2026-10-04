@@ -32,6 +32,11 @@ OVERRIDABLE_KEYS = (
     "embedding_base_url",
     "embedding_api_key",
     "embedding_model",
+    "llm_provider",
+    "llm_base_url",
+    "llm_api_key",
+    "llm_model",
+    "llm_keep_alive_seconds",
 )
 
 

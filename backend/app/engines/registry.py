@@ -5,6 +5,7 @@ from app.engines.algorithms import AestheticGradientEngine, SemanticTropeEngine
 from app.engines.base import BaseChallengeEngine
 from app.engines.canon_island import CanonIslandEngine
 from app.engines.cinechain import CineChainEngine
+from app.engines.meet_in_middle import MeetInTheMiddleEngine
 from app.engines.mutators import AuteurRelayEngine, ChronoClimbEngine, WorldPassportEngine
 from app.engines.trackers import DecadeSieveEngine, RouletteEngine
 from app.services.tmdb import TMDBClient
@@ -14,6 +15,7 @@ ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
     for engine in (
         CineChainEngine,
         CanonIslandEngine,
+        MeetInTheMiddleEngine,
         DecadeSieveEngine,
         RouletteEngine,
         ChronoClimbEngine,

@@ -3,6 +3,13 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
 from app.db import get_session
+from app.engines.meet_in_middle import (
+    MEET_IN_THE_MIDDLE,
+    SIDE_HEAD,
+    SIDE_TAIL,
+    MeetInTheMiddleEngine,
+    split_sides,
+)
 from app.engines.registry import ENGINE_REGISTRY, get_engine
 from app.models.cache import CachedMovie
 from app.models.run import (
@@ -24,6 +31,7 @@ from app.schemas.engine import (
     RunStats,
     Suggestion,
     SuggestionFilters,
+    TunnelState,
     ValidationResult,
 )
 from app.schemas.runs import (
@@ -75,6 +83,28 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
     """Every step logged so far, oldest first (the history modifiers like country_cooldown read)."""
     return list(session.exec(
         select(RunStep).where(RunStep.run_id == run_id).order_by(RunStep.logged_at)).all())
+
+
+# Metadata keys only the server may set: a client-supplied `collision` would be a free win.
+SERVER_OWNED_METADATA = ("tunnel_side", "collision", "collision_with")
+
+
+def _without_server_keys(metadata: dict | None) -> dict | None:
+    if metadata is None:
+        return None
+    return {k: v for k, v in metadata.items() if k not in SERVER_OWNED_METADATA}
+
+
+def _tunnel_sides(
+    session: Session, run: Run, side: str | None
+) -> tuple[list[RunStep], list[RunStep]]:
+    """(the steps of the end being extended, the steps of the opposite end)."""
+    if side not in (SIDE_HEAD, SIDE_TAIL):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Choose which end of the tunnel you are extending (head or tail)")
+    head, tail = split_sides(_run_history(session, run.id))
+    return (head, tail) if side == SIDE_HEAD else (tail, head)
 
 
 def _run_rules(run: Run) -> dict:
@@ -131,11 +161,20 @@ async def _enforce_run_rules(
     linked_metadata: dict | None = None
     broke_a_rule = False
 
+    tunnel = run.game_type == MEET_IN_THE_MIDDLE
+    side_steps: list[RunStep] | None = None
+    opposing_steps: list[RunStep] = []
+    if tunnel:
+        side_steps, opposing_steps = _tunnel_sides(session, run, payload.tunnel_side)
+        extra_metadata["tunnel_side"] = payload.tunnel_side
+
     already_watched = session.exec(
         select(RunStep).where(RunStep.run_id == run.id,
                               RunStep.movie_id == movie.tmdb_id)
     ).first()
-    if already_watched is not None:
+    # Closing the tunnel on the opposite end's frontier film is the one legal "repeat".
+    closes_tunnel = bool(opposing_steps) and opposing_steps[-1].movie_id == movie.tmdb_id
+    if already_watched is not None and not closes_tunnel:
         allow_repeats = rules.get("allow_repeats", "strict")
         if allow_repeats == "strict":
             if not force:
@@ -165,7 +204,10 @@ async def _enforce_run_rules(
         broke_a_rule = True
         extra_metadata["runtime_flagged"] = True
 
-    previous = _last_step(session, run.id)
+    if tunnel:
+        previous = side_steps[-1] if side_steps else None
+    else:
+        previous = _last_step(session, run.id)
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if previous is None:
         # The very first film has no inbound link; ignore any client-claimed one so it
@@ -189,7 +231,7 @@ async def _enforce_run_rules(
             previous.movie_id, movie.tmdb_id, cast_limit=rules.get(
                 "max_cast_order"), rules=rules,
             previous_transition=previous.transition_metadata,
-            history=_run_history(session, run.id),
+            history=side_steps if tunnel else _run_history(session, run.id),
         )
         if not result.valid and result.blocked:
             raise HTTPException(
@@ -200,6 +242,13 @@ async def _enforce_run_rules(
                     status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
             broke_a_rule = True
         linked_metadata = engine.link_metadata(result, payload.transition_metadata)
+        # Collision Victory: a *valid* link to this end that also connects the opposite end.
+        if (
+            result.valid and isinstance(engine, MeetInTheMiddleEngine)
+            and await engine.collides(movie.tmdb_id, opposing_steps, rules)
+        ):
+            extra_metadata["collision"] = True
+            extra_metadata["collision_with"] = opposing_steps[-1].movie_id
         if result.valid and rules.get("no_consecutive_actor", True):
             chosen_actor_id = (
                 payload.transition_metadata or {}).get("actor_id")
@@ -318,8 +367,23 @@ async def create_run(
         if problems:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems))
-        if payload.seed_movie_id is not None:
-            seed = await engine.validate_candidate(payload.seed_movie_id, rules_config)
+        if payload.game_type == MEET_IN_THE_MIDDLE:
+            if payload.seed_movie_id is None or payload.tail_seed_movie_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Meet in the Middle needs two starting films: one for each partner")
+            if payload.seed_movie_id == payload.tail_seed_movie_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="The two partners need different starting films")
+        elif payload.tail_seed_movie_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="A second seed film is only for Meet in the Middle runs")
+        for seed_id in (payload.seed_movie_id, payload.tail_seed_movie_id):
+            if seed_id is None:
+                continue
+            seed = await engine.validate_candidate(seed_id, rules_config)
             if not seed.valid:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -339,13 +403,17 @@ async def create_run(
         session.add(RunParticipant(run_id=run.id, user_id=user_id, role=role))
     session.commit()
 
-    if payload.seed_movie_id is not None:
-        movie = await cache_repo.get_movie(session, tmdb, payload.seed_movie_id)
+    seeds = [(payload.seed_movie_id, SIDE_HEAD), (payload.tail_seed_movie_id, SIDE_TAIL)]
+    for seed_id, side in seeds:
+        if seed_id is None:
+            continue
+        movie = await cache_repo.get_movie(session, tmdb, seed_id)
         step = RunStep(
             run_id=run.id,
             logged_by_user_id=current_user.id,
             status="watched",
             watched_at=utcnow(),
+            transition_metadata={"tunnel_side": side} if payload.game_type == MEET_IN_THE_MIDDLE else None,
             **_step_fields_from_movie(movie),
         )
         session.add(step)
@@ -488,7 +556,8 @@ async def create_step(
     extra_metadata, linked_metadata = await _enforce_run_rules(
         session, tmdb, run, movie, payload)
 
-    transition_metadata = linked_metadata if linked_metadata is not None else payload.transition_metadata
+    transition_metadata = _without_server_keys(
+        linked_metadata if linked_metadata is not None else payload.transition_metadata)
     if extra_metadata:
         transition_metadata = {**(transition_metadata or {}), **extra_metadata}
 
@@ -559,7 +628,9 @@ def update_step(
     if payload.user_notes is not None:
         step.user_notes = payload.user_notes
     if payload.transition_metadata is not None:
-        step.transition_metadata = payload.transition_metadata
+        owned = {
+            k: v for k, v in (step.transition_metadata or {}).items() if k in SERVER_OWNED_METADATA}
+        step.transition_metadata = {**(_without_server_keys(payload.transition_metadata) or {}), **owned}
     if payload.watched_at is not None:
         step.watched_at = payload.watched_at
         # Setting a watched date IS the act of marking it watched - keep the
@@ -593,7 +664,14 @@ def delete_step(
             detail="Only the most recently logged step can be deleted",
         )
 
+    collided = bool((step.transition_metadata or {}).get("collision"))
     session.delete(step)
+    if collided and run.status == RUN_STATUS_COMPLETED:
+        # Undoing the colliding step reopens the tunnel.
+        run.status = RUN_STATUS_ACTIVE
+        run.status_reason = None
+        run.completed_at = None
+        session.add(run)
     session.commit()
 
 
@@ -608,13 +686,57 @@ async def validate_step(
     film + the run's own film rules), so the UI can pre-flight a pick."""
     engine = get_engine(run.game_type, session, tmdb)
     rules = _run_rules(run)
-    previous = _last_step(session, run.id)
+    side_steps: list[RunStep] | None = None
+    opposing_steps: list[RunStep] = []
+    if run.game_type == MEET_IN_THE_MIDDLE:
+        side_steps, opposing_steps = _tunnel_sides(session, run, payload.tunnel_side)
+        previous = side_steps[-1] if side_steps else None
+    else:
+        previous = _last_step(session, run.id)
     if previous is None:
         return await engine.validate_candidate(payload.movie_id, rules)
-    return await engine.validate_next_step(
+    result = await engine.validate_next_step(
         previous.movie_id, payload.movie_id, cast_limit=rules.get("max_cast_order"), rules=rules,
         previous_transition=previous.transition_metadata,
-        history=_run_history(session, run.id))
+        history=side_steps if side_steps is not None else _run_history(session, run.id))
+    if result.valid and isinstance(engine, MeetInTheMiddleEngine):
+        result.collision = await engine.collides(payload.movie_id, opposing_steps, rules)
+    return result
+
+
+@router.get("/{run_id}/tunnel", response_model=TunnelState)
+async def get_tunnel_state(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> TunnelState:
+    """Both frontiers of a Meet in the Middle run and the quick-BFS distance between them."""
+    engine = get_engine(run.game_type, session, tmdb)
+    if not isinstance(engine, MeetInTheMiddleEngine):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Only Meet in the Middle runs have a tunnel")
+    steps = _run_history(session, run.id)
+    head, tail = split_sides(steps)
+    state = TunnelState(
+        head_frontier_movie_id=head[-1].movie_id if head else None,
+        tail_frontier_movie_id=tail[-1].movie_id if tail else None,
+        head_steps=len(head), tail_steps=len(tail),
+        collided=run.status == RUN_STATUS_COMPLETED and any(
+            (s.transition_metadata or {}).get("collision") for s in steps),
+    )
+    if state.collided:
+        return state.model_copy(update={"distance_hops": 0})
+    if not head or not tail:
+        return state.model_copy(update={"message": "Both partners need a starting film."})
+    try:
+        distance = await engine.distance(
+            head[-1].movie_id, tail[-1].movie_id, {s.movie_id for s in steps},
+            cast_limit=_run_rules(run).get("max_cast_order"))
+    except Exception as exc:  # noqa: BLE001 - the indicator is advisory; never fail the page
+        return state.model_copy(update={"message": f"Couldn't measure the distance: {exc}"})
+    return state.model_copy(update={
+        "distance_hops": distance.hops, "searched_depth": distance.searched_depth,
+        "message": distance.message})
 
 
 @router.get("/{run_id}/constraint", response_model=ConstraintInfo | None)

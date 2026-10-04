@@ -28,6 +28,8 @@ import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
 import PickNextHub from "../components/PickNextHub";
 import ModifierChips from "../components/ModifierChips";
+import TunnelFrontierCard from "../components/TunnelFrontierCard";
+import TunnelTimeline from "../components/TunnelTimeline";
 import RouletteSpinner from "../components/RouletteSpinner";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
@@ -48,6 +50,7 @@ import {
 } from "../lib/queries";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import { STANDALONE_MODES, gameModeStyle, usesCastLinks } from "../lib/gameModes";
+import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
 import type { CuratedListSummary, RulesConfig, RunStats, RunStatus, RunStep } from "../types/api";
 
 export default function RunDetailPage() {
@@ -163,7 +166,32 @@ export default function RunDetailPage() {
         />
       )}
 
-      {run.steps.length === 0 ? (
+      {run.game_type === MEET_IN_THE_MIDDLE && run.steps.length > 0 ? (
+        <div className="flex flex-col gap-6">
+          <TunnelTimeline
+            runId={run.id}
+            steps={run.steps}
+            locked={locked}
+            onRequestDeleteStep={setConfirmDeleteStepId}
+          />
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+            <TunnelFrontierCard
+              runId={run.id}
+              steps={run.steps}
+              rulesConfig={run.rules_config}
+              locked={locked}
+            />
+            <MiniPassportWidget stats={stats} rules={run.rules_config} castLinked={castLinked} />
+            <RulesSummaryCard
+              runId={run.id}
+              rules={run.rules_config}
+              steps={run.steps}
+              gameType={run.game_type}
+              castLinked={castLinked}
+            />
+          </div>
+        </div>
+      ) : run.steps.length === 0 ? (
         <>
           <EmptyState
             icon={Clapperboard}

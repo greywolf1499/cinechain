@@ -24,6 +24,10 @@ dependencies = [
     "numpy>=1.26,<3.0",
 ]
 
+[project.optional-dependencies]
+# Opt-in local GGUF inference for the generative features (needs a C++ toolchain to build).
+llm = ["llama-cpp-python>=0.3"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3,<9.0",

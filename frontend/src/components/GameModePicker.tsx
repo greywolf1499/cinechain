@@ -11,6 +11,7 @@ const MODE_ORDER = [
   "cinechain",
   "auteur_relay",
   "canon_island",
+  "meet_in_the_middle",
   "chrono_climb",
   "world_passport",
   "aesthetic_gradient",

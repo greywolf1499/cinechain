@@ -3,6 +3,7 @@ import { countryName } from "../lib/countryNames";
 import { isoToFlagEmoji } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
 import { SemanticMatchBadge } from "./ColorSwatch";
+import PitchButton from "./PitchButton";
 import type { RunStep } from "../types/api";
 
 interface TransitionMeta {
@@ -26,10 +27,13 @@ export default function ChainLink({
   step,
   isKeystone,
   castLinked = true,
+  previousMovieId,
 }: {
   step: RunStep;
   isKeystone: boolean;
   castLinked?: boolean;
+  /** The film this step was linked from: enables the "Why this link?" pitch. */
+  previousMovieId?: number;
 }) {
   const meta = step.transition_metadata as TransitionMeta | null;
   const isDirector = meta?.connection_type === "director";
@@ -81,6 +85,14 @@ export default function ChainLink({
           <p className="text-[10px] text-zinc-600">Chain broken — no shared cast</p>
         ) : (
           <RuleLink meta={meta} />
+        )}
+        {previousMovieId !== undefined && (
+          <PitchButton
+            previousMovieId={previousMovieId}
+            candidateMovieId={step.movie_id}
+            linkLabel={actorName}
+            className="ml-auto shrink-0"
+          />
         )}
         <SemanticMatchBadge score={meta?.semantic_score} className="ml-auto shrink-0" />
         {meta?.color_distance !== undefined && (

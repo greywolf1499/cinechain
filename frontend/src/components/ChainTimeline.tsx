@@ -127,6 +127,7 @@ export default function ChainTimeline({
               step={row.step}
               isKeystone={isKeystoneConnector(row.step, keystoneActorIds)}
               castLinked={castLinked}
+              previousMovieId={steps[steps.findIndex((s) => s.id === row.step.id) - 1]?.movie_id}
             />
           ),
         )}

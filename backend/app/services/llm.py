@@ -1,0 +1,412 @@
+"""Opt-in generative model: connection pitches and cryptic Blind Draft teasers.
+
+One interface, four providers (`llm_provider` setting; `off` by default):
+- `local_gguf`: Qwen3.5-0.8B-Instruct (Q4_K_M) through `llama-cpp-python`, if it is installed.
+  The model is loaded just in time and *never kept resident while idle*: it is unloaded
+  `llm_keep_alive_seconds` (default 5 minutes) after the last generation, or straight away
+  when that is 0. It peaks at roughly 600 MB of RAM while generating.
+- `ollama`: a local Ollama server (`POST {base}/api/chat`), e.g. model `qwen3.5:0.8b`.
+- `openai`: any OpenAI-compatible `POST {base}/v1/chat/completions` endpoint.
+
+Generation is a nicety, never a dependency: every failure is an `LlmUnavailable` that callers
+turn into a friendly message, and nothing else in the app waits on it.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import gc
+import logging
+import os
+import re
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import anyio.to_thread
+import httpx
+from sqlmodel import Session
+
+from app.config import get_settings
+from app.models.cache import CachedMovie
+from app.services import settings_repo
+from app.utils.dates import parse_release_year
+
+logger = logging.getLogger(__name__)
+
+PROVIDER_OFF = "off"
+PROVIDER_LOCAL = "local_gguf"
+PROVIDER_OLLAMA = "ollama"
+PROVIDER_OPENAI = "openai"
+PROVIDERS = (PROVIDER_OFF, PROVIDER_LOCAL, PROVIDER_OLLAMA, PROVIDER_OPENAI)
+
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_MODEL = "qwen3.5:0.8b"
+DEFAULT_OPENAI_URL = "http://localhost:1234"
+DEFAULT_OPENAI_MODEL = "qwen3.5-0.8b"
+DEFAULT_GGUF_FILE = "Qwen3.5-0.8B-Q4_K_M.gguf"
+REMOTE_TIMEOUT_SECONDS = 30.0
+MAX_KEEP_ALIVE_SECONDS = 3600
+CONTEXT_TOKENS = 2048
+CACHE_SIZE = 512
+
+
+class LlmUnavailable(Exception):
+    """The generative model is off, missing, or failed."""
+
+
+@dataclass(frozen=True)
+class LlmConfig:
+    provider: str = PROVIDER_OFF
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+    keep_alive_seconds: int = 300
+
+    @property
+    def enabled(self) -> bool:
+        return self.provider != PROVIDER_OFF
+
+    @property
+    def effective_model(self) -> str:
+        if self.provider == PROVIDER_OLLAMA:
+            return self.model or DEFAULT_OLLAMA_MODEL
+        if self.provider == PROVIDER_OPENAI:
+            return self.model or DEFAULT_OPENAI_MODEL
+        if self.provider == PROVIDER_LOCAL:
+            return self.model or DEFAULT_GGUF_FILE
+        return ""
+
+    @property
+    def fingerprint(self) -> str:
+        return f"{self.provider}:{self.effective_model}"
+
+
+def load_config(session: Session) -> LlmConfig:
+    """The admin's saved generative-model settings, falling back to `.env`, then to off."""
+    base = get_settings()
+    overrides = settings_repo.get_overrides(session)
+    provider = overrides.get("llm_provider") or base.llm_provider
+    if provider not in PROVIDERS:
+        provider = PROVIDER_OFF
+    raw_keep_alive = overrides.get("llm_keep_alive_seconds")
+    try:
+        keep_alive = int(raw_keep_alive) if raw_keep_alive else base.llm_keep_alive_seconds
+    except ValueError:
+        keep_alive = base.llm_keep_alive_seconds
+    return LlmConfig(
+        provider=provider,
+        base_url=overrides.get("llm_base_url") or base.llm_base_url,
+        api_key=overrides.get("llm_api_key") or base.llm_api_key,
+        model=overrides.get("llm_model") or base.llm_model,
+        keep_alive_seconds=max(0, min(keep_alive, MAX_KEEP_ALIVE_SECONDS)),
+    )
+
+
+def local_runtime_available() -> bool:
+    """Is `llama-cpp-python` importable (without loading anything)?"""
+    import importlib.util
+
+    return importlib.util.find_spec("llama_cpp") is not None
+
+
+# --- local GGUF (JIT load, idle unload) ---
+
+_local_lock = threading.RLock()
+_download_lock = threading.Lock()
+_local_model: Any = None
+_local_last_used = 0.0
+_unload_timer: threading.Timer | None = None
+
+
+def _import_llama() -> Any:
+    try:
+        from llama_cpp import Llama
+    except ImportError as exc:
+        raise LlmUnavailable(
+            "Local inference needs llama-cpp-python (`pip install llama-cpp-python`). "
+            "Alternatively point CineChain at an Ollama or OpenAI-compatible server."
+        ) from exc
+    return Llama
+
+
+def _release_memory() -> None:
+    gc.collect()
+    try:  # hand freed arenas back to the OS (glibc only)
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
+def local_model_loaded() -> bool:
+    return _local_model is not None
+
+
+def unload_local() -> None:
+    """Drops the resident model, if any, and returns its memory."""
+    global _local_model, _unload_timer
+    with _local_lock:
+        if _unload_timer is not None:
+            _unload_timer.cancel()
+            _unload_timer = None
+        model, _local_model = _local_model, None
+        if model is None:
+            return
+        close = getattr(model, "close", None)
+        if callable(close):
+            close()
+        del model
+    _release_memory()
+    logger.info("Local LLM unloaded")
+
+
+def _unload_if_idle(idle_seconds: int) -> None:
+    with _local_lock:
+        if _local_model is not None and time.monotonic() - _local_last_used >= idle_seconds - 0.5:
+            unload_local()
+
+
+def _schedule_unload(keep_alive_seconds: int) -> None:
+    global _unload_timer
+    if keep_alive_seconds <= 0:
+        unload_local()
+        return
+    if _unload_timer is not None:
+        _unload_timer.cancel()
+    _unload_timer = threading.Timer(
+        keep_alive_seconds, _unload_if_idle, args=(keep_alive_seconds,))
+    _unload_timer.daemon = True
+    _unload_timer.start()
+
+
+def model_path(config: LlmConfig) -> Path:
+    named = config.effective_model
+    candidate = Path(named)
+    return candidate if candidate.is_absolute() else get_settings().llm_model_dir / candidate.name
+
+
+def _download(url: str, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_suffix(destination.suffix + ".part")
+    with httpx.stream("GET", url, follow_redirects=True, timeout=600.0) as response:
+        response.raise_for_status()
+        with tmp.open("wb") as handle:
+            for chunk in response.iter_bytes():
+                handle.write(chunk)
+    tmp.replace(destination)
+
+
+def ensure_model_file(config: LlmConfig) -> Path:
+    """Blocking: the GGUF on disk, downloaded on first use. Run it in a worker thread."""
+    path = model_path(config)
+    with _download_lock:
+        if path.exists():
+            return path
+        if config.model and Path(config.model).is_absolute():
+            raise LlmUnavailable(f"No GGUF model file at {config.model}")
+        try:
+            _download(get_settings().llm_gguf_url, path)
+        except (httpx.HTTPError, OSError) as exc:
+            raise LlmUnavailable(f"Could not fetch the local model: {exc}") from exc
+    return path
+
+
+def _generate_local(config: LlmConfig, system: str, prompt: str, max_tokens: int) -> str:
+    global _local_model, _local_last_used
+    with _local_lock:
+        try:
+            if _local_model is None:
+                llama = _import_llama()
+                path = ensure_model_file(config)
+                _local_model = llama(
+                    model_path=str(path), n_ctx=CONTEXT_TOKENS,
+                    n_threads=max(1, min(4, os.cpu_count() or 1)), n_gpu_layers=0,
+                    use_mlock=False, verbose=False)
+            reply = _local_model.create_chat_completion(
+                messages=_messages(config, system, prompt), max_tokens=max_tokens,
+                temperature=0.8, top_p=0.9)
+            text = reply["choices"][0]["message"]["content"]
+        except LlmUnavailable:
+            raise
+        except Exception as exc:  # llama.cpp raises assorted types
+            unload_local()
+            raise LlmUnavailable(f"Local model failed: {exc}") from exc
+        _local_last_used = time.monotonic()
+        _schedule_unload(config.keep_alive_seconds)
+    return text
+
+
+# --- remote chat endpoints ---
+
+
+def ollama_url(config: LlmConfig) -> str:
+    base = (config.base_url or DEFAULT_OLLAMA_URL).rstrip("/")
+    return base if base.endswith("/api/chat") else f"{base}/api/chat"
+
+
+def openai_url(config: LlmConfig) -> str:
+    base = (config.base_url or DEFAULT_OPENAI_URL).rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+
+
+def _messages(config: LlmConfig, system: str, prompt: str) -> list[dict[str, str]]:
+    # Qwen3.x "thinks" by default; the soft switch keeps a 0.8B model from burning its budget on it.
+    suffix = " /no_think" if "qwen" in config.effective_model.lower() else ""
+    return [{"role": "system", "content": system}, {"role": "user", "content": prompt + suffix}]
+
+
+def _error_text(response: httpx.Response) -> str:
+    try:
+        error = response.json().get("error")
+        if isinstance(error, dict):
+            error = error.get("message")
+        if error:
+            return str(error)[:300]
+    except (ValueError, AttributeError):
+        pass
+    return response.reason_phrase or "request failed"
+
+
+async def _generate_remote(config: LlmConfig, system: str, prompt: str, max_tokens: int) -> str:
+    headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+    messages = _messages(config, system, prompt)
+    async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_SECONDS) as client:
+        if config.provider == PROVIDER_OLLAMA:
+            response = await client.post(ollama_url(config), headers=headers, json={
+                "model": config.effective_model, "messages": messages, "stream": False,
+                "think": False, "options": {"temperature": 0.8, "num_predict": max_tokens}})
+            response.raise_for_status()
+            return response.json()["message"]["content"]
+        response = await client.post(openai_url(config), headers=headers, json={
+            "model": config.effective_model, "messages": messages,
+            "max_tokens": max_tokens, "temperature": 0.8})
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def clean_output(text: str) -> str:
+    """One tidy line: reasoning blocks, wrapping quotes and extra whitespace removed."""
+    text = _THINK_BLOCK.sub("", text)
+    text = text.split("</think>")[-1]  # an unbalanced block (the model ran out of tokens)
+    text = " ".join(text.split()).strip().strip("\"'“”‘’ ")
+    return text
+
+
+async def generate(config: LlmConfig, system: str, prompt: str, max_tokens: int = 96) -> str:
+    """One short completion. Raises `LlmUnavailable` for every failure (including `off`)."""
+    if not config.enabled:
+        raise LlmUnavailable(
+            "The generative model is off - enable it under Settings > Integrations > AI & Embeddings.")
+    try:
+        if config.provider == PROVIDER_LOCAL:
+            raw = await anyio.to_thread.run_sync(_generate_local, config, system, prompt, max_tokens)
+        else:
+            raw = await _generate_remote(config, system, prompt, max_tokens)
+    except LlmUnavailable:
+        raise
+    except httpx.HTTPStatusError as exc:
+        raise LlmUnavailable(
+            f"{config.provider} chat failed (HTTP {exc.response.status_code}): "
+            f"{_error_text(exc.response)}") from exc
+    except (httpx.HTTPError, TimeoutError, KeyError, IndexError, TypeError, ValueError) as exc:
+        raise LlmUnavailable(f"{config.provider} chat failed: {exc or type(exc).__name__}") from exc
+    text = clean_output(raw)
+    if not text:
+        raise LlmUnavailable("The model returned an empty answer")
+    return text
+
+
+async def check_connection(config: LlmConfig) -> dict:
+    """A tiny real generation for the Settings page: {ok, latency_ms, output, provider, model, detail}."""
+    result: dict = {
+        "ok": False, "latency_ms": None, "output": None,
+        "provider": config.provider, "model": config.effective_model, "detail": None,
+    }
+    started = time.perf_counter()
+    try:
+        output = await generate(
+            config, "You are a concise assistant.",
+            "Reply with one short, upbeat sentence about movie night.", max_tokens=40)
+    except LlmUnavailable as exc:
+        result["detail"] = str(exc)
+        return result
+    result.update(ok=True, output=output, latency_ms=round((time.perf_counter() - started) * 1000))
+    return result
+
+
+# --- prompts and cached high-level helpers ---
+
+PITCH_SYSTEM = (
+    "You are a witty cinephile friend. You explain, in exactly one punchy sentence of at most "
+    "30 words, why one film is a great next watch after another. No preamble, no lists, "
+    "no spoilers, no quotation marks."
+)
+TEASER_SYSTEM = (
+    "You write cryptic, spoiler-free teasers for a blind movie pick. Reply with exactly one "
+    "evocative sentence of at most 25 words that captures the vibe only. Never name the film, "
+    "its characters, actors, or director, and never reveal twists."
+)
+
+_cache: OrderedDict[str, str] = OrderedDict()
+
+
+def _remember(key: str, value: str) -> str:
+    _cache[key] = value
+    _cache.move_to_end(key)
+    while len(_cache) > CACHE_SIZE:
+        _cache.popitem(last=False)
+    return value
+
+
+def clear_cache() -> None:
+    _cache.clear()
+
+
+def _blurb(movie: CachedMovie) -> str:
+    year = parse_release_year(movie.release_date)
+    head = f"{movie.title} ({year})" if year else movie.title
+    plot = (movie.overview or "").strip()
+    return f"{head}: {plot[:400]}" if plot else head
+
+
+async def pitch(
+    config: LlmConfig, previous: CachedMovie, candidate: CachedMovie, link: str | None = None
+) -> str:
+    """Why `candidate` is a great next film after `previous`, in one cinephile sentence."""
+    key = f"{config.fingerprint}|pitch|{previous.tmdb_id}|{candidate.tmdb_id}|{link or ''}"
+    if key in _cache:
+        return _cache[key]
+    connection = f"\nThe two films are linked by: {link}." if link else ""
+    prompt = (
+        f"Previous film - {_blurb(previous)}\nNext film - {_blurb(candidate)}{connection}\n"
+        "Pitch the transition from the previous film to the next one in one sentence."
+    )
+    return _remember(key, await generate(config, PITCH_SYSTEM, prompt, max_tokens=80))
+
+
+def mask_title(text: str, title: str) -> str:
+    """Hides any accidental mention of the film's own title in a teaser."""
+    if len(title) < 3:
+        return text
+    return re.sub(re.escape(title), "▒▒▒", text, flags=re.IGNORECASE)
+
+
+async def teaser(config: LlmConfig, movie: CachedMovie) -> str:
+    """A spoiler-free, title-free one-sentence vibe teaser for the Blind Draft."""
+    key = f"{config.fingerprint}|teaser|{movie.tmdb_id}"
+    if key in _cache:
+        return _cache[key]
+    prompt = (
+        f"{_blurb(movie)}\n"
+        "Write the cryptic one-sentence teaser. Do not use the film's title."
+    )
+    text = mask_title(await generate(config, TEASER_SYSTEM, prompt, max_tokens=64), movie.title)
+    return _remember(key, text)

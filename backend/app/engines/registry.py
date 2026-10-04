@@ -8,6 +8,7 @@ from app.engines.cinechain import CineChainEngine
 from app.engines.meet_in_middle import MeetInTheMiddleEngine
 from app.engines.mutators import AuteurRelayEngine, ChronoClimbEngine, WorldPassportEngine
 from app.engines.trackers import DecadeSieveEngine, RouletteEngine
+from app.engines.tug_of_war import TugOfWarEngine
 from app.services.tmdb import TMDBClient
 
 ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
@@ -16,6 +17,7 @@ ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
         CineChainEngine,
         CanonIslandEngine,
         MeetInTheMiddleEngine,
+        TugOfWarEngine,
         DecadeSieveEngine,
         RouletteEngine,
         ChronoClimbEngine,

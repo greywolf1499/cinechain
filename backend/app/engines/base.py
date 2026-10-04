@@ -212,6 +212,14 @@ class BaseChallengeEngine(ABC):
                 else "Run modifiers shape the next film")
         return info.model_copy(update={"cooldown_countries": locked, "modifier_notes": notes})
 
+    def prepare_rules_config(self, rules: dict) -> dict:
+        """The `rules_config` a new run is stored with (engines fill in their own defaults)."""
+        return rules
+
+    def sync_run_state(self, run: Run, steps: Sequence[RunStep]) -> None:
+        """Refresh any state the engine derives from the steps and caches on the run (e.g. Tug of
+        War's scores). Runs after every step change; the caller commits."""
+
     def evaluate_run_outcome(self, run: Run, steps: list[RunStep]) -> RunOutcome | None:
         """Win/loss check, run after a step is logged. None = keep playing.
 

@@ -12,6 +12,7 @@ const MODE_ORDER = [
   "auteur_relay",
   "canon_island",
   "meet_in_the_middle",
+  "tug_of_war",
   "chrono_climb",
   "world_passport",
   "aesthetic_gradient",

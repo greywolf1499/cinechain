@@ -11,6 +11,12 @@ from app.engines.meet_in_middle import (
     split_sides,
 )
 from app.engines.registry import ENGINE_REGISTRY, get_engine
+from app.engines.tug_of_war import (
+    TUG_OF_WAR,
+    VICTORY_PREFIX,
+    compute_scores,
+    leading_team,
+)
 from app.models.cache import CachedMovie
 from app.models.run import (
     DEFAULT_RULES_CONFIG,
@@ -36,6 +42,11 @@ from app.schemas.engine import (
 )
 from app.schemas.runs import (
     MODIFIER_UPDATE_KEYS,
+    ForkAccept,
+    ForkOffer,
+    ForkVeto,
+    GoldenVeto,
+    GoldenVetoResult,
     MarkWatchedRequest,
     ParticipantAdd,
     ParticipantPublic,
@@ -49,8 +60,9 @@ from app.schemas.runs import (
     RunUpdate,
     StepValidateRequest,
 )
-from app.services import cache_repo
+from app.services import blind_fork, cache_repo
 from app.services.tmdb import TMDBClient
+from app.services.veto import consume_veto_token
 from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
 
@@ -137,7 +149,9 @@ def _apply_run_outcome(session: Session, tmdb: TMDBClient, run: Run) -> None:
     if engine_class is None:
         return
     steps = session.exec(select(RunStep).where(RunStep.run_id == run.id)).all()
-    outcome = engine_class(session, tmdb).evaluate_run_outcome(run, list(steps))
+    engine = engine_class(session, tmdb)
+    engine.sync_run_state(run, steps)
+    outcome = engine.evaluate_run_outcome(run, list(steps))
     if outcome is not None:
         run.status = outcome.status
         run.status_reason = outcome.reason
@@ -358,15 +372,18 @@ async def create_run(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found"
             )
 
-    rules_config = payload.rules_config if payload.rules_config is not None else dict(
-        DEFAULT_RULES_CONFIG)
+    rules_config = blind_fork.strip_server_rules(
+        payload.rules_config if payload.rules_config is not None else dict(DEFAULT_RULES_CONFIG))
     engine_class = ENGINE_REGISTRY.get(payload.game_type)
     if engine_class is not None:
         engine = engine_class(session, tmdb)
         problems = engine.validate_rules_config(rules_config)
+        if rules_config.get(blind_fork.BLIND_FORK_KEY):
+            problems += _blind_fork_problems(engine_class)
         if problems:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems))
+        rules_config = engine.prepare_rules_config(rules_config)
         if payload.game_type == MEET_IN_THE_MIDDLE:
             if payload.seed_movie_id is None or payload.tail_seed_movie_id is None:
                 raise HTTPException(
@@ -419,6 +436,10 @@ async def create_run(
         session.add(step)
         session.commit()
 
+    if engine_class is not None:
+        engine_class(session, tmdb).sync_run_state(run, _run_history(session, run.id))
+        session.commit()
+        session.refresh(run)
     return _to_run_detail(session, run)
 
 
@@ -474,8 +495,12 @@ def update_run_rules(
         if key in payload.model_fields_set and getattr(payload, key) is None})
     merged = {**(run.rules_config or {}), **update}
     engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if update.get(blind_fork.BLIND_FORK_KEY) is False:
+        merged = blind_fork.with_fork(merged, None)
     if engine_class is not None:
         problems = engine_class.modifier_problems(merged)
+        if update.get(blind_fork.BLIND_FORK_KEY):
+            problems += _blind_fork_problems(engine_class)
         if problems:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems))
@@ -543,15 +568,10 @@ def remove_participant(
     session.commit()
 
 
-@router.post("/{run_id}/steps", response_model=RunStepPublic, status_code=status.HTTP_201_CREATED)
-async def create_step(
-    payload: RunStepCreate,
-    session: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user),
-    run: Run = Depends(run_participant_guard),
-    tmdb: TMDBClient = Depends(get_tmdb_client),
-):
-    _ensure_run_open(run)
+async def _log_step(
+    session: Session, tmdb: TMDBClient, run: Run, user: User, payload: RunStepCreate
+) -> RunStep:
+    """Validate and add one step, then evaluate the run's outcome. Caller commits."""
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id)
     extra_metadata, linked_metadata = await _enforce_run_rules(
         session, tmdb, run, movie, payload)
@@ -571,12 +591,26 @@ async def create_step(
         user_notes=payload.user_notes,
         status=payload.status,
         watched_at=watched_at,
-        logged_by_user_id=current_user.id,
+        logged_by_user_id=user.id,
         **_step_fields_from_movie(movie),
     )
     session.add(step)
     session.flush()
     _apply_run_outcome(session, tmdb, run)
+    return step
+
+
+@router.post("/{run_id}/steps", response_model=RunStepPublic, status_code=status.HTTP_201_CREATED)
+async def create_step(
+    payload: RunStepCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+):
+    _ensure_run_open(run)
+    _ensure_no_pending_fork(run)
+    step = await _log_step(session, tmdb, run, current_user, payload)
     session.commit()
     session.refresh(step)
     return _step_public(step, _step_colors(session, [step]))
@@ -646,11 +680,37 @@ def update_step(
     return step
 
 
+def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) -> None:
+    """Delete the latest step, undoing any outcome it caused. Caller commits."""
+    collided = bool((step.transition_metadata or {}).get("collision"))
+    session.delete(step)
+    session.flush()
+    reopen = collided and run.status == RUN_STATUS_COMPLETED
+    remaining = _run_history(session, run.id)
+    engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if engine_class is not None:
+        engine_class(session, tmdb).sync_run_state(run, remaining)
+    if (
+        run.game_type == TUG_OF_WAR
+        and run.status == RUN_STATUS_COMPLETED
+        and (run.status_reason or "").startswith(VICTORY_PREFIX)
+        and leading_team(compute_scores(remaining, run.rules_config), run.rules_config) is None
+    ):
+        reopen = True
+    if reopen:
+        # Undoing the deciding step reopens the run.
+        run.status = RUN_STATUS_ACTIVE
+        run.status_reason = None
+        run.completed_at = None
+        session.add(run)
+
+
 @router.delete("/{run_id}/steps/{step_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_step(
     step_id: str,
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ) -> None:
     step = session.get(RunStep, step_id)
     if step is None or step.run_id != run.id:
@@ -663,16 +723,199 @@ def delete_step(
             status_code=status.HTTP_409_CONFLICT,
             detail="Only the most recently logged step can be deleted",
         )
-
-    collided = bool((step.transition_metadata or {}).get("collision"))
-    session.delete(step)
-    if collided and run.status == RUN_STATUS_COMPLETED:
-        # Undoing the colliding step reopens the tunnel.
-        run.status = RUN_STATUS_ACTIVE
-        run.status_reason = None
-        run.completed_at = None
-        session.add(run)
+    _remove_step(session, tmdb, run, step)
     session.commit()
+
+
+def _blind_fork_problems(engine_class: type) -> list[str]:
+    """Blind Fork offers films from the Pick Next pool of a single chain."""
+    capabilities = getattr(engine_class, "capabilities", [])
+    if "discover_candidates" not in capabilities or "tunnel" in capabilities:
+        return [f"The Blind Fork isn't available in {engine_class.display_name} runs"]
+    return []
+
+
+def _ensure_no_pending_fork(run: Run) -> None:
+    if blind_fork.pending_fork(run.rules_config) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A Blind Fork offer is waiting for the partner's veto and pick",
+        )
+
+
+def _require_fork(run: Run) -> dict:
+    fork = blind_fork.pending_fork(run.rules_config)
+    if fork is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="There is no Blind Fork offer to answer")
+    return fork
+
+
+def _require_partner_of_offer(fork: dict, user: User) -> None:
+    if fork.get("offered_by_id") == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your partner answers your offer - you can't veto or pick from it")
+
+
+@router.post("/{run_id}/fork", response_model=RunDetail, status_code=status.HTTP_201_CREATED)
+async def offer_fork(
+    payload: ForkOffer,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> RunDetail:
+    """Blind Fork step 1: offer the partner three films that each legally follow the chain."""
+    _ensure_run_open(run)
+    rules = _run_rules(run)
+    if not rules.get(blind_fork.BLIND_FORK_KEY):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="The Blind Fork is off for this run")
+    _ensure_no_pending_fork(run)
+    participants = session.exec(
+        select(RunParticipant).where(RunParticipant.run_id == run.id)).all()
+    if len(participants) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The Blind Fork needs a partner to answer the offer")
+    if _last_step(session, run.id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Log a first film before offering a fork")
+    for movie_id in payload.movie_ids:
+        movie = await cache_repo.get_movie(session, tmdb, movie_id)
+        try:
+            await _enforce_run_rules(session, tmdb, run, movie, RunStepCreate(movie_id=movie_id))
+        except HTTPException as exc:
+            reason = exc.detail.get("reason") if isinstance(exc.detail, dict) else exc.detail
+            raise HTTPException(
+                status_code=exc.status_code, detail=f"{movie.title}: {reason}") from exc
+    run.rules_config = blind_fork.with_fork(
+        rules, blind_fork.new_offer(
+            current_user.id, payload.movie_ids,
+            {movie_id: _without_server_keys(meta) or {} for movie_id, meta in payload.links.items()}))
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
+@router.delete("/{run_id}/fork", response_model=RunDetail)
+def withdraw_fork(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    """The offering player takes their offer back (e.g. the partner is away)."""
+    fork = _require_fork(run)
+    if fork.get("offered_by_id") != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the player who made the offer can withdraw it")
+    run.rules_config = blind_fork.with_fork(run.rules_config, None)
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
+@router.post("/{run_id}/fork/veto", response_model=RunDetail)
+def veto_fork_movie(
+    payload: ForkVeto,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    """Blind Fork step 2a: the partner strikes one of the three films (free - it is part of the
+    workflow; the Golden Veto token is for tearing up a whole offer or a step)."""
+    _ensure_run_open(run)
+    fork = _require_fork(run)
+    _require_partner_of_offer(fork, current_user)
+    movie_ids = list(fork["movie_ids"])
+    if len(movie_ids) != blind_fork.OFFER_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="One film has already been vetoed")
+    if payload.movie_id not in movie_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="That film isn't part of the offer")
+    movie_ids.remove(payload.movie_id)
+    run.rules_config = blind_fork.with_fork(run.rules_config, {
+        **fork, "movie_ids": movie_ids,
+        "vetoed_movie_id": payload.movie_id, "vetoed_by_id": current_user.id})
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
+@router.post("/{run_id}/fork/accept", response_model=RunStepPublic, status_code=status.HTTP_201_CREATED)
+async def accept_fork_movie(
+    payload: ForkAccept,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+):
+    """Blind Fork step 2b: the partner commits one of the two remaining films as the next step."""
+    _ensure_run_open(run)
+    fork = _require_fork(run)
+    _require_partner_of_offer(fork, current_user)
+    if len(fork["movie_ids"]) != blind_fork.OFFER_SIZE - 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Veto one of the three films first")
+    if payload.movie_id not in fork["movie_ids"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="That film isn't left in the offer")
+    link = (fork.get("links") or {}).get(str(payload.movie_id))
+    step = await _log_step(session, tmdb, run, current_user, RunStepCreate(
+        movie_id=payload.movie_id, transition_metadata=link, user_notes=payload.user_notes,
+        status=payload.status))
+    run.rules_config = blind_fork.with_fork(run.rules_config, None)
+    session.add(run)
+    session.commit()
+    session.refresh(step)
+    return _step_public(step, _step_colors(session, [step]))
+
+
+@router.post("/{run_id}/veto", response_model=GoldenVetoResult)
+def golden_veto(
+    payload: GoldenVeto,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> GoldenVetoResult:
+    """Spend one Golden Veto token (30-day refill) to overrule the partner: tear up their pending
+    Blind Fork offer, or remove the step they just logged."""
+    _ensure_run_open(run)
+    if payload.target == "fork":
+        fork = _require_fork(run)
+        _require_partner_of_offer(fork, current_user)
+    else:
+        steps = _run_history(session, run.id)
+        seeds = 2 if run.game_type == MEET_IN_THE_MIDDLE else 1
+        if len(steps) <= seeds:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="There is no contested step to veto")
+        target_step = steps[-1]
+        if target_step.logged_by_user_id in (None, current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You can only veto a step your partner logged - delete your own instead")
+    if not consume_veto_token(session, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No Golden Veto tokens left - you get one every 30 days")
+    if payload.target == "fork":
+        run.rules_config = blind_fork.with_fork(run.rules_config, None)
+        session.add(run)
+    else:
+        _remove_step(session, tmdb, run, target_step)
+    session.commit()
+    session.refresh(run)
+    return GoldenVetoResult(
+        target=payload.target, veto_tokens=current_user.veto_tokens,
+        run=_to_run_detail(session, run))
 
 
 @router.post("/{run_id}/validate", response_model=ValidationResult)

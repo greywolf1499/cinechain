@@ -39,6 +39,7 @@ import { SIDE_LABELS } from "../lib/tunnel";
 import {
   useCanonBadgesBulk,
   useCreateStep,
+  useOfferFork,
   useDiscoverCandidates,
   useMovieDetail,
   useRunConstraint,
@@ -121,6 +122,7 @@ export default function PickNextHub({
   steps,
   gameType = "cinechain",
   tunnelSide,
+  forkMode = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -131,6 +133,8 @@ export default function PickNextHub({
   gameType?: string;
   /** Meet in the Middle: the end of the tunnel the picked film will extend. */
   tunnelSide?: TunnelSide;
+  /** Blind Fork: select three films to offer the partner instead of logging one. */
+  forkMode?: boolean;
 }) {
   const castLinked = usesCastLinks(gameType, rulesConfig);
   const [stack, setStack] = useState<Screen[]>([{ kind: "grid", label: "Pick Next" }]);
@@ -154,7 +158,13 @@ export default function PickNextHub({
     <Modal
       open={open}
       onClose={handleClose}
-      title={tunnelSide ? `Pick Next Movie - extend ${SIDE_LABELS[tunnelSide]}'s side` : "Pick Next Movie"}
+      title={
+        forkMode
+          ? "Blind Fork - offer three films"
+          : tunnelSide
+            ? `Pick Next Movie - extend ${SIDE_LABELS[tunnelSide]}'s side`
+            : "Pick Next Movie"
+      }
       widthClassName="max-w-5xl"
     >
       <div className="flex flex-col gap-4">
@@ -199,6 +209,7 @@ export default function PickNextHub({
             gameType={gameType}
             castLinked={castLinked}
             tunnelSide={tunnelSide}
+            forkMode={forkMode}
             onOpenMovie={(screen) => pushScreen(screen)}
             onClose={handleClose}
           />
@@ -242,6 +253,7 @@ function DiscoveryGrid({
   gameType,
   castLinked,
   tunnelSide,
+  forkMode,
   onOpenMovie,
   onClose,
 }: {
@@ -252,9 +264,12 @@ function DiscoveryGrid({
   /** False for standalone modes: no actor network, the card shows the mode's own mechanic. */
   castLinked: boolean;
   tunnelSide?: TunnelSide;
+  forkMode?: boolean;
   onOpenMovie: (screen: Screen & { kind: "movie" }) => void;
   onClose: () => void;
 }) {
+  const [offered, setOffered] = useState<DiscoveryCandidate[]>([]);
+  const offerFork = useOfferFork(runId);
   const [mode, setMode] = useState<CoStarMode>("or");
   const [selectedActorIds, setSelectedActorIds] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
@@ -372,6 +387,31 @@ function DiscoveryGrid({
       else next.add(actorId);
       return next;
     });
+  }
+
+  function toggleOffered(candidate: DiscoveryCandidate) {
+    setOffered((prev) =>
+      prev.some((c) => c.movie_id === candidate.movie_id)
+        ? prev.filter((c) => c.movie_id !== candidate.movie_id)
+        : prev.length < FORK_OFFER_SIZE
+          ? [...prev, candidate]
+          : prev,
+    );
+  }
+
+  async function handleOffer() {
+    const links: Record<number, Record<string, unknown>> = {};
+    for (const candidate of offered) {
+      const connection = candidate.connections[0];
+      if (connection) {
+        links[candidate.movie_id] = connectionMetadata(connection, {
+          from: connection.character_in_frontier,
+          to: connection.character_in_candidate,
+        });
+      }
+    }
+    await offerFork.mutateAsync({ movie_ids: offered.map((c) => c.movie_id), links });
+    onClose();
   }
 
   async function handleAdd(candidate: DiscoveryCandidate, watched: boolean) {
@@ -574,6 +614,15 @@ function DiscoveryGrid({
               allowRepeats={allowRepeats}
               onServer={jellyfinStatus?.[String(candidate.movie_id)]?.on_server}
               pending={pendingMovieId === candidate.movie_id && createStep.isPending}
+              fork={
+                forkMode
+                  ? {
+                      selected: offered.some((c) => c.movie_id === candidate.movie_id),
+                      full: offered.length >= FORK_OFFER_SIZE,
+                      onToggle: () => toggleOffered(candidate),
+                    }
+                  : undefined
+              }
               onQueue={() => handleAdd(candidate, false)}
               onLogWatched={() => handleAdd(candidate, true)}
               onOpenDetails={() =>
@@ -591,9 +640,38 @@ function DiscoveryGrid({
           ))}
         </div>
       )}
+
+      {forkMode && (
+        <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-fuchsia-400/40 bg-app-surface/95 px-4 py-3 backdrop-blur">
+          <div className="min-w-0 text-xs text-zinc-400">
+            <p className="font-semibold text-fuchsia-200">
+              {offered.length}/{FORK_OFFER_SIZE} films chosen
+            </p>
+            <p className="truncate">
+              {offered.length > 0 ? offered.map((c) => c.title).join(" · ") : "Select three films your partner can choose from."}
+            </p>
+            {offerFork.isError && (
+              <p role="alert" className="text-red-400">
+                {offerFork.error instanceof Error ? offerFork.error.message : "Couldn't send the offer."}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={offered.length !== FORK_OFFER_SIZE || offerFork.isPending}
+            onClick={handleOffer}
+            className="flex items-center gap-1.5 rounded-md bg-fuchsia-400 px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-fuchsia-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {offerFork.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Offer to Partner
+          </button>
+        </div>
+      )}
     </div>
   );
 }
+
+const FORK_OFFER_SIZE = 3;
 
 function CandidateCard({
   candidate,
@@ -606,6 +684,7 @@ function CandidateCard({
   allowRepeats,
   onServer,
   pending,
+  fork,
   onQueue,
   onLogWatched,
   onOpenDetails,
@@ -621,6 +700,8 @@ function CandidateCard({
   allowRepeats: boolean;
   onServer: boolean | null | undefined;
   pending: boolean;
+  /** Blind Fork selection state; replaces the log buttons while offering. */
+  fork?: { selected: boolean; full: boolean; onToggle: () => void };
   onQueue: () => void;
   onLogWatched: () => void;
   onOpenDetails: () => void;
@@ -703,7 +784,22 @@ function CandidateCard({
           </span>
         )}
 
-        {isLockedDuplicate ? null : (
+        {isLockedDuplicate ? null : fork ? (
+          <button
+            type="button"
+            aria-pressed={fork.selected}
+            disabled={!fork.selected && fork.full}
+            onClick={fork.onToggle}
+            className={cn(
+              "rounded-md border px-2 py-1.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+              fork.selected
+                ? "border-fuchsia-400 bg-fuchsia-500/20 text-fuchsia-200"
+                : "border-app-border text-zinc-300 hover:bg-app-surface-hover",
+            )}
+          >
+            {fork.selected ? "✓ In the offer" : "Add to offer"}
+          </button>
+        ) : (
           <div className="flex gap-1.5">
             <button
               type="button"

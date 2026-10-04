@@ -14,3 +14,7 @@ class User(SQLModel, table=True):
     password_hash: str
     is_admin: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow)
+    # Golden Veto: one token per 30 days, refilled lazily by `refresh_veto_tokens` on the
+    # first authenticated request after the window lapses (there is no background job).
+    veto_tokens: int = Field(default=1)
+    last_veto_reset_at: datetime = Field(default_factory=utcnow)

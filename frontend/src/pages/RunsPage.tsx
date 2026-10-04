@@ -15,9 +15,10 @@ import { useCreateRun, useCuratedLists, useRuns, useUsers } from "../lib/queries
 import { cn } from "../lib/cn";
 import { usesCastLinks } from "../lib/gameModes";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
+import { DEFAULT_TARGET_LEAD, TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar";
 import { clearModifiers, modifierPayload } from "../lib/modifiers";
 import { useAuthStore } from "../store/authStore";
-import type { EngineMeta, MovieSummary, RulesConfig } from "../types/api";
+import type { EngineMeta, MovieSummary, RulesConfig, TugDimension } from "../types/api";
 
 export default function RunsPage() {
   const navigate = useNavigate();
@@ -109,6 +110,8 @@ function NewRunModal({
   const [rules, setRules] = useState<RulesConfig>(RULE_PRESETS.standard);
   const [canonListId, setCanonListId] = useState("");
   const [targetDecade, setTargetDecade] = useState(1970);
+  const [tugDimension, setTugDimension] = useState<TugDimension>("era");
+  const [tugLead, setTugLead] = useState(DEFAULT_TARGET_LEAD);
   const [rawMode, setRawMode] = useState(false);
   const [rawText, setRawText] = useState("");
 
@@ -124,6 +127,7 @@ function NewRunModal({
   const isTracker = !!selectedEngine && !selectedEngine.capabilities.includes("discover_candidates");
   const needsCanonList = gameType === "canon_island";
   const needsDecade = gameType === "decade_sieve";
+  const isTug = gameType === TUG_OF_WAR;
   // A canon list with no synced films would block every pick.
   const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
 
@@ -133,6 +137,7 @@ function NewRunModal({
     ...modifierPayload(gameType, rules, selectedEngine?.capabilities),
     ...(needsCanonList ? { allowed_curated_list_id: canonListId } : {}),
     ...(needsDecade ? { target_decade: targetDecade } : {}),
+    ...(isTug ? { dimension: tugDimension, target_lead: tugLead } : {}),
   };
   const isTunnel = gameType === MEET_IN_THE_MIDDLE;
   const missingMode = (needsCanonList && !canonListId) || (isTunnel && (!seedMovie || !tailSeedMovie));
@@ -168,6 +173,8 @@ function NewRunModal({
     setRules(RULE_PRESETS.standard);
     setCanonListId("");
     setTargetDecade(1970);
+    setTugDimension("era");
+    setTugLead(DEFAULT_TARGET_LEAD);
     setRawMode(false);
     setRawText("");
     createRun.reset();
@@ -260,6 +267,56 @@ function NewRunModal({
               ))}
             </select>
           </Field>
+        )}
+
+        {isTug && (
+          <div className="flex flex-col gap-3 rounded-lg border border-lime-400/30 bg-lime-500/5 p-3">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-zinc-400">Dimension (what pulls the rope)</span>
+              <div role="radiogroup" aria-label="Tug of War dimension" className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {(Object.keys(TUG_DIMENSIONS) as TugDimension[]).map((key) => {
+                  const dimension = TUG_DIMENSIONS[key];
+                  const active = tugDimension === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setTugDimension(key)}
+                      className={cn(
+                        "flex flex-col gap-0.5 rounded-lg border p-2.5 text-left transition-colors",
+                        active
+                          ? "border-lime-400 bg-lime-500/10"
+                          : "border-app-border hover:border-zinc-600",
+                      )}
+                    >
+                      <span className="text-sm font-semibold text-zinc-100">{dimension.label}</span>
+                      <span className="text-[11px] text-lime-300">
+                        Team A: {dimension.teamA({} as RulesConfig)} &middot; Team B: {dimension.teamB({} as RulesConfig)}
+                      </span>
+                      <span className="text-[11px] text-zinc-500">{dimension.detail}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <Field label={`Target lead (points ahead to win): ${tugLead}`}>
+              <input
+                type="range"
+                min={2}
+                max={10}
+                value={tugLead}
+                onChange={(e) => setTugLead(Number(e.target.value))}
+                aria-label="Target lead"
+                className="w-full accent-accent"
+              />
+            </Field>
+            <p className="text-[11px] text-zinc-500">
+              You are Team A; the next participant you add is Team B. Every watched film scores one point
+              for a team, and the first to lead by {tugLead} wins.
+            </p>
+          </div>
         )}
 
         <Field label="Participants">

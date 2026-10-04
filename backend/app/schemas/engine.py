@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -145,6 +145,8 @@ class PitchRequest(BaseModel):
     candidate_movie_id: int
     # What links them, if the caller knows (e.g. "Tom Hanks"): grounds the pitch.
     link_label: str | None = Field(default=None, max_length=120)
+    # "critic": a witty warning about why the hop might be exhausting (Blind Fork veto advice).
+    style: Literal["pitch", "critic"] = "pitch"
 
 
 class PitchResult(BaseModel):

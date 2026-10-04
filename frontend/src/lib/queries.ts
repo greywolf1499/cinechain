@@ -15,6 +15,7 @@ import type {
 	Passport,
 	DiscoveryCandidate,
 	EngineMeta,
+	GoldenVetoResult,
 	MovieDetail,
 	Run,
 	RunDetail,
@@ -27,6 +28,7 @@ import type {
 	RunStatus,
 	RulesConfig,
 	RequestConfig,
+	RunStep,
 	StepStatus,
 	UserSummary,
 } from "../types/api";
@@ -311,6 +313,50 @@ export function useUpdateRunRules(runId: string) {
 			queryClient.invalidateQueries({ queryKey: ["runs"] });
 		},
 	});
+}
+
+/** Every Blind Fork / Golden Veto call changes the run (and the veto balance in /auth/me). */
+function useRunMutation<TVariables, TResult>(
+	runId: string,
+	mutationFn: (variables: TVariables) => Promise<TResult>,
+) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn,
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+			queryClient.invalidateQueries({ queryKey: ["runs"] });
+			queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+		},
+	});
+}
+
+export function useOfferFork(runId: string) {
+	return useRunMutation(runId, (payload: { movie_ids: number[]; links?: Record<number, Record<string, unknown>> }) =>
+		api.post<RunDetail>(`/runs/${runId}/fork`, payload),
+	);
+}
+
+export function useWithdrawFork(runId: string) {
+	return useRunMutation(runId, (_: void) => api.delete<RunDetail>(`/runs/${runId}/fork`));
+}
+
+export function useVetoForkMovie(runId: string) {
+	return useRunMutation(runId, (movieId: number) =>
+		api.post<RunDetail>(`/runs/${runId}/fork/veto`, { movie_id: movieId }),
+	);
+}
+
+export function useAcceptForkMovie(runId: string) {
+	return useRunMutation(runId, (movieId: number) =>
+		api.post<RunStep>(`/runs/${runId}/fork/accept`, { movie_id: movieId }),
+	);
+}
+
+export function useGoldenVeto(runId: string) {
+	return useRunMutation(runId, (target: "fork" | "step") =>
+		api.post<GoldenVetoResult>(`/runs/${runId}/veto`, { target }),
+	);
 }
 
 export function useDeleteRun() {

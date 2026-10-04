@@ -8,6 +8,7 @@ import {
   Landmark,
   CalendarRange,
   Network,
+  Swords,
   Palette,
   Sparkles,
   type LucideIcon,
@@ -51,6 +52,14 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     bubble: "bg-cyan-500/15 text-cyan-300",
     ring: "border-cyan-400 shadow-[0_0_0_1px_rgba(34,211,238,0.6),0_8px_30px_-8px_rgba(34,211,238,0.35)]",
     text: "text-cyan-300",
+  },
+  tug_of_war: {
+    icon: Swords,
+    tagline: "Pull the rope your way",
+    tags: ["Shared cast", "Two teams", "Era or geography"],
+    bubble: "bg-lime-500/15 text-lime-300",
+    ring: "border-lime-400 shadow-[0_0_0_1px_rgba(163,230,53,0.6),0_8px_30px_-8px_rgba(163,230,53,0.35)]",
+    text: "text-lime-300",
   },
   canon_island: {
     icon: Landmark,

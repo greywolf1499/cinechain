@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Skull,
   Sparkles,
+  Star,
   Trash2,
   Trophy,
   User,
@@ -31,6 +32,9 @@ import ModifierChips from "../components/ModifierChips";
 import TunnelFrontierCard from "../components/TunnelFrontierCard";
 import TunnelTimeline from "../components/TunnelTimeline";
 import RouletteSpinner from "../components/RouletteSpinner";
+import ForkOfferPanel from "../components/ForkOfferPanel";
+import TugOfWarMeter from "../components/TugOfWarMeter";
+import PlayerAvatar from "../components/PlayerAvatar";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
 import { isoToFlagEmoji } from "../lib/countries";
@@ -42,16 +46,28 @@ import {
   useDeleteRun,
   useDeleteStep,
   useEngines,
+  useGoldenVeto,
   useRun,
   useRunConstraint,
   useRunStats,
   useUpdateRun,
+  useUpdateRunRules,
   useUsers,
 } from "../lib/queries";
+import { useAuthStore } from "../store/authStore";
+import { TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import { STANDALONE_MODES, gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
-import type { CuratedListSummary, RulesConfig, RunStats, RunStatus, RunStep } from "../types/api";
+import type {
+  CuratedListSummary,
+  RulesConfig,
+  RunDetail,
+  RunStats,
+  RunStatus,
+  RunStep,
+  UserSummary,
+} from "../types/api";
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -166,6 +182,18 @@ export default function RunDetailPage() {
         />
       )}
 
+      {run.game_type === TUG_OF_WAR && (
+        <TugOfWarMeter
+          rules={run.rules_config}
+          participants={run.participants}
+          users={users}
+          finished={locked}
+        />
+      )}
+
+      <ForkOfferPanel run={run} users={users} frontier={lastStep} />
+      <GoldenVetoBar run={run} users={users} />
+
       {run.game_type === MEET_IN_THE_MIDDLE && run.steps.length > 0 ? (
         <div className="flex flex-col gap-6">
           <TunnelTimeline
@@ -210,6 +238,7 @@ export default function RunDetailPage() {
                 locked={locked}
                 capabilities={capabilities}
                 gameType={run.game_type}
+                participantCount={run.participants.length}
               />
             </div>
           )}
@@ -227,6 +256,7 @@ export default function RunDetailPage() {
               locked={locked}
               capabilities={capabilities}
               gameType={run.game_type}
+              participantCount={run.participants.length}
             />
             <MiniPassportWidget stats={stats} rules={run.rules_config} castLinked={castLinked} />
             <RulesSummaryCard
@@ -394,6 +424,9 @@ function modeDetail(
   }
   if (STANDALONE_MODES.has(gameType) && rules.require_cast_link) return "+ cast link";
   if (gameType === "decade_sieve" && rules.target_decade) return `${rules.target_decade}s`;
+  if (gameType === TUG_OF_WAR) {
+    return `${TUG_DIMENSIONS[rules.dimension ?? "era"].label}, lead of ${rules.target_lead ?? 4}`;
+  }
   if (gameType === "canon_island" && rules.allowed_curated_list_id) {
     return lists?.find((l) => l.id === rules.allowed_curated_list_id)?.title ?? null;
   }
@@ -550,6 +583,7 @@ function ActiveFrontierCard({
   locked,
   capabilities,
   gameType,
+  participantCount,
 }: {
   runId: string;
   tailStep: RunStep | undefined;
@@ -558,9 +592,14 @@ function ActiveFrontierCard({
   locked: boolean;
   capabilities: string[];
   gameType: string;
+  participantCount: number;
 }) {
   const navigate = useNavigate();
   const [showHub, setShowHub] = useState(false);
+  const [showForkHub, setShowForkHub] = useState(false);
+  const forkEnabled = !!rulesConfig.blind_fork;
+  const forkPending = !!rulesConfig.pending_fork;
+  const canFork = capabilities.includes("discover_candidates") && !capabilities.includes("tunnel");
   const [showDirectSearch, setShowDirectSearch] = useState(false);
   const { data: constraint } = useRunConstraint(runId);
   const isRoulette = capabilities.includes("roulette_spin");
@@ -600,15 +639,35 @@ function ActiveFrontierCard({
         </div>
       )}
 
+      {!locked && canFork && tailStep && (
+        <BlindForkToggle runId={runId} rules={rulesConfig} participantCount={participantCount} />
+      )}
+
       {locked ? (
         <div className="flex items-center gap-2 rounded-md border border-app-border bg-app-bg px-3 py-2.5 text-sm text-zinc-500">
           <Lock className="h-4 w-4 shrink-0" />
           This run is over - logging is locked.
         </div>
+      ) : forkPending ? (
+        <div className="flex items-center gap-2 rounded-md border border-fuchsia-400/30 bg-fuchsia-500/5 px-3 py-2.5 text-sm text-fuchsia-200">
+          <Lock className="h-4 w-4 shrink-0" />
+          Logging is paused while a Blind Fork offer is answered.
+        </div>
       ) : isRoulette ? (
         <RouletteSpinner runId={runId} />
       ) : (
       <div className="flex flex-col gap-2">
+        {canDiscover && forkEnabled && canFork && participantCount > 1 && (
+        <button
+          type="button"
+          onClick={() => setShowForkHub(true)}
+          disabled={!tailStep}
+          className="flex items-center justify-center gap-1.5 rounded-md bg-fuchsia-400 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-fuchsia-300 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span aria-hidden>🎭</span>
+          Offer 3 Films (Blind Fork)
+        </button>
+        )}
         {canDiscover && (
         <button
           type="button"
@@ -659,6 +718,19 @@ function ActiveFrontierCard({
         </div>
       )}
 
+      {!locked && canDiscover && showForkHub && tailStep && (
+        <PickNextHub
+          open={showForkHub}
+          onClose={() => setShowForkHub(false)}
+          runId={runId}
+          frontierStep={tailStep}
+          rulesConfig={rulesConfig}
+          steps={steps}
+          gameType={gameType}
+          forkMode
+        />
+      )}
+
       {!locked && canDiscover && showHub && tailStep && (
         <PickNextHub
           open={showHub}
@@ -669,6 +741,125 @@ function ActiveFrontierCard({
           steps={steps}
           gameType={gameType}
         />
+      )}
+    </div>
+  );
+}
+
+function BlindForkToggle({
+  runId,
+  rules,
+  participantCount,
+}: {
+  runId: string;
+  rules: RulesConfig;
+  participantCount: number;
+}) {
+  const updateRules = useUpdateRunRules(runId);
+  const enabled = !!rules.blind_fork;
+
+  return (
+    <div className="mb-4 rounded-md border border-app-border bg-app-bg/60 px-3 py-2.5">
+      <div className="flex items-start justify-between gap-3">
+        <span className="flex flex-col">
+          <span className="text-xs font-medium text-zinc-200">Enable Blind Fork (Offer 3, Veto 1)</span>
+          <span className="text-[11px] text-zinc-500">
+            {participantCount < 2
+              ? "Needs a partner on the run to answer your offers."
+              : "Offer your partner three films; they veto one and watch one of the other two."}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Enable Blind Fork"
+          disabled={updateRules.isPending || (participantCount < 2 && !enabled)}
+          onClick={() => updateRules.mutate({ ...rules, blind_fork: !enabled })}
+          className={cn(
+            "relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50",
+            enabled ? "bg-accent" : "bg-app-surface-hover",
+          )}
+        >
+          <span
+            className={cn(
+              "absolute top-0.5 h-4 w-4 rounded-full bg-zinc-100 transition-all",
+              enabled ? "left-[18px]" : "left-0.5",
+            )}
+          />
+        </button>
+      </div>
+      {updateRules.isError && (
+        <p role="alert" className="mt-1.5 text-[11px] text-red-400">
+          {updateRules.error instanceof Error ? updateRules.error.message : "Couldn't change the setting."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Golden Veto: overrule the partner's latest step (a monthly token). Fork offers are vetoed from
+ * the offer overlay instead. */
+function GoldenVetoBar({ run, users }: { run: RunDetail; users: UserSummary[] | undefined }) {
+  const me = useAuthStore((s) => s.user);
+  const goldenVeto = useGoldenVeto(run.id);
+  const [confirming, setConfirming] = useState(false);
+  const seeds = run.game_type === MEET_IN_THE_MIDDLE ? 2 : 1;
+  const latest = run.steps[run.steps.length - 1];
+  const partnerLogged =
+    !!latest && !!latest.logged_by_user_id && latest.logged_by_user_id !== me?.id;
+  if (run.status !== "active" || run.steps.length <= seeds || !partnerLogged || run.rules_config.pending_fork) {
+    return null;
+  }
+  const tokens = me?.veto_tokens ?? 0;
+  const partnerName = users?.find((u) => u.id === latest.logged_by_user_id)?.display_name ?? "Your partner";
+
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-amber-700/40 bg-amber-950/20 px-4 py-2.5">
+      <PlayerAvatar
+        name={partnerName}
+        size="sm"
+        className="border-amber-500/60 bg-amber-500/10 text-amber-200"
+      />
+      <p className="min-w-0 flex-1 text-xs text-zinc-400">
+        <strong className="text-zinc-200">{partnerName}</strong> logged{" "}
+        <strong className="text-zinc-200">{latest.movie_title}</strong>. Not having it?
+        {goldenVeto.isError && (
+          <span role="alert" className="ml-1 text-red-400">
+            {goldenVeto.error instanceof Error ? goldenVeto.error.message : "Couldn't veto."}
+          </span>
+        )}
+      </p>
+      {confirming ? (
+        <span className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={goldenVeto.isPending}
+            onClick={() => goldenVeto.mutate("step", { onSettled: () => setConfirming(false) })}
+            className="flex items-center gap-1.5 rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 disabled:opacity-60"
+          >
+            {goldenVeto.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Spend token
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            className="rounded-md px-2 py-1.5 text-xs text-zinc-400 hover:bg-app-surface-hover"
+          >
+            Cancel
+          </button>
+        </span>
+      ) : (
+        <button
+          type="button"
+          disabled={tokens < 1}
+          onClick={() => setConfirming(true)}
+          title={tokens < 1 ? "No Golden Veto tokens left - you get one every 30 days" : undefined}
+          className="flex items-center gap-1.5 rounded-md border border-amber-700/60 px-3 py-1.5 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-900/40 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Star className="h-3.5 w-3.5" />
+          Golden Veto ({tokens} left)
+        </button>
       )}
     </div>
   );

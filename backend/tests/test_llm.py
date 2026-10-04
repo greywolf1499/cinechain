@@ -282,6 +282,21 @@ def test_pitch_endpoint_grounds_the_prompt_and_caches(client):
     assert "Heat (1995)" in prompt and "Collateral (1995)" in prompt and "Jamie Foxx" in prompt
 
 
+def test_critic_style_uses_the_veto_advice_prompt_and_its_own_cache(client):
+    enable_ollama(client)
+    with respx.mock:
+        mock_movies()
+        chat = respx.post(OLLAMA_CHAT).mock(return_value=ollama_reply("Brace for a three-hour slog."))
+        base = {"previous_movie_id": 1, "candidate_movie_id": 2}
+        critic = client.post("/api/engine/pitch", json={**base, "style": "critic"})
+        plain = client.post("/api/engine/pitch", json=base)
+
+    assert critic.status_code == 200 and plain.status_code == 200
+    assert chat.call_count == 2  # the critic answer is not served for a plain pitch
+    system = json.loads(chat.calls[0].request.content)["messages"][0]["content"]
+    assert "exhausting" in system
+
+
 def test_pitch_failure_is_a_503_with_the_reason(client):
     enable_ollama(client)
     with respx.mock:

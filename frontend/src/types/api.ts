@@ -9,6 +9,9 @@ export interface User {
 	display_name: string;
 	is_admin: boolean;
 	created_at: string;
+	/** Golden Veto tokens left (one every 30 days). */
+	veto_tokens?: number;
+	last_veto_reset_at?: string | null;
 }
 
 export interface UserSummary {
@@ -53,8 +56,40 @@ export interface RulesConfig {
 	runtime_staircase?: RuntimeStaircase | null;
 	/** May not pick a country visited within the last N steps (World Passport defaults to 3). */
 	country_cooldown?: number | null;
+	/** Blind Fork workflow: offer 3 films, the partner vetoes 1 and picks from the rest. */
+	blind_fork?: boolean;
+	/** Server-owned: the offer waiting for the partner's answer. */
+	pending_fork?: PendingFork | null;
+	/** Tug of War: which metadata scores (era or geography) and the lead that wins. */
+	dimension?: TugDimension;
+	target_lead?: number;
+	/** Era dimension cut-offs: Team A = before `era_a_before`, Team B = after `era_b_after`. */
+	era_a_before?: number;
+	era_b_after?: number;
+	/** Server-owned Tug of War state: points per team and who plays each side. */
+	tug_scores?: { team_a: number; team_b: number };
+	tug_players?: { team_a: string | null; team_b: string | null };
 	win_condition?: RunCondition | RunCondition[];
 	fail_condition?: RunCondition | RunCondition[];
+}
+
+export type TugDimension = "era" | "geography";
+
+export interface PendingFork {
+	offered_by_id: string;
+	/** Films still in play: 3 when offered, 2 once the partner has vetoed one. */
+	movie_ids: number[];
+	offered_at: string;
+	/** Link metadata (actor, characters) per film id, logged with the accepted film. */
+	links?: Record<string, Record<string, unknown>>;
+	vetoed_movie_id?: number;
+	vetoed_by_id?: string;
+}
+
+export interface GoldenVetoResult {
+	target: "fork" | "step";
+	veto_tokens: number;
+	run: RunDetail;
 }
 
 /** A hand-written "Super-Unlock" payload: any JSON object, sent to the backend as-is. */

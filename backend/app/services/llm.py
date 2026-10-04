@@ -349,6 +349,12 @@ PITCH_SYSTEM = (
     "30 words, why one film is a great next watch after another. No preamble, no lists, "
     "no spoilers, no quotation marks."
 )
+CRITIC_SYSTEM = (
+    "You are a witty, slightly merciless film critic advising a friend who may veto one film. "
+    "In exactly one punchy sentence of at most 30 words, say why the next film might be an "
+    "exhausting or difficult watch or hop after the previous one (length, pacing, mood whiplash, "
+    "heaviness). No preamble, no lists, no spoilers, no quotation marks."
+)
 TEASER_SYSTEM = (
     "You write cryptic, spoiler-free teasers for a blind movie pick. Reply with exactly one "
     "evocative sentence of at most 25 words that captures the vibe only. Never name the film, "
@@ -378,18 +384,24 @@ def _blurb(movie: CachedMovie) -> str:
 
 
 async def pitch(
-    config: LlmConfig, previous: CachedMovie, candidate: CachedMovie, link: str | None = None
+    config: LlmConfig, previous: CachedMovie, candidate: CachedMovie, link: str | None = None,
+    critic: bool = False,
 ) -> str:
-    """Why `candidate` is a great next film after `previous`, in one cinephile sentence."""
-    key = f"{config.fingerprint}|pitch|{previous.tmdb_id}|{candidate.tmdb_id}|{link or ''}"
+    """Why `candidate` is a great next film after `previous`, in one cinephile sentence - or,
+    with `critic`, why it might be an exhausting hop (Blind Fork veto advice)."""
+    kind = "critic" if critic else "pitch"
+    key = f"{config.fingerprint}|{kind}|{previous.tmdb_id}|{candidate.tmdb_id}|{link or ''}"
     if key in _cache:
         return _cache[key]
     connection = f"\nThe two films are linked by: {link}." if link else ""
     prompt = (
         f"Previous film - {_blurb(previous)}\nNext film - {_blurb(candidate)}{connection}\n"
-        "Pitch the transition from the previous film to the next one in one sentence."
+        + ("Warn about the transition from the previous film to the next one in one sentence."
+           if critic else
+           "Pitch the transition from the previous film to the next one in one sentence.")
     )
-    return _remember(key, await generate(config, PITCH_SYSTEM, prompt, max_tokens=80))
+    system = CRITIC_SYSTEM if critic else PITCH_SYSTEM
+    return _remember(key, await generate(config, system, prompt, max_tokens=80))
 
 
 def mask_title(text: str, title: str) -> str:

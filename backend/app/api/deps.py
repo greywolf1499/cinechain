@@ -8,6 +8,7 @@ from app.models.user import User
 from app.services import settings_repo
 from app.services.security import COOKIE_NAME, read_session_token
 from app.services.tmdb import TMDBClient
+from app.services.veto import refresh_veto_tokens
 
 
 def get_optional_user(
@@ -19,7 +20,10 @@ def get_optional_user(
     user_id = read_session_token(token)
     if user_id is None:
         return None
-    return session.get(User, user_id)
+    user = session.get(User, user_id)
+    if user is not None:
+        refresh_veto_tokens(session, user)
+    return user
 
 
 def get_current_user(user: User | None = Depends(get_optional_user)) -> User:

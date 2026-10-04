@@ -22,6 +22,8 @@ class UserPublic(BaseModel):
     display_name: str
     is_admin: bool
     created_at: datetime
+    veto_tokens: int = 1
+    last_veto_reset_at: datetime | None = None
 
 
 class UserSummary(BaseModel):

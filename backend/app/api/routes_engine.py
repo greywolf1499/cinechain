@@ -206,7 +206,8 @@ async def pitch_transition(
     except (TMDBError, DeadlineReached) as exc:
         raise _tmdb_unavailable(exc) from exc
     try:
-        text = await llm.pitch(config, previous, candidate, payload.link_label)
+        text = await llm.pitch(
+            config, previous, candidate, payload.link_label, critic=payload.style == "critic")
     except llm.LlmUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return PitchResult(pitch=text)

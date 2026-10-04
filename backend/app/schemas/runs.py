@@ -50,6 +50,8 @@ class RunRulesUpdate(BaseModel):
     chrono_direction: Literal["climb", "descent"] | None = None
     runtime_staircase: Literal["ascending", "descending"] | None = None
     country_cooldown: int | None = Field(default=None, ge=0, le=20)
+    # Blind Fork workflow switch (offer 3, partner vetoes 1 and picks from the rest).
+    blind_fork: bool | None = None
 
 
 MODIFIER_UPDATE_KEYS = ("chrono_direction", "runtime_staircase", "country_cooldown")
@@ -70,6 +72,43 @@ class RunStepCreate(BaseModel):
 class StepValidateRequest(BaseModel):
     movie_id: int
     tunnel_side: Literal["head", "tail"] | None = None
+
+
+class ForkOffer(BaseModel):
+    """Blind Fork step 1: the three films offered to the partner."""
+
+    movie_ids: list[int] = Field(min_length=3, max_length=3)
+    # Optional per-film link metadata (actor, characters) from the Pick Next card, so the film
+    # is logged with the same connection a direct pick would have had. Keyed by movie id.
+    links: dict[int, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("movie_ids")
+    @classmethod
+    def _distinct(cls, value: list[int]) -> list[int]:
+        if len(set(value)) != len(value):
+            raise ValueError("Offer three different films")
+        return value
+
+
+class ForkVeto(BaseModel):
+    movie_id: int
+
+
+class ForkAccept(BaseModel):
+    movie_id: int
+    user_notes: str | None = None
+    status: Literal["watched", "planned"] = "watched"
+
+
+class GoldenVeto(BaseModel):
+    # fork = tear up the partner's pending offer; step = remove the partner's latest step.
+    target: Literal["fork", "step"] = "fork"
+
+
+class GoldenVetoResult(BaseModel):
+    target: Literal["fork", "step"]
+    veto_tokens: int
+    run: "RunDetail"
 
 
 class MarkWatchedRequest(BaseModel):
@@ -128,3 +167,6 @@ class RunSummary(BaseModel):
 class RunDetail(RunSummary):
     steps: list[RunStepPublic]
     participants: list[ParticipantPublic]
+
+
+GoldenVetoResult.model_rebuild()

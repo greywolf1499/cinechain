@@ -17,6 +17,7 @@ from app.schemas.movies import (
     MovieRatings,
     MovieSearchResponse,
     MovieSummary,
+    PersonSummary,
     SeedSuggestionOut,
     TropeExtraction,
 )
@@ -97,6 +98,25 @@ async def search_movies(
         page=raw.get("page", page),
         total_pages=raw.get("total_pages", 1),
     )
+
+
+@router.get("/people/search", response_model=list[PersonSummary])
+async def search_people(
+    q: str = Query(..., min_length=1),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> list[PersonSummary]:
+    """Live TMDB person search (actors first): the Method Actor Marathon's picker."""
+    raw = await tmdb.search_people(q)
+    people = [
+        PersonSummary(
+            person_id=entry["id"], name=entry.get("name") or "",
+            profile_path=entry.get("profile_path"),
+            known_for_department=entry.get("known_for_department"),
+            known_for=[k.get("title") or k.get("name") or "" for k in entry.get("known_for", [])][:3])
+        for entry in raw.get("results", [])
+    ]
+    return sorted(people, key=lambda p: p.known_for_department != "Acting")[:10]
 
 
 @router.get("/movies/genres", response_model=list[GenreOut])

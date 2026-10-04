@@ -36,6 +36,14 @@ HYDRATE_BUDGET = 30
 HYDRATE_SECONDS = 20.0
 
 
+class RunSetupError(Exception):
+    """A run can't be created from the given rules (e.g. an unknown actor, a thin watchlist)."""
+
+    def __init__(self, message: str, status_code: int = 422) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class BaseChallengeEngine(ABC):
     """A challenge's game rules, bound to the current DB session and TMDB client."""
 
@@ -217,6 +225,11 @@ class BaseChallengeEngine(ABC):
 
     def prepare_rules_config(self, rules: dict) -> dict:
         """The `rules_config` a new run is stored with (engines fill in their own defaults)."""
+        return rules
+
+    async def prepare_run(self, rules: dict, user_id: str) -> dict:
+        """Async, I/O-capable counterpart of `prepare_rules_config`, run once when a run is created
+        (e.g. fetching an actor's filmography). Raises `RunSetupError` when the run can't start."""
         return rules
 
     def sync_run_state(self, run: Run, steps: Sequence[RunStep]) -> None:

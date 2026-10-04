@@ -9,6 +9,14 @@ class MovieSummary(BaseModel):
     origin_country: str | None = None
 
 
+class PersonSummary(BaseModel):
+    person_id: int
+    name: str
+    profile_path: str | None = None
+    known_for_department: str | None = None
+    known_for: list[str] = []
+
+
 class SeedSuggestionOut(MovieSummary):
     reason: str  # why it was picked, e.g. "On the SS22 list", "IMDb 8.4"
 

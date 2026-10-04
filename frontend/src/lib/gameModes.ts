@@ -12,6 +12,8 @@ import {
   Swords,
   Palette,
   Skull,
+  Trophy,
+  VenetianMask,
   Sparkles,
   SwatchBook,
   type LucideIcon,
@@ -131,6 +133,24 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     ring: "border-red-400 shadow-[0_0_0_1px_rgba(248,113,113,0.6),0_8px_30px_-8px_rgba(248,113,113,0.35)]",
     text: "text-red-300",
   },
+  march_madness: {
+    icon: Trophy,
+    tagline: "16 films enter, one is crowned",
+    tags: ["Tournament", "Watchlist", "Partner voting"],
+    progression: ["Round of 16", "Quarters", "Semis", "Finals", "Champion"],
+    bubble: "bg-yellow-500/15 text-yellow-300",
+    ring: "border-yellow-400 shadow-[0_0_0_1px_rgba(250,204,21,0.6),0_8px_30px_-8px_rgba(250,204,21,0.35)]",
+    text: "text-yellow-300",
+  },
+  method_actor: {
+    icon: VenetianMask,
+    tagline: "One career, in order",
+    tags: ["One actor", "Chronological", "Milestones"],
+    progression: ["🐣 Debut", "🚀 Breakout", "🏆 Prestige Peak", "👑 Resurgence"],
+    bubble: "bg-fuchsia-500/15 text-fuchsia-300",
+    ring: "border-fuchsia-400 shadow-[0_0_0_1px_rgba(232,121,249,0.6),0_8px_30px_-8px_rgba(232,121,249,0.35)]",
+    text: "text-fuchsia-300",
+  },
   aesthetic_gradient: {
     icon: Palette,
     tagline: "Fade poster to poster",
@@ -172,7 +192,7 @@ export const STANDALONE_MODES = new Set([
 ]);
 
 /** Modes with no film-to-film graph at all (SQL trackers). */
-export const TRACKER_MODES = new Set(["decade_sieve", "roulette"]);
+export const TRACKER_MODES = new Set(["decade_sieve", "roulette", "march_madness", "method_actor"]);
 
 /** Does this run link films through shared cast/directors? Drives the Pick Next layout. */
 export function usesCastLinks(

@@ -1,4 +1,4 @@
 # CineChain Project State
-**Current Phase:** Phase 26b: The Rabbit Hole (Rogue-like Survival Mode)
-**Current Task:** Implementing the RabbitHoleEngine, escalating tier state machine, 3-life survival tracking, and rogue-like HUD.
-**Next Steps:** Phase 26b complete. Await human confirmation to begin the next phase.
+**Current Phase:** Phase 26c: Watchlist March Madness & The Method Actor Marathon
+**Current Task:** Implementing the tournament bracket engine & UI, and the actor career evolution track.
+**Next Steps:** Phase 26c complete. Await human confirmation to begin the next phase.

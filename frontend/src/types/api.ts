@@ -77,6 +77,70 @@ export interface RulesConfig {
 	tug_players?: { team_a: string | null; team_b: string | null };
 	win_condition?: RunCondition | RunCondition[];
 	fail_condition?: RunCondition | RunCondition[];
+	/** Watchlist March Madness: the 16 seeds (or `seed_from_watchlist`) when creating; the server
+	 * builds `bracket` + `bracket_films`. */
+	bracket_movie_ids?: number[];
+	seed_from_watchlist?: boolean;
+	bracket?: Bracket;
+	bracket_films?: Record<string, BracketFilm>;
+	/** The Method Actor Marathon: the picked actor's TMDB id when creating; the server builds the rest. */
+	actor_id?: number;
+	actor?: { id: number; name: string };
+	filmography?: CareerFilm[];
+	max_skip?: number;
+}
+
+export type BracketRound = "round_of_16" | "quarterfinals" | "semifinals" | "finals";
+
+export interface BracketMatchup {
+	id: string;
+	a: number | null;
+	b: number | null;
+	winner: number | null;
+	/** Partner votes: user id -> movie id. */
+	votes: Record<string, number>;
+}
+
+export interface Bracket {
+	round_of_16: BracketMatchup[];
+	quarterfinals: BracketMatchup[];
+	semifinals: BracketMatchup[];
+	finals: BracketMatchup[];
+	champion: number | null;
+}
+
+/** Card data snapshotted when the bracket was created. */
+export interface BracketFilm {
+	title: string;
+	release_year: number | null;
+	poster_path: string | null;
+	runtime: number | null;
+	overview: string;
+	tagline: string;
+}
+
+export type CareerMilestone = "debut" | "breakout" | "prestige_peak" | "modern_resurgence";
+
+export interface CareerFilm {
+	movie_id: number;
+	title: string;
+	release_date: string;
+	year: number;
+	poster_path: string | null;
+	character: string | null;
+	order: number;
+	vote_average: number;
+	vote_count: number;
+	age: number | null;
+	milestones: CareerMilestone[];
+}
+
+export interface PersonSummary {
+	person_id: number;
+	name: string;
+	profile_path: string | null;
+	known_for_department: string | null;
+	known_for: string[];
 }
 
 export type TugDimension = "era" | "geography";

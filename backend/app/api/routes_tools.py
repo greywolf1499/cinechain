@@ -5,16 +5,19 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
 from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client
 from app.db import get_session
+from app.engines import march_madness
+from app.engines.base import RunSetupError
 from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie, CachedMovieDirector, CachedMovieRating
 from app.models.curated import CanonMovieBadge, LetterboxdWatchlist
 from app.models.user import User
+from app.schemas.movies import MovieSummary
 from app.services import cache_repo
 from app.services.tmdb import TMDBClient
 from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
@@ -184,3 +187,33 @@ async def bingo_watchlist(
         if _needs_work(session, session.get(CachedMovie, row.movie_id), omdb.enabled, row.movie_id)
     )
     return BingoWatchlist(films=films, total=len(films), pending=pending)
+
+
+@router.get("/march-madness/seed", response_model=list[MovieSummary])
+def march_madness_seed(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> list[MovieSummary]:
+    """16 random films from the user's synced Letterboxd watchlist, to seed a bracket."""
+    try:
+        ids = march_madness.seed_from_watchlist(session, current_user.id)
+    except RunSetupError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    titles = {
+        row.movie_id: row for row in session.exec(
+            select(LetterboxdWatchlist).where(
+                LetterboxdWatchlist.user_id == current_user.id,
+                col(LetterboxdWatchlist.movie_id).in_(ids))).all()}
+    cached = {m.tmdb_id: m for m in session.exec(
+        select(CachedMovie).where(col(CachedMovie.tmdb_id).in_(ids))).all()}
+    return [
+        MovieSummary(
+            tmdb_id=movie_id,
+            title=cached[movie_id].title if movie_id in cached else titles[movie_id].title,
+            poster_path=cached[movie_id].poster_path if movie_id in cached else None,
+            release_year=(
+                parse_release_year(cached[movie_id].release_date) if movie_id in cached
+                else titles[movie_id].year),
+            origin_country=cached[movie_id].origin_country if movie_id in cached else None)
+        for movie_id in ids
+    ]

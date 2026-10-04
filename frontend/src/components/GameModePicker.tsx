@@ -15,6 +15,8 @@ const MODE_ORDER = [
   "meet_in_the_middle",
   "tug_of_war",
   "rabbit_hole",
+  "march_madness",
+  "method_actor",
   "chrono_climb",
   "genre_pendulum",
   "world_passport",

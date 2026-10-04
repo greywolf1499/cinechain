@@ -414,6 +414,32 @@ export function useCreateStep(runId: string) {
 	});
 }
 
+/** March Madness: decide a matchup (the winner is logged as watched). */
+export function useAdvanceBracket(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (vars: { matchup_id: string; winning_movie_id: number }) =>
+			api.post<RunDetail>(`/runs/${runId}/bracket/advance`, vars),
+		onSuccess: (run) => {
+			queryClient.setQueryData(queryKeys.run(runId), run);
+			queryClient.invalidateQueries({ queryKey: ["runs"] });
+		},
+	});
+}
+
+/** March Madness: a partner's vote on a matchup (a majority resolves it). */
+export function useBracketVote(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (vars: { matchup_id: string; movie_id: number }) =>
+			api.post<RunDetail>(`/runs/${runId}/bracket/vote`, vars),
+		onSuccess: (run) => {
+			queryClient.setQueryData(queryKeys.run(runId), run);
+			queryClient.invalidateQueries({ queryKey: ["runs"] });
+		},
+	});
+}
+
 export function useMarkStepWatched(runId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({

@@ -17,10 +17,14 @@ import { usesCastLinks } from "../lib/gameModes";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
 import { DEFAULT_TARGET_LEAD, TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar";
 import { DEFAULT_GENRE_CYCLE, DEFAULT_SWING_FREQUENCY, GENRE_PENDULUM } from "../lib/pendulum";
+import { BRACKET_SIZE, MARCH_MADNESS } from "../lib/bracket";
+import { METHOD_ACTOR } from "../lib/careerTrack";
+import ActorPicker from "../components/ActorPicker";
+import BracketSeedPicker from "../components/BracketSeedPicker";
 import GenreCycleInput from "../components/GenreCycleInput";
 import { clearModifiers, modifierPayload } from "../lib/modifiers";
 import { useAuthStore } from "../store/authStore";
-import type { EngineMeta, MovieSummary, RulesConfig, TugDimension } from "../types/api";
+import type { EngineMeta, MovieSummary, PersonSummary, RulesConfig, TugDimension } from "../types/api";
 
 export default function RunsPage() {
   const navigate = useNavigate();
@@ -116,6 +120,8 @@ function NewRunModal({
   const [tugLead, setTugLead] = useState(DEFAULT_TARGET_LEAD);
   const [genreCycle, setGenreCycle] = useState<string[]>([...DEFAULT_GENRE_CYCLE]);
   const [swingFrequency, setSwingFrequency] = useState(DEFAULT_SWING_FREQUENCY);
+  const [bracketFilms, setBracketFilms] = useState<MovieSummary[]>([]);
+  const [actor, setActor] = useState<PersonSummary | null>(null);
   const [rawMode, setRawMode] = useState(false);
   const [rawText, setRawText] = useState("");
 
@@ -133,11 +139,15 @@ function NewRunModal({
   const needsDecade = gameType === "decade_sieve";
   const isTug = gameType === TUG_OF_WAR;
   const isPendulum = gameType === GENRE_PENDULUM;
+  const isBracket = gameType === MARCH_MADNESS;
+  const isMethodActor = gameType === METHOD_ACTOR;
   // A canon list with no synced films would block every pick.
   const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
 
   const castLinked = usesCastLinks(gameType, rules);
   const formRules: RulesConfig = {
+    ...(isBracket ? { bracket_movie_ids: bracketFilms.map((film) => film.tmdb_id) } : {}),
+    ...(isMethodActor && actor ? { actor_id: actor.person_id } : {}),
     ...(isTracker ? TRACKER_RULES : clearModifiers(rules)),
     ...modifierPayload(gameType, rules, selectedEngine?.capabilities),
     ...(needsCanonList ? { allowed_curated_list_id: canonListId } : {}),
@@ -151,7 +161,11 @@ function NewRunModal({
       : {}),
   };
   const isTunnel = gameType === MEET_IN_THE_MIDDLE;
-  const missingMode = (needsCanonList && !canonListId) || (isTunnel && (!seedMovie || !tailSeedMovie));
+  const missingMode =
+    (needsCanonList && !canonListId) ||
+    (isTunnel && (!seedMovie || !tailSeedMovie)) ||
+    (isBracket && bracketFilms.length !== BRACKET_SIZE) ||
+    (isMethodActor && !actor);
   const sameSeeds = isTunnel && !!seedMovie && seedMovie.tmdb_id === tailSeedMovie?.tmdb_id;
 
   // Modifiers belong to one mode: switching modes starts from a clean slate.
@@ -188,6 +202,8 @@ function NewRunModal({
     setTugLead(DEFAULT_TARGET_LEAD);
     setGenreCycle([...DEFAULT_GENRE_CYCLE]);
     setSwingFrequency(DEFAULT_SWING_FREQUENCY);
+    setBracketFilms([]);
+    setActor(null);
     setRawMode(false);
     setRawText("");
     createRun.reset();
@@ -279,6 +295,14 @@ function NewRunModal({
                 </option>
               ))}
             </select>
+          </Field>
+        )}
+
+        {isBracket && <BracketSeedPicker films={bracketFilms} onChange={setBracketFilms} />}
+
+        {isMethodActor && (
+          <Field label="The actor whose career you'll watch">
+            <ActorPicker value={actor} onChange={setActor} />
           </Field>
         )}
 

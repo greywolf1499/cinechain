@@ -15,7 +15,11 @@ OFFER_SIZE = 3
 
 # `rules_config` keys the server derives; a client-supplied value would be a forged state
 # (a pre-seeded offer, or tug scores that start a run one point from victory).
-SERVER_OWNED_RULES = (PENDING_FORK_KEY, "tug_scores", "tug_players")
+SERVER_OWNED_RULES = (
+    PENDING_FORK_KEY, "tug_scores", "tug_players",
+    # Built by the March Madness / Method Actor engines when the run is created.
+    "bracket", "bracket_films", "actor", "filmography",
+)
 
 
 def strip_server_rules(rules: dict[str, Any]) -> dict[str, Any]:

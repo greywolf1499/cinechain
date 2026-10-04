@@ -207,6 +207,19 @@ class TMDBClient:
             params["primary_release_year"] = year
         return await self._get("/search/movie", params=params)
 
+    async def search_people(self, query: str, page: int = 1) -> dict[str, Any]:
+        """Raw TMDB person search (actors, directors... ranked by TMDB's popularity)."""
+        return await self._get("/search/person", params={"query": query, "page": page})
+
+    async def get_person(self, person_id: int) -> dict[str, Any]:
+        """Raw `/person/{id}` details (name, birthday, profile)."""
+        return await self._get(f"/person/{person_id}")
+
+    async def get_person_cast_credits_raw(self, person_id: int) -> list[dict[str, Any]]:
+        """A person's acting credits exactly as TMDB lists them (billing order, vote stats...)."""
+        data = await self._get(f"/person/{person_id}/movie_credits")
+        return list(data.get("cast", []))
+
     async def get_poster_bytes(
         self, poster_path: str, size: str = "w185", max_bytes: int = 2 * 1024 * 1024
     ) -> bytes | None:

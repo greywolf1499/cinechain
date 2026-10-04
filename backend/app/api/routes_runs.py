@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
 from app.db import get_session
 from app.engines import rabbit_hole
+from app.engines.base import RunSetupError
 from app.engines.meet_in_middle import (
     MEET_IN_THE_MIDDLE,
     SIDE_HEAD,
@@ -409,6 +410,10 @@ async def create_run(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems))
         rules_config = engine.prepare_rules_config(rules_config)
+        try:
+            rules_config = await engine.prepare_run(rules_config, current_user.id)
+        except RunSetupError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         if payload.game_type == MEET_IN_THE_MIDDLE:
             if payload.seed_movie_id is None or payload.tail_seed_movie_id is None:
                 raise HTTPException(

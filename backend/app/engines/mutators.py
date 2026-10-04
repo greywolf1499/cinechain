@@ -4,9 +4,12 @@ Auteur Relay is a cast/director chain. Chrono Climb/Descent and World Cinema
 Passport (and the Algorithm Sandbox engines built on `MutatorEngine`) are
 *standalone*: any film that satisfies the mode's own rule may follow, and the
 shared-cast link is an opt-in modifier (`rules_config.require_cast_link`) for
-players who want a hybrid. The rule is enforced at logging time
-(`validate_next_step`), when offering candidates (`discover_candidates`) and,
-for hybrids, when solving a bridge (`bridge_constraints` -> `constrained_pathfinder`).
+players who want a hybrid. Chrono and Passport are thin: their rule is a default
+modifier (`chrono_direction`, `country_cooldown`) of the composable pipeline in
+`app.engines.modifiers`, so the same rules can be toggled on any other engine. The rule
+is enforced at logging time (`validate_next_step`), when offering candidates
+(`discover_candidates`) and, for hybrids, when solving a bridge (`bridge_constraints`
+-> `constrained_pathfinder`).
 
 Rule violations are hard blocks (`ValidationResult.blocked`): a wildcard can skip
 a missing cast link but never a mode's defining rule.
@@ -16,15 +19,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import httpx
 from sqlmodel import select
 
+from app.engines import modifiers
 from app.engines.cinechain import CineChainEngine
 from app.models.cache import CachedMovie
+from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
 from app.schemas.engine import (
     ConstraintInfo,
@@ -34,21 +39,14 @@ from app.schemas.engine import (
     ValidationResult,
 )
 from app.services import cache_repo, pathfinder
-from app.services.bridge_paths import parse_countries
 from app.services.graph import PathConstraints
 from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBError
-from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
 from app.utils.dates import parse_release_year
-
-# World Passport needs each candidate's country, which search/credit stubs lack:
-# hydrate this many per request (most popular first), the rest stay "unverified".
-HYDRATE_BUDGET = 30
-HYDRATE_SECONDS = 20.0
 
 OPPOSITE_KIND = {"actor": "director", "director": "actor"}
 
-CHRONO_DIRECTIONS = ("climb", "descent")
+CHRONO_DIRECTIONS = modifiers.CHRONO_DIRECTIONS
 # Films offered per "Pick Next" request when no cast link constrains the pool.
 RULE_POOL_SIZE = 40
 # A TMDB lookup that fails (offline, rate limited) just shrinks the pool to the local cache.
@@ -78,7 +76,6 @@ class MutatorEngine(CineChainEngine):
     capabilities: ClassVar[list[str]] = [
         cap for cap in CineChainEngine.capabilities if cap != "bridge_swap"
     ]
-    needs_detail: ClassVar[bool] = False  # `pair_violation` needs full film detail (country)
     # Standalone modes (True) only link through their own rule unless the run opts in to
     # `require_cast_link`; cast-chain modes (False) always require a shared actor/director.
     optional_cast_link: ClassVar[bool] = False
@@ -107,33 +104,29 @@ class MutatorEngine(CineChainEngine):
         """Rule evidence for this hop, stored on the step (e.g. the year delta)."""
         return None
 
-    def link_metadata(
-        self, result: ValidationResult, client_metadata: dict | None
-    ) -> dict | None:
-        if not result.mechanic:
-            return None
-        return {**(client_metadata or {}), **result.mechanic}
+    def _pair_blocked(
+        self, earlier: CachedMovie, later: CachedMovie, rules: dict | None,
+        history: Sequence[RunStep] | None = None,
+    ) -> str | None:
+        """Why `later` may not follow `earlier`: this mode's own rule, then the run's modifiers."""
+        return (
+            self.pair_violation(earlier, later, rules)
+            or self.modifier_violation(earlier, later, rules, history)
+        )
+
+    def _bridge_needs_detail(self, rules: dict | None) -> bool:
+        active = self.active_modifiers(rules)
+        return self.needs_detail or bool(
+            active.get(modifiers.COOLDOWN_KEY) or active.get(modifiers.STAIRCASE_KEY))
 
     def bridge_constraints(
         self, start_connection_type: str | None = None, rules: dict | None = None
     ) -> PathConstraints:
         return PathConstraints(
-            movie_ok=lambda earlier, later: self.pair_violation(earlier, later, rules) is None,
-            endpoint_reason=lambda earlier, later: self.pair_violation(earlier, later, rules),
-            needs_detail=self.needs_detail,
+            movie_ok=lambda earlier, later: self._pair_blocked(earlier, later, rules) is None,
+            endpoint_reason=lambda earlier, later: self._pair_blocked(earlier, later, rules),
+            needs_detail=self._bridge_needs_detail(rules),
         )
-
-    def _needs_hydration(self, row: CachedMovie) -> bool:
-        """Does this film still need its full TMDB detail before it can be judged?"""
-        return self.needs_detail and row.origin_country is None
-
-    async def _load(self, movie_id: int, hydrate: bool = False) -> CachedMovie:
-        row = self.session.get(CachedMovie, movie_id)
-        if row is None:
-            return await cache_repo.get_movie(self.session, self.tmdb, movie_id)
-        if hydrate and self._needs_hydration(row):
-            return await cache_repo.get_movie(self.session, self.tmdb, movie_id, refresh=True)
-        return row
 
     async def _validate_link(
         self,
@@ -143,10 +136,10 @@ class MutatorEngine(CineChainEngine):
         rules: dict | None,
         previous_transition: dict | None,
     ) -> ValidationResult:
-        return await CineChainEngine.validate_next_step(
+        return await CineChainEngine.validate_primary(
             self, from_movie_id, to_movie_id, cast_limit=cast_limit)
 
-    async def validate_next_step(
+    async def validate_primary(
         self,
         from_movie_id: int,
         to_movie_id: int,
@@ -155,7 +148,7 @@ class MutatorEngine(CineChainEngine):
         previous_transition: dict | None = None,
     ) -> ValidationResult:
         earlier = await self._load(from_movie_id)
-        later = await self._load(to_movie_id, hydrate=self.needs_detail)
+        later = await self._load(to_movie_id, hydrate=self.needs_detail, rules=rules)
         mechanic = self.mechanic(earlier, later, rules)
         reason = self.pair_violation(earlier, later, rules)
         if reason:
@@ -167,50 +160,23 @@ class MutatorEngine(CineChainEngine):
         result.mechanic = mechanic
         return result
 
-    async def _hydrate_pool(
-        self, candidates: list[DiscoveryCandidate]
-    ) -> dict[int, CachedMovie]:
-        """Cached rows for the pool, fetching full detail for the most popular films
-        that need it (bounded by HYDRATE_BUDGET / HYDRATE_SECONDS)."""
-        budget = HYDRATE_BUDGET if self.needs_detail else 0
-        deadline = time.monotonic() + HYDRATE_SECONDS
-        rows: dict[int, CachedMovie] = {}
-        for candidate in sorted(candidates, key=lambda c: -(c.popularity or 0.0)):
-            row = self.session.get(CachedMovie, candidate.movie_id)
-            if row is None:
-                continue
-            if self._needs_hydration(row) and budget > 0:
-                budget -= 1
-                try:
-                    fetched = await fetch_with_backoff(
-                        lambda movie_id=candidate.movie_id: cache_repo.get_movie(
-                            self.session, self.tmdb, movie_id, refresh=True),
-                        deadline)
-                    row = fetched or row
-                except DeadlineReached:
-                    budget = 0
-                except Exception:  # noqa: BLE001 - leave this film unverified
-                    self.session.rollback()
-                candidate.origin_country = row.origin_country
-            rows[candidate.movie_id] = row
-        return rows
-
     async def _filter_pool(
         self, frontier: CachedMovie, candidates: list[DiscoveryCandidate],
         rules: dict | None = None,
     ) -> list[DiscoveryCandidate]:
-        rows = await self._hydrate_pool(candidates)
+        rows = await self._hydrate_pool(candidates, rules)
         keep: set[int] = set()
         for candidate in candidates:
             row = rows.get(candidate.movie_id)
             if row is None or self.pair_violation(frontier, row, rules):
                 continue
-            candidate.constraint_unverified = self.needs_detail and row.origin_country is None
+            candidate.constraint_unverified = self._needs_hydration(row, rules)
             keep.add(candidate.movie_id)
         return [c for c in candidates if c.movie_id in keep]
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None
+        self, frontier: CachedMovie, rules: dict | None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         """Films that satisfy this mode's own rule relative to `frontier`, with no
         cast link involved (standalone modes only)."""
@@ -223,10 +189,11 @@ class MutatorEngine(CineChainEngine):
         cast_limit: int | None = None,
         rules: dict | None = None,
         previous_transition: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         if not self.cast_link_required(rules):
-            frontier = await self._load(frontier_movie_id, hydrate=True)
-            pool = await self.discover_rule_candidates(frontier, rules)
+            frontier = await self._load(frontier_movie_id, hydrate=True, rules=rules)
+            pool = await self.discover_rule_candidates(frontier, rules, history)
             return [c for c in pool if c.movie_id != frontier_movie_id]
         candidates = await super().discover_candidates(frontier_movie_id, mode, cast_limit)
         frontier = await self._load(frontier_movie_id)
@@ -246,7 +213,7 @@ class MutatorEngine(CineChainEngine):
         kept = []
         for suggestion in suggestions:
             row = self.session.get(CachedMovie, suggestion.movie_id)
-            if row is not None and not self.pair_violation(frontier, row, rules):
+            if row is not None and not self._pair_blocked(frontier, row, rules):
                 kept.append(suggestion)
         return kept
 
@@ -291,11 +258,6 @@ class MutatorEngine(CineChainEngine):
         )
 
 
-def _direction(rules: dict | None) -> str:
-    direction = (rules or {}).get("direction", "climb")
-    return direction if direction in CHRONO_DIRECTIONS else "climb"
-
-
 class ChronoClimbEngine(MutatorEngine):
     """Chrono Climb / Descent: every hop must move strictly forward (climb) or
     backward (descent) in time. Any film qualifies; shared cast is optional."""
@@ -307,6 +269,11 @@ class ChronoClimbEngine(MutatorEngine):
         "(Descent). Any film counts - no shared cast needed."
     )
     optional_cast_link = True
+    # The whole mode is this one modifier; `direction` is its pre-V3 spelling.
+    default_modifiers: ClassVar[dict[str, Any]] = {modifiers.CHRONO_KEY: "climb"}
+
+    def _direction(self, rules: dict | None) -> str:
+        return self.active_modifiers(rules)[modifiers.CHRONO_KEY]
 
     def validate_rules_config(self, rules: dict | None) -> list[str]:
         problems = super().validate_rules_config(rules)
@@ -315,40 +282,11 @@ class ChronoClimbEngine(MutatorEngine):
             problems.append("direction must be 'climb' or 'descent'")
         return problems
 
-    def pair_violation(
-        self, earlier: CachedMovie, later: CachedMovie, rules: dict | None = None
-    ) -> str | None:
-        year_a = parse_release_year(earlier.release_date)
-        year_b = parse_release_year(later.release_date)
-        if year_a is None or year_b is None:
-            return "Chrono needs a release year for both films"
-        if _direction(rules) == "descent":
-            if year_b >= year_a:
-                return (
-                    f"Chrono Descent: {later.title} ({year_b}) must be released before "
-                    f"{earlier.title} ({year_a})"
-                )
-        elif year_b <= year_a:
-            return (
-                f"Chrono Climb: {later.title} ({year_b}) must be released after "
-                f"{earlier.title} ({year_a})"
-            )
-        return None
-
-    def mechanic(
-        self, earlier: CachedMovie, later: CachedMovie, rules: dict | None = None
-    ) -> dict | None:
-        year_a = parse_release_year(earlier.release_date)
-        year_b = parse_release_year(later.release_date)
-        if year_a is None or year_b is None:
-            return None
-        return {"year_delta": year_b - year_a, "direction": _direction(rules)}
-
     async def describe_constraint(
         self, tail_movie_id: int | None, previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
-        descent = _direction(rules) == "descent"
+        descent = self._direction(rules) == "descent"
         word, verb = ("before", "Descent") if descent else ("after", "Climb")
         if tail_movie_id is None:
             return ConstraintInfo(
@@ -362,12 +300,13 @@ class ChronoClimbEngine(MutatorEngine):
             detail="Strictly " + ("earlier" if descent else "later") + " - the same year doesn't count.")
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None
+        self, frontier: CachedMovie, rules: dict | None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         year = parse_release_year(frontier.release_date)
         if year is None:
             return []
-        descent = _direction(rules) == "descent"
+        descent = self._direction(rules) == "descent"
         today = today_iso()
         rows: dict[int, CachedMovie] = {}
 
@@ -399,7 +338,7 @@ class ChronoClimbEngine(MutatorEngine):
 
         pool = []
         for row in rows.values():
-            if not is_reality_eligible(row) or self.pair_violation(frontier, row, rules):
+            if not is_reality_eligible(row) or self._pair_blocked(frontier, row, rules, history):
                 continue
             candidate = candidate_from_row(row)
             candidate.year_delta = (candidate.release_year or year) - year
@@ -409,9 +348,7 @@ class ChronoClimbEngine(MutatorEngine):
         return pool[:RULE_POOL_SIZE]
 
 
-def primary_country(movie: CachedMovie) -> str | None:
-    countries = parse_countries(movie.origin_country)
-    return countries[0] if countries else None
+primary_country = modifiers.primary_country
 
 
 # Big film-producing countries sampled for a World Passport pool.
@@ -435,6 +372,8 @@ class WorldPassportEngine(MutatorEngine):
     )
     needs_detail = True
     optional_cast_link = True
+    # Anti yo-yo: the last 3 countries are locked out, so US -> UK -> US -> UK can't happen.
+    default_modifiers: ClassVar[dict[str, Any]] = {modifiers.COOLDOWN_KEY: 3}
 
     def pair_violation(
         self, earlier: CachedMovie, later: CachedMovie, rules: dict | None = None
@@ -484,9 +423,11 @@ class WorldPassportEngine(MutatorEngine):
             detail="Compared by primary production country.")
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None
+        self, frontier: CachedMovie, rules: dict | None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         home = primary_country(frontier)
+        locked = {home, *self.cooldown_countries(rules, history, frontier)} - {None}
         pool: dict[int, DiscoveryCandidate] = {}
 
         # Films cached from earlier play whose country is already known.
@@ -496,12 +437,12 @@ class WorldPassportEngine(MutatorEngine):
         )
         for row in self.session.exec(statement).all():
             country = primary_country(row)
-            if country is None or country == home or not is_reality_eligible(row):
+            if country is None or country in locked or not is_reality_eligible(row):
                 continue
             pool[row.tmdb_id] = candidate_from_row(row)
 
         # Plus each sampled country's most popular films (rotated per frontier for variety).
-        countries = [c for c in PASSPORT_COUNTRIES if c != home]
+        countries = [c for c in PASSPORT_COUNTRIES if c not in locked]
         start = frontier.tmdb_id % len(countries)
         sampled = (countries[start:] + countries[:start])[:PASSPORT_COUNTRIES_PER_POOL]
 
@@ -520,7 +461,7 @@ class WorldPassportEngine(MutatorEngine):
                     self.session, response[:PASSPORT_FILMS_PER_COUNTRY]):
                 if row.tmdb_id in pool or not is_reality_eligible(row):
                     continue
-                if home is not None and primary_country(row) == home:
+                if primary_country(row) in locked:
                     continue
                 candidate = candidate_from_row(row)
                 candidate.origin_country = row.origin_country or json.dumps([code])
@@ -555,7 +496,7 @@ class AuteurRelayEngine(MutatorEngine):
         rules: dict | None,
         previous_transition: dict | None,
     ) -> ValidationResult:
-        shared_actors = await CineChainEngine.validate_next_step(
+        shared_actors = await CineChainEngine.validate_primary(
             self, from_movie_id, to_movie_id, cast_limit=cast_limit)
         actors = shared_actors.connections if shared_actors.valid else []
 
@@ -625,6 +566,7 @@ class AuteurRelayEngine(MutatorEngine):
         cast_limit: int | None = None,
         rules: dict | None = None,
         previous_transition: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         required = OPPOSITE_KIND.get((previous_transition or {}).get("connection_type") or "")
         pool: dict[int, DiscoveryCandidate] = {}

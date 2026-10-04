@@ -12,6 +12,7 @@ cast link is an opt-in modifier (`rules_config.require_cast_link`).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import ClassVar
 
 from sqlmodel import select
@@ -25,6 +26,7 @@ from app.engines.mutators import (
     today_iso,
 )
 from app.models.cache import CachedMovie
+from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import ConstraintInfo, ValidationResult
 from app.services import cache_repo, embeddings, movie_features
@@ -76,7 +78,7 @@ class FeatureEngine(MutatorEngine):
         await self.prepare([await self._load(movie_id, hydrate=True)])
         return ValidationResult(valid=True)
 
-    async def validate_next_step(
+    async def validate_primary(
         self,
         from_movie_id: int,
         to_movie_id: int,
@@ -94,7 +96,7 @@ class FeatureEngine(MutatorEngine):
                 ValidationResult(valid=False, blocked=True, reason=reason), metric)
         if not self.cast_link_required(rules):
             return self.with_metric(ValidationResult(valid=True), metric)
-        result = await CineChainEngine.validate_next_step(
+        result = await CineChainEngine.validate_primary(
             self, from_movie_id, to_movie_id, cast_limit=cast_limit)
         return self.with_metric(result, metric)
 
@@ -119,10 +121,11 @@ class FeatureEngine(MutatorEngine):
         cast_limit: int | None = None,
         rules: dict | None = None,
         previous_transition: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         if not self.cast_link_required(rules):
             return await super().discover_candidates(
-                frontier_movie_id, mode, cast_limit, rules, previous_transition)
+                frontier_movie_id, mode, cast_limit, rules, previous_transition, history)
         candidates = await CineChainEngine.discover_candidates(
             self, frontier_movie_id, mode, cast_limit)
         frontier = await self._load(frontier_movie_id, hydrate=True)
@@ -206,7 +209,8 @@ class AestheticGradientEngine(FeatureEngine):
         return {"color_distance": result.color_distance}
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None
+        self, frontier: CachedMovie, rules: dict | None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         await self.prepare([frontier])
         if not frontier.dominant_color:
@@ -266,8 +270,8 @@ class SemanticTropeEngine(FeatureEngine):
     )
     needs_detail = True  # overviews come from the full TMDB detail
 
-    def _needs_hydration(self, row: CachedMovie) -> bool:
-        return row.overview is None
+    def _needs_hydration(self, row: CachedMovie, rules: dict | None = None) -> bool:
+        return row.overview is None or self._modifiers_need_detail(row, rules)
 
     def measure(self, earlier: CachedMovie, later: CachedMovie) -> float | None:
         vector_a = embeddings.decode_embedding(earlier.overview_embedding)
@@ -298,7 +302,8 @@ class SemanticTropeEngine(FeatureEngine):
         return {"semantic_score": result.similarity}
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None
+        self, frontier: CachedMovie, rules: dict | None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         await self.prepare([frontier])
         if embeddings.decode_embedding(frontier.overview_embedding) is None:

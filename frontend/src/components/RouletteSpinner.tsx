@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Clock, Dices, Loader2, Star, Ticket } from "lucide-react";
+import { Check, Clock, Dices, EyeOff, Loader2, Star, Ticket } from "lucide-react";
+import BlindDraft from "./BlindDraft";
 import MoviePoster from "./MoviePoster";
 import RouletteFilters, { EMPTY_FILTERS, filtersToParams, type RouletteFilterState } from "./RouletteFilters";
 import { ApiError, api } from "../lib/api";
@@ -10,7 +11,9 @@ import type { GenreOut, RouletteMovie, RouletteSpinResult } from "../types/api";
 
 const SPIN_MIN_MS = 1400; // the suspense is the point - never reveal instantly
 
-type Phase = "idle" | "spinning" | "revealed";
+type Phase = "idle" | "spinning" | "revealed" | "drafted";
+
+const BLIND_DRAFT_SIZE = 3;
 
 /** Movie Night Roulette: filter, spin, watch the pick come into focus, then log it. */
 export default function RouletteSpinner({ runId }: { runId: string }) {
@@ -24,6 +27,9 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [pick, setPick] = useState<RouletteMovie | null>(null);
+  const [blind, setBlind] = useState(false);
+  const [draft, setDraft] = useState<RouletteMovie[]>([]);
+  const [drawId, setDrawId] = useState(0); // remounts BlindDraft so votes reset on every new draw
   const [poolSize, setPoolSize] = useState(0);
   const [focused, setFocused] = useState(false); // drives the blur -> sharp reveal transition
   const [message, setMessage] = useState<string | null>(null);
@@ -43,6 +49,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
     setMessage(null);
 
     const params = filtersToParams(filters, new URLSearchParams({ run_id: runId }));
+    if (blind) params.set("count", String(BLIND_DRAFT_SIZE));
 
     const delay = new Promise((resolve) => window.setTimeout(resolve, SPIN_MIN_MS));
     try {
@@ -51,28 +58,37 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
         delay,
       ]);
       if (token !== spinToken.current) return;
-      setPick(result.movie);
       setPoolSize(result.pool_size);
-      setPhase("revealed");
+      if (blind) {
+        setPick(null);
+        setDraft(result.movies);
+        setDrawId((id) => id + 1);
+        setPhase("drafted");
+      } else {
+        setPick(result.movie);
+        setPhase("revealed");
+      }
     } catch (err) {
       await delay;
       if (token !== spinToken.current) return;
       setPick(null);
+      setDraft([]);
       setPhase("idle");
       setMessage(err instanceof ApiError ? err.message : "The wheel jammed - try again.");
     }
   }
 
-  async function log(watched: boolean) {
-    if (!pick) return;
+  async function log(movie: RouletteMovie | null, watched: boolean) {
+    if (!movie) return;
     setMessage(null);
     try {
       await createStep.mutateAsync({
-        movie_id: pick.tmdb_id,
+        movie_id: movie.tmdb_id,
         status: watched ? "watched" : "planned",
         watched_at: watched ? new Date().toISOString() : null,
       });
       setPick(null);
+      setDraft([]);
       setPhase("idle");
     } catch (err) {
       setMessage(err instanceof ApiError ? err.message : "Couldn't log this film.");
@@ -85,6 +101,37 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
     <div className="flex flex-col gap-3">
       <RouletteFilters value={filters} onChange={setFilters} genres={genres} />
 
+      <label className="flex cursor-pointer items-start justify-between gap-3 rounded-md border border-app-border px-3 py-2">
+        <span className="flex items-start gap-2">
+          <EyeOff className={cn("mt-0.5 h-4 w-4 shrink-0", blind ? "text-accent" : "text-zinc-500")} />
+          <span className="flex flex-col">
+            <span className="text-xs font-medium text-zinc-200">Blind Draft</span>
+            <span className="text-[11px] text-zinc-500">
+              Serve {BLIND_DRAFT_SIZE} masked candidates to vote on by vibe instead of spinning for one.
+            </span>
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={blind}
+          aria-label="Blind Draft"
+          disabled={spinning}
+          onClick={() => setBlind((v) => !v)}
+          className={cn(
+            "relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors",
+            blind ? "bg-accent" : "bg-app-surface-hover",
+          )}
+        >
+          <span
+            className={cn(
+              "absolute top-0.5 h-4 w-4 rounded-full bg-zinc-100 transition-all",
+              blind ? "left-[18px]" : "left-0.5",
+            )}
+          />
+        </button>
+      </label>
+
       <button
         type="button"
         onClick={spin}
@@ -92,7 +139,17 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
         className="flex items-center justify-center gap-2 rounded-md bg-accent px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
       >
         <Dices className={cn("h-4 w-4", spinning && "animate-spin")} />
-        {phase === "revealed" ? "Spin Again" : spinning ? "Spinning..." : "Spin Roulette"}
+        {spinning
+          ? blind
+            ? "Drawing..."
+            : "Spinning..."
+          : phase === "revealed" || phase === "drafted"
+            ? blind
+              ? "Draw Again"
+              : "Spin Again"
+            : blind
+              ? `Draw ${BLIND_DRAFT_SIZE} Blind Picks`
+              : "Spin Roulette"}
       </button>
 
       {spinning && (
@@ -103,6 +160,16 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
           <div className="h-24 w-16 animate-pulse rounded-md bg-app-surface-hover blur-sm" />
           <p className="text-xs font-medium text-accent">The reel is spinning...</p>
         </div>
+      )}
+
+      {phase === "drafted" && draft.length > 0 && (
+        <BlindDraft
+          key={drawId}
+          movies={draft}
+          poolSize={poolSize}
+          logging={createStep.isPending}
+          onLog={(movie, watched) => log(movie, watched)}
+        />
       )}
 
       {phase === "revealed" && pick && (
@@ -145,7 +212,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
             <button
               type="button"
               disabled={!focused || createStep.isPending}
-              onClick={() => log(true)}
+              onClick={() => log(pick, true)}
               className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
             >
               {createStep.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
@@ -154,7 +221,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
             <button
               type="button"
               disabled={!focused || createStep.isPending}
-              onClick={() => log(false)}
+              onClick={() => log(pick, false)}
               className="flex items-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:opacity-60"
             >
               <Ticket className="h-3.5 w-3.5" />

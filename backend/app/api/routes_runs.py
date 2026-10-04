@@ -27,6 +27,7 @@ from app.schemas.engine import (
     ValidationResult,
 )
 from app.schemas.runs import (
+    MODIFIER_UPDATE_KEYS,
     MarkWatchedRequest,
     ParticipantAdd,
     ParticipantPublic,
@@ -68,6 +69,12 @@ def _last_step(session: Session, run_id: str) -> RunStep | None:
         select(RunStep).where(RunStep.run_id == run_id).order_by(
             RunStep.logged_at.desc())
     ).first()
+
+
+def _run_history(session: Session, run_id: str) -> list[RunStep]:
+    """Every step logged so far, oldest first (the history modifiers like country_cooldown read)."""
+    return list(session.exec(
+        select(RunStep).where(RunStep.run_id == run_id).order_by(RunStep.logged_at)).all())
 
 
 def _run_rules(run: Run) -> dict:
@@ -182,6 +189,7 @@ async def _enforce_run_rules(
             previous.movie_id, movie.tmdb_id, cast_limit=rules.get(
                 "max_cast_order"), rules=rules,
             previous_transition=previous.transition_metadata,
+            history=_run_history(session, run.id),
         )
         if not result.valid and result.blocked:
             raise HTTPException(
@@ -391,7 +399,19 @@ def update_run_rules(
             )
     # Merge instead of replace so V2 keys the form doesn't know about
     # (win_condition, fail_condition, raw JSON overrides) survive an edit.
-    run.rules_config = {**(run.rules_config or {}), **payload.model_dump(exclude_none=True)}
+    update = payload.model_dump(exclude_none=True)
+    # Modifiers can be switched off again: an explicit null is stored (and means "unset").
+    update.update({
+        key: None for key in MODIFIER_UPDATE_KEYS
+        if key in payload.model_fields_set and getattr(payload, key) is None})
+    merged = {**(run.rules_config or {}), **update}
+    engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if engine_class is not None:
+        problems = engine_class.modifier_problems(merged)
+        if problems:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems))
+    run.rules_config = merged
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -593,7 +613,8 @@ async def validate_step(
         return await engine.validate_candidate(payload.movie_id, rules)
     return await engine.validate_next_step(
         previous.movie_id, payload.movie_id, cast_limit=rules.get("max_cast_order"), rules=rules,
-        previous_transition=previous.transition_metadata)
+        previous_transition=previous.transition_metadata,
+        history=_run_history(session, run.id))
 
 
 @router.get("/{run_id}/constraint", response_model=ConstraintInfo | None)
@@ -605,10 +626,11 @@ async def get_run_constraint(
     """The rule shaping this run's next hop (e.g. "must be a Director"), or null."""
     engine = get_engine(run.game_type, session, tmdb)
     tail = _last_step(session, run.id)
-    return await engine.describe_constraint(
+    return await engine.describe_run_constraint(
         tail.movie_id if tail is not None else None,
         tail.transition_metadata if tail is not None else None,
-        _run_rules(run))
+        _run_rules(run),
+        _run_history(session, run.id))
 
 
 @router.get("/{run_id}/suggestions", response_model=list[Suggestion])
@@ -667,7 +689,7 @@ async def discover_next_movies(
     rules = _run_rules(run)
     previous = _last_step(session, run.id)
     try:
-        candidates = await engine.discover_candidates(
+        candidates = await engine.discover_with_modifiers(
             frontier_movie_id=frontier_movie_id,
             mode=mode,
             cast_limit=rules.get("max_cast_order"),
@@ -675,6 +697,7 @@ async def discover_next_movies(
             previous_transition=(
                 previous.transition_metadata if previous is not None
                 and previous.movie_id == frontier_movie_id else None),
+            history=_run_history(session, run.id),
         )
     except NotImplementedError:
         raise HTTPException(

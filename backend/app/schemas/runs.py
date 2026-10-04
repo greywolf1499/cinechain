@@ -44,6 +44,13 @@ class RunRulesUpdate(BaseModel):
     # Standalone modes (Chrono, Passport, Aesthetic, Semantic): only sent when set.
     require_cast_link: bool | None = None
     direction: Literal["climb", "descent"] | None = None
+    # Engine V3 composable modifiers (null = off / engine default).
+    chrono_direction: Literal["climb", "descent"] | None = None
+    runtime_staircase: Literal["ascending", "descending"] | None = None
+    country_cooldown: int | None = Field(default=None, ge=0, le=20)
+
+
+MODIFIER_UPDATE_KEYS = ("chrono_direction", "runtime_staircase", "country_cooldown")
 
 
 class RunStepCreate(BaseModel):

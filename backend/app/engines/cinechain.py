@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Sequence
 from typing import ClassVar
 
 from app.engines.base import BaseChallengeEngine
@@ -73,11 +74,13 @@ class CineChainEngine(BaseChallengeEngine):
         "solve_bridge",
         "discover_candidates",
         "json_rules",
+        "modifiers",
         "bridge_swap",
     ]
     supports_json_rules = True
+    supports_modifiers = True
 
-    async def validate_next_step(
+    async def validate_primary(
         self,
         from_movie_id: int,
         to_movie_id: int,
@@ -153,6 +156,7 @@ class CineChainEngine(BaseChallengeEngine):
         cast_limit: int | None = None,
         rules: dict | None = None,
         previous_transition: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         """Pools every top-billed cast member's filmography into one set of
         candidates, tracking ALL connecting actors per movie (not just the

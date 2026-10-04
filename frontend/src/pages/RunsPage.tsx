@@ -7,14 +7,14 @@ import EmptyState from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import Modal from "../components/Modal";
 import GameModePicker from "../components/GameModePicker";
-import ModeOptions from "../components/ModeOptions";
 import SeedMoviePicker from "../components/SeedMoviePicker";
 import RawRulesEditor, { RAW_RULES_EXAMPLE, parseRawRules } from "../components/RawRulesEditor";
 import RulesetFields, { RULE_PRESETS } from "../components/RulesetFields";
 import { api } from "../lib/api";
 import { useCreateRun, useCuratedLists, useRuns, useUsers } from "../lib/queries";
 import { cn } from "../lib/cn";
-import { STANDALONE_MODES, usesCastLinks } from "../lib/gameModes";
+import { usesCastLinks } from "../lib/gameModes";
+import { clearModifiers, modifierPayload } from "../lib/modifiers";
 import { useAuthStore } from "../store/authStore";
 import type { EngineMeta, MovieSummary, RulesConfig } from "../types/api";
 
@@ -124,16 +124,21 @@ function NewRunModal({
   // A canon list with no synced films would block every pick.
   const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
 
-  const isStandalone = STANDALONE_MODES.has(gameType);
   const castLinked = usesCastLinks(gameType, rules);
   const formRules: RulesConfig = {
-    ...(isTracker ? TRACKER_RULES : rules),
-    ...(isStandalone ? { require_cast_link: !!rules.require_cast_link } : {}),
-    ...(gameType === "chrono_climb" ? { direction: rules.direction ?? "climb" } : {}),
+    ...(isTracker ? TRACKER_RULES : clearModifiers(rules)),
+    ...modifierPayload(gameType, rules, selectedEngine?.capabilities),
     ...(needsCanonList ? { allowed_curated_list_id: canonListId } : {}),
     ...(needsDecade ? { target_decade: targetDecade } : {}),
   };
   const missingMode = needsCanonList && !canonListId;
+
+  // Modifiers belong to one mode: switching modes starts from a clean slate.
+  function selectMode(mode: string) {
+    if (mode === gameType) return;
+    setGameType(mode);
+    setRules((current) => clearModifiers(current));
+  }
 
   function toggleRawMode() {
     if (!rawMode && !rawText.trim()) {
@@ -200,7 +205,16 @@ function NewRunModal({
 
         <div className="flex flex-col gap-1.5">
           <span className="text-xs font-medium text-zinc-400">Game mode</span>
-          <GameModePicker engines={engines} value={gameType} onChange={setGameType} />
+          <GameModePicker
+            engines={engines}
+            value={gameType}
+            rules={rules}
+            onChange={selectMode}
+            onRulesChange={(mode, next) => {
+              setGameType(mode);
+              setRules(next);
+            }}
+          />
         </div>
 
         {needsCanonList && (
@@ -240,8 +254,6 @@ function NewRunModal({
             </select>
           </Field>
         )}
-
-        {isStandalone && <ModeOptions gameType={gameType} value={rules} onChange={setRules} />}
 
         <Field label="Participants">
           <div className="flex flex-col gap-1.5 rounded-md border border-app-border bg-app-bg p-2">

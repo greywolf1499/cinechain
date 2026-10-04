@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.db import get_session
-from app.engines import mutators
+from app.engines import base
 from app.engines.cinechain import CineChainEngine
 from app.engines.mutators import AuteurRelayEngine, ChronoClimbEngine, WorldPassportEngine
 from app.main import app
@@ -240,7 +240,7 @@ def test_passport_hybrid_pool_drops_same_country_films(client):
 
 
 def test_passport_hybrid_pool_flags_films_it_could_not_verify(client, monkeypatch):
-    monkeypatch.setattr(mutators, "HYDRATE_BUDGET", 1)
+    monkeypatch.setattr(base, "HYDRATE_BUDGET", 1)
     run_id = create_run(client, "world_passport", require_cast_link=True)
     with respx.mock:
         mock_universe(PASSPORT)

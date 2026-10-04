@@ -30,6 +30,9 @@ export interface RunCondition {
 	count: number;
 }
 
+export type ChronoDirection = "climb" | "descent";
+export type RuntimeStaircase = "ascending" | "descending";
+
 export interface RulesConfig {
 	preset: RulesPreset;
 	allow_repeats: RepeatPolicy;
@@ -45,6 +48,11 @@ export interface RulesConfig {
 	require_cast_link?: boolean;
 	/** Chrono Climb / Descent: which way time must move. */
 	direction?: "climb" | "descent";
+	/** Engine V3 composable modifiers, usable on any graph engine (null/absent = off). */
+	chrono_direction?: ChronoDirection | null;
+	runtime_staircase?: RuntimeStaircase | null;
+	/** May not pick a country visited within the last N steps (World Passport defaults to 3). */
+	country_cooldown?: number | null;
 	win_condition?: RunCondition | RunCondition[];
 	fail_condition?: RunCondition | RunCondition[];
 }
@@ -157,6 +165,10 @@ export interface ConstraintInfo {
 	kind: "director" | "actor" | "free" | "year" | "country" | "color" | "semantic" | (string & {});
 	title: string;
 	detail: string | null;
+	/** ISO codes locked out by `country_cooldown`, most recently visited first. */
+	cooldown_countries?: string[];
+	/** One-line notes for other active modifiers (chrono direction, runtime staircase). */
+	modifier_notes?: string[];
 }
 
 export interface ValidationResult {
@@ -190,6 +202,8 @@ export interface RouletteMovie {
 export interface RouletteSpinResult {
 	movie: RouletteMovie;
 	pool_size: number;
+	/** Every distinct pick, `movie` first (3 for a Blind Draft). */
+	movies: RouletteMovie[];
 }
 
 export interface Suggestion {

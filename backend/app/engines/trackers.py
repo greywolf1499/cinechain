@@ -31,7 +31,7 @@ class TrackerEngine(BaseChallengeEngine):
     supports_json_rules = True
     capabilities: ClassVar[list[str]] = ["validate_next_step", "compute_stats"]
 
-    async def validate_next_step(
+    async def validate_primary(
         self,
         from_movie_id: int,
         to_movie_id: int,
@@ -164,15 +164,29 @@ class RouletteEngine(TrackerEngine):
                 CachedMovie.tmdb_id.not_in(list(filters.exclude_movie_ids)))  # type: ignore[union-attr]
         return statement
 
-    def spin(self, filters: SpinFilters) -> tuple[CachedMovie, str | None, int] | None:
-        """(movie, imdb rating, matching pool size), or None if nothing matches."""
+    def draw(
+        self, filters: SpinFilters, count: int = 1
+    ) -> tuple[list[tuple[CachedMovie, str | None]], int] | None:
+        """Up to `count` distinct random films as (movie, imdb rating), plus the matching
+        pool size; None if nothing matches. `count > 1` powers the Blind Draft."""
         pool = self._pool(filters)
         size = self.session.exec(
             select(func.count()).select_from(pool.subquery())).one()
         if size == 0:
             return None
-        movie = self.session.exec(pool.order_by(func.random()).limit(1)).first()
-        if movie is None:
+        movies = self.session.exec(pool.order_by(func.random()).limit(count)).all()
+        if not movies:
             return None
-        rating = self.session.get(CachedMovieRating, movie.tmdb_id)
-        return movie, rating.imdb_rating if rating else None, size
+        picks = []
+        for movie in movies:
+            rating = self.session.get(CachedMovieRating, movie.tmdb_id)
+            picks.append((movie, rating.imdb_rating if rating else None))
+        return picks, size
+
+    def spin(self, filters: SpinFilters) -> tuple[CachedMovie, str | None, int] | None:
+        """(movie, imdb rating, matching pool size), or None if nothing matches."""
+        drawn = self.draw(filters, 1)
+        if drawn is None:
+            return None
+        (movie, rating), size = drawn[0][0], drawn[1]
+        return movie, rating, size

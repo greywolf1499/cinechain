@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import Modal from "./Modal";
 import ColorSwatch, { SemanticMatchBadge } from "./ColorSwatch";
+import ModifierChips from "./ModifierChips";
 import MoviePoster from "./MoviePoster";
 import AcquisitionControl from "./AcquisitionControl";
 import MovieTagline from "./MovieTagline";
@@ -382,6 +383,8 @@ function DiscoveryGrid({
 
   return (
     <div className="flex flex-col gap-4">
+      <ModifierChips constraint={constraint} />
+
       {!castLinked && (
         <RuleBanner
           gameType={gameType}

@@ -175,6 +175,7 @@ async def roulette_spin(
     genre_ids: list[int] = Query(default=[], description="TMDB genre ids (repeat the param)"),
     genre_operator: Literal["AND", "OR"] = Query(default="OR"),
     run_id: str | None = Query(default=None, description="Skip films already in this run"),
+    count: int = Query(default=1, ge=1, le=5, description="Distinct films to draw (Blind Draft: 3)"),
     game_type: str = Query(default="roulette"),
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
@@ -196,18 +197,18 @@ async def roulette_spin(
                 detail=f"min_{label} can't be above max_{label}")
     excluded, _, _ = _run_solve_context(session, run_id, current_user)
 
-    spun = engine.spin(SpinFilters(
+    drawn = engine.draw(SpinFilters(
         max_runtime=max_runtime, min_runtime=min_runtime, min_rating=min_rating,
         max_rating=max_rating, genre_id=genre, genre_ids=genre_ids,
-        genre_operator=genre_operator, exclude_movie_ids=sorted(excluded)))
-    if spun is None:
+        genre_operator=genre_operator, exclude_movie_ids=sorted(excluded)), count)
+    if drawn is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No cached films match those filters - loosen them, or browse a few "
                    "lists/actors to grow your local cache")
-    movie, imdb_rating, pool_size = spun
-    return RouletteSpinResult(
-        movie=RouletteMovie(
+    picks, pool_size = drawn
+    movies = [
+        RouletteMovie(
             tmdb_id=movie.tmdb_id,
             title=movie.title,
             poster_path=movie.poster_path,
@@ -218,9 +219,10 @@ async def roulette_spin(
             tagline=movie.tagline or None,
             genre_ids=movie.genre_ids or [],
             imdb_rating=imdb_rating if imdb_rating and imdb_rating != "N/A" else None,
-        ),
-        pool_size=pool_size,
-    )
+        )
+        for movie, imdb_rating in picks
+    ]
+    return RouletteSpinResult(movie=movies[0], pool_size=pool_size, movies=movies)
 
 
 @router.get("/engine/bridge/swap-node", response_model=SwapNodeResult)

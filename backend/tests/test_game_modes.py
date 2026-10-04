@@ -272,6 +272,18 @@ def test_spin_is_random_across_the_matching_pool(client, db_engine):
     assert len(_spin_ids(client, max_runtime=100)) == 2
 
 
+def test_blind_draft_serves_distinct_candidates(client, db_engine):
+    _seed_cache(db_engine)
+    body = client.get("/api/engine/roulette/spin", params={"count": 3}).json()
+    ids = [m["tmdb_id"] for m in body["movies"]]
+    assert len(ids) == 3 and len(set(ids)) == 3 and body["movie"]["tmdb_id"] == ids[0]
+    assert set(ids) <= {1, 2, 3, 6}
+    # Fewer matches than requested: serve what exists.
+    short = client.get("/api/engine/roulette/spin", params={"count": 3, "max_runtime": 100}).json()
+    assert {m["tmdb_id"] for m in short["movies"]} == {1, 3}
+    assert client.get("/api/engine/roulette/spin", params={"count": 9}).status_code == 422
+
+
 def test_spin_with_no_match_is_a_helpful_404(client, db_engine):
     _seed_cache(db_engine)
     resp = client.get("/api/engine/roulette/spin", params={"max_runtime": 10})

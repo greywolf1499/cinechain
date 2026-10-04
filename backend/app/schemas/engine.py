@@ -100,6 +100,10 @@ class ConstraintInfo(BaseModel):
     kind: str  # director | actor | free | year | country | color | semantic
     title: str
     detail: str | None = None
+    # Engine V3 modifiers: ISO codes currently locked out by `country_cooldown`
+    # (most recently visited first) and one-line notes for other active modifiers.
+    cooldown_countries: list[str] = []
+    modifier_notes: list[str] = []
 
 
 class RouletteMovie(BaseModel):
@@ -116,8 +120,10 @@ class RouletteMovie(BaseModel):
 
 
 class RouletteSpinResult(BaseModel):
-    movie: RouletteMovie
+    movie: RouletteMovie  # the first (or only) pick
     pool_size: int  # how many cached films matched the filters
+    # Every distinct pick, `movie` first: up to `count` films for a Blind Draft.
+    movies: list[RouletteMovie] = []
 
 
 class PathTagsResult(BaseModel):

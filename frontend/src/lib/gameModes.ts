@@ -123,7 +123,7 @@ export const STANDALONE_MODES = new Set([
 ]);
 
 /** Modes with no film-to-film graph at all (SQL trackers). */
-const TRACKER_MODES = new Set(["decade_sieve", "roulette"]);
+export const TRACKER_MODES = new Set(["decade_sieve", "roulette"]);
 
 /** Does this run link films through shared cast/directors? Drives the Pick Next layout. */
 export function usesCastLinks(

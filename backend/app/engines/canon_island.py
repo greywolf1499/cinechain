@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import ClassVar
 
 from sqlmodel import col, select
 
 from app.engines.cinechain import CineChainEngine
 from app.models.curated import CanonMovieBadge, CuratedList
+from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import Suggestion, SuggestionFilters, ValidationResult
 
@@ -64,7 +66,7 @@ class CanonIslandEngine(CineChainEngine):
             valid=False, blocked=True,
             reason=f"Not on the island: this film isn't in {curated.title}")
 
-    async def validate_next_step(
+    async def validate_primary(
         self,
         from_movie_id: int,
         to_movie_id: int,
@@ -76,7 +78,7 @@ class CanonIslandEngine(CineChainEngine):
             blocked = await self.validate_candidate(to_movie_id, rules)
             if not blocked.valid:
                 return blocked
-        return await super().validate_next_step(
+        return await super().validate_primary(
             from_movie_id, to_movie_id, cast_limit=cast_limit)
 
     async def get_suggestions(
@@ -101,6 +103,7 @@ class CanonIslandEngine(CineChainEngine):
         cast_limit: int | None = None,
         rules: dict | None = None,
         previous_transition: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         candidates = await super().discover_candidates(frontier_movie_id, mode, cast_limit)
         list_id = (rules or {}).get(ALLOWED_LIST_KEY)

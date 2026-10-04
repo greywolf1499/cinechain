@@ -27,6 +27,7 @@ import Modal from "../components/Modal";
 import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
 import PickNextHub from "../components/PickNextHub";
+import ModifierChips from "../components/ModifierChips";
 import RouletteSpinner from "../components/RouletteSpinner";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
@@ -565,6 +566,9 @@ function ActiveFrontierCard({
             {constraint.title}
           </p>
           {constraint.detail && <p className="mt-0.5 text-[11px] text-zinc-500">{constraint.detail}</p>}
+          <div className="mt-1.5 empty:hidden">
+            <ModifierChips constraint={constraint} />
+          </div>
         </div>
       )}
 

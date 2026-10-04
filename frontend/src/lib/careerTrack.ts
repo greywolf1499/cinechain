@@ -1,4 +1,4 @@
-import type { CareerFilm, CareerMilestone, RunStep } from "../types/api";
+import type { CareerMilestone, RunStep } from "../types/api";
 
 export const METHOD_ACTOR = "method_actor";
 
@@ -17,7 +17,7 @@ export type TrackStatus = "watched" | "planned" | "next" | "upcoming";
 
 /** Where each track film stands: logged (watched/planned), the next one in line, or still ahead. */
 export function trackStatuses(
-  track: CareerFilm[],
+  track: { movie_id: number }[],
   steps: RunStep[],
 ): { statuses: Map<number, TrackStatus>; nextIndex: number } {
   const statuses = new Map<number, TrackStatus>();

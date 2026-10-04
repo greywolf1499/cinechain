@@ -17,6 +17,8 @@ const MODE_ORDER = [
   "rabbit_hole",
   "march_madness",
   "method_actor",
+  "auteur_marathon",
+  "regional_deep_dive",
   "chrono_climb",
   "genre_pendulum",
   "world_passport",

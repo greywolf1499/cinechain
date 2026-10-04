@@ -103,10 +103,13 @@ async def search_movies(
 @router.get("/people/search", response_model=list[PersonSummary])
 async def search_people(
     q: str = Query(..., min_length=1),
+    department: str | None = Query(
+        None, description="Only people known for this TMDB department, e.g. Directing"),
     tmdb: TMDBClient = Depends(get_tmdb_client),
     _current_user: User = Depends(get_current_user),
 ) -> list[PersonSummary]:
-    """Live TMDB person search (actors first): the Method Actor Marathon's picker."""
+    """Live TMDB person search (actors first): the Method Actor Marathon's picker. With
+    `department` (the Auteur Marathon asks for Directing) only that department's people."""
     raw = await tmdb.search_people(q)
     people = [
         PersonSummary(
@@ -115,6 +118,7 @@ async def search_people(
             known_for_department=entry.get("known_for_department"),
             known_for=[k.get("title") or k.get("name") or "" for k in entry.get("known_for", [])][:3])
         for entry in raw.get("results", [])
+        if department is None or entry.get("known_for_department") == department
     ]
     return sorted(people, key=lambda p: p.known_for_department != "Acting")[:10]
 

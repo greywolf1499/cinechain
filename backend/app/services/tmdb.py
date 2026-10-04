@@ -220,6 +220,11 @@ class TMDBClient:
         data = await self._get(f"/person/{person_id}/movie_credits")
         return list(data.get("cast", []))
 
+    async def get_person_crew_credits_raw(self, person_id: int) -> list[dict[str, Any]]:
+        """A person's crew credits exactly as TMDB lists them (one entry per film and job)."""
+        data = await self._get(f"/person/{person_id}/movie_credits")
+        return list(data.get("crew", []))
+
     async def get_poster_bytes(
         self, poster_path: str, size: str = "w185", max_bytes: int = 2 * 1024 * 1024
     ) -> bytes | None:

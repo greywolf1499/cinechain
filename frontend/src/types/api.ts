@@ -86,8 +86,17 @@ export interface RulesConfig {
 	/** The Method Actor Marathon: the picked actor's TMDB id when creating; the server builds the rest. */
 	actor_id?: number;
 	actor?: { id: number; name: string };
-	filmography?: CareerFilm[];
+	filmography?: (CareerFilm | AuteurFilm)[];
 	max_skip?: number;
+	/** The Auteur Marathon: the picked director's TMDB id when creating; the server builds
+	 * `director` + the chronological `filmography`. */
+	director_id?: number;
+	director?: { id: number; name: string };
+	/** The Regional Deep Dive: the slice to create (list + country and/or decade); the server
+	 * builds `expedition`. */
+	curated_list_id?: string;
+	target_country?: string;
+	expedition?: Expedition;
 }
 
 export type BracketRound = "round_of_16" | "quarterfinals" | "semifinals" | "finals";
@@ -133,6 +142,38 @@ export interface CareerFilm {
 	vote_count: number;
 	age: number | null;
 	milestones: CareerMilestone[];
+}
+
+export interface AuteurFilm {
+	movie_id: number;
+	title: string;
+	release_date: string;
+	year: number;
+	poster_path: string | null;
+	runtime: number | null;
+}
+
+export interface ExpeditionFilm {
+	movie_id: number;
+	title: string;
+	year: number | null;
+	poster_path: string | null;
+	runtime: number | null;
+	badge_label: string;
+	rank: number | null;
+}
+
+export interface Expedition {
+	list_id: string;
+	list_title: string;
+	badge_prefix: string;
+	badge_color: string;
+	/** ISO 3166-1 alpha-2 code, or null for a decade-only slice. */
+	country: string | null;
+	country_name: string | null;
+	decade: number | null;
+	movie_ids: number[];
+	films: ExpeditionFilm[];
 }
 
 export interface PersonSummary {

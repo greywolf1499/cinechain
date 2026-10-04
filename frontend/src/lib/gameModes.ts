@@ -151,6 +151,24 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     ring: "border-fuchsia-400 shadow-[0_0_0_1px_rgba(232,121,249,0.6),0_8px_30px_-8px_rgba(232,121,249,0.35)]",
     text: "text-fuchsia-300",
   },
+  auteur_marathon: {
+    icon: Clapperboard,
+    tagline: "One director, every feature",
+    tags: ["One director", "Release order", "Filmography"],
+    progression: ["🎬 First Feature", "🎞️ The Middle Years", "🏁 Final Film"],
+    bubble: "bg-teal-500/15 text-teal-300",
+    ring: "border-teal-400 shadow-[0_0_0_1px_rgba(45,212,191,0.6),0_8px_30px_-8px_rgba(45,212,191,0.35)]",
+    text: "text-teal-300",
+  },
+  regional_deep_dive: {
+    icon: Compass,
+    tagline: "Conquer one corner of the canon",
+    tags: ["Canon list", "Country", "Decade"],
+    progression: ["🧭 Pick a Slice", "🗺️ Cross Off the Board", "🚩 Conquer It"],
+    bubble: "bg-lime-500/15 text-lime-300",
+    ring: "border-lime-400 shadow-[0_0_0_1px_rgba(163,230,53,0.6),0_8px_30px_-8px_rgba(163,230,53,0.35)]",
+    text: "text-lime-300",
+  },
   aesthetic_gradient: {
     icon: Palette,
     tagline: "Fade poster to poster",
@@ -192,7 +210,14 @@ export const STANDALONE_MODES = new Set([
 ]);
 
 /** Modes with no film-to-film graph at all (SQL trackers). */
-export const TRACKER_MODES = new Set(["decade_sieve", "roulette", "march_madness", "method_actor"]);
+export const TRACKER_MODES = new Set([
+  "decade_sieve",
+  "roulette",
+  "march_madness",
+  "method_actor",
+  "auteur_marathon",
+  "regional_deep_dive",
+]);
 
 /** Does this run link films through shared cast/directors? Drives the Pick Next layout. */
 export function usesCastLinks(

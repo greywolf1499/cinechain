@@ -36,7 +36,9 @@ import RouletteSpinner from "../components/RouletteSpinner";
 import ForkOfferPanel from "../components/ForkOfferPanel";
 import TugOfWarMeter from "../components/TugOfWarMeter";
 import PendulumMeter from "../components/PendulumMeter";
+import AuteurTrack from "../components/AuteurTrack";
 import BracketView from "../components/BracketView";
+import ExpeditionBoard from "../components/ExpeditionBoard";
 import CareerTrack from "../components/CareerTrack";
 import RabbitHoleHud from "../components/RabbitHoleHud";
 import RabbitHoleGameOver from "../components/RabbitHoleGameOver";
@@ -65,7 +67,9 @@ import { TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar";
 import { GENRE_PENDULUM } from "../lib/pendulum";
 import { RABBIT_HOLE } from "../lib/rabbitHole";
 import { MARCH_MADNESS } from "../lib/bracket";
+import { AUTEUR_MARATHON } from "../lib/auteurTrack";
 import { METHOD_ACTOR } from "../lib/careerTrack";
+import { REGIONAL_DEEP_DIVE } from "../lib/expedition";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import { STANDALONE_MODES, gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
@@ -222,6 +226,10 @@ export default function RunDetailPage() {
         <BracketView run={run} users={users} currentUserId={currentUser?.id} />
       ) : run.game_type === METHOD_ACTOR && run.rules_config.filmography ? (
         <CareerTrack run={run} />
+      ) : run.game_type === AUTEUR_MARATHON && run.rules_config.filmography ? (
+        <AuteurTrack run={run} />
+      ) : run.game_type === REGIONAL_DEEP_DIVE && run.rules_config.expedition ? (
+        <ExpeditionBoard run={run} />
       ) : run.game_type === MEET_IN_THE_MIDDLE && run.steps.length > 0 ? (
         <div className="flex flex-col gap-6">
           <TunnelTimeline

@@ -19,6 +19,9 @@ import { DEFAULT_TARGET_LEAD, TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar
 import { DEFAULT_GENRE_CYCLE, DEFAULT_SWING_FREQUENCY, GENRE_PENDULUM } from "../lib/pendulum";
 import { BRACKET_SIZE, MARCH_MADNESS } from "../lib/bracket";
 import { METHOD_ACTOR } from "../lib/careerTrack";
+import { AUTEUR_MARATHON } from "../lib/auteurTrack";
+import { EXPEDITION_COUNTRIES, REGIONAL_DEEP_DIVE } from "../lib/expedition";
+import { isoToFlagEmoji } from "../lib/countries";
 import ActorPicker from "../components/ActorPicker";
 import BracketSeedPicker from "../components/BracketSeedPicker";
 import GenreCycleInput from "../components/GenreCycleInput";
@@ -122,6 +125,10 @@ function NewRunModal({
   const [swingFrequency, setSwingFrequency] = useState(DEFAULT_SWING_FREQUENCY);
   const [bracketFilms, setBracketFilms] = useState<MovieSummary[]>([]);
   const [actor, setActor] = useState<PersonSummary | null>(null);
+  const [director, setDirector] = useState<PersonSummary | null>(null);
+  const [diveListId, setDiveListId] = useState("");
+  const [diveCountry, setDiveCountry] = useState("");
+  const [diveDecade, setDiveDecade] = useState("");
   const [rawMode, setRawMode] = useState(false);
   const [rawText, setRawText] = useState("");
 
@@ -141,6 +148,8 @@ function NewRunModal({
   const isPendulum = gameType === GENRE_PENDULUM;
   const isBracket = gameType === MARCH_MADNESS;
   const isMethodActor = gameType === METHOD_ACTOR;
+  const isAuteur = gameType === AUTEUR_MARATHON;
+  const isDive = gameType === REGIONAL_DEEP_DIVE;
   // A canon list with no synced films would block every pick.
   const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
 
@@ -148,6 +157,14 @@ function NewRunModal({
   const formRules: RulesConfig = {
     ...(isBracket ? { bracket_movie_ids: bracketFilms.map((film) => film.tmdb_id) } : {}),
     ...(isMethodActor && actor ? { actor_id: actor.person_id } : {}),
+    ...(isAuteur && director ? { director_id: director.person_id } : {}),
+    ...(isDive
+      ? {
+          curated_list_id: diveListId,
+          ...(diveCountry ? { target_country: diveCountry } : {}),
+          ...(diveDecade ? { target_decade: Number(diveDecade) } : {}),
+        }
+      : {}),
     ...(isTracker ? TRACKER_RULES : clearModifiers(rules)),
     ...modifierPayload(gameType, rules, selectedEngine?.capabilities),
     ...(needsCanonList ? { allowed_curated_list_id: canonListId } : {}),
@@ -165,7 +182,9 @@ function NewRunModal({
     (needsCanonList && !canonListId) ||
     (isTunnel && (!seedMovie || !tailSeedMovie)) ||
     (isBracket && bracketFilms.length !== BRACKET_SIZE) ||
-    (isMethodActor && !actor);
+    (isMethodActor && !actor) ||
+    (isAuteur && !director) ||
+    (isDive && (!diveListId || (!diveCountry && !diveDecade)));
   const sameSeeds = isTunnel && !!seedMovie && seedMovie.tmdb_id === tailSeedMovie?.tmdb_id;
 
   // Modifiers belong to one mode: switching modes starts from a clean slate.
@@ -204,6 +223,10 @@ function NewRunModal({
     setSwingFrequency(DEFAULT_SWING_FREQUENCY);
     setBracketFilms([]);
     setActor(null);
+    setDirector(null);
+    setDiveListId("");
+    setDiveCountry("");
+    setDiveDecade("");
     setRawMode(false);
     setRawText("");
     createRun.reset();
@@ -304,6 +327,77 @@ function NewRunModal({
           <Field label="The actor whose career you'll watch">
             <ActorPicker value={actor} onChange={setActor} />
           </Field>
+        )}
+
+        {isAuteur && (
+          <Field label="The director whose filmography you'll work through">
+            <ActorPicker
+              value={director}
+              onChange={setDirector}
+              department="Directing"
+              noun="director"
+              accentClass="border-teal-400/40 bg-teal-500/5"
+            />
+          </Field>
+        )}
+
+        {isDive && (
+          <div className="flex flex-col gap-3 rounded-lg border border-lime-400/30 bg-lime-500/5 p-3">
+            <Field label="Canon list to slice">
+              <select
+                value={diveListId}
+                onChange={(e) => setDiveListId(e.target.value)}
+                className={inputClass}
+              >
+                <option value="">Choose a list...</option>
+                {islandLists.map((list) => (
+                  <option key={list.id} value={list.id}>
+                    {list.title} ({list.total_items} films)
+                  </option>
+                ))}
+              </select>
+              {islandLists.length === 0 && (
+                <span className="text-[11px] font-normal text-amber-400">
+                  No synced lists yet - enable and sync one under Lists first.
+                </span>
+              )}
+            </Field>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Country">
+                <select
+                  value={diveCountry}
+                  onChange={(e) => setDiveCountry(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Any country</option>
+                  {EXPEDITION_COUNTRIES.map((country) => (
+                    <option key={country.code} value={country.code}>
+                      {isoToFlagEmoji(country.code)} {country.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Decade (optional)">
+                <select
+                  value={diveDecade}
+                  onChange={(e) => setDiveDecade(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Any decade</option>
+                  {DECADES.map((decade) => (
+                    <option key={decade} value={decade}>
+                      {decade}s
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            {!diveCountry && !diveDecade && (
+              <span className="text-[11px] text-zinc-500">
+                Pick a country, a decade or both to slice the list.
+              </span>
+            )}
+          </div>
         )}
 
         {isPendulum && (

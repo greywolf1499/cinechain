@@ -17,8 +17,9 @@ OFFER_SIZE = 3
 # (a pre-seeded offer, or tug scores that start a run one point from victory).
 SERVER_OWNED_RULES = (
     PENDING_FORK_KEY, "tug_scores", "tug_players",
-    # Built by the March Madness / Method Actor engines when the run is created.
-    "bracket", "bracket_films", "actor", "filmography",
+    # Built by the March Madness / Method Actor / Auteur Marathon / Regional Deep Dive engines
+    # when the run is created.
+    "bracket", "bracket_films", "actor", "filmography", "director", "expedition",
 )
 
 

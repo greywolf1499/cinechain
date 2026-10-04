@@ -17,6 +17,7 @@ import type {
 	EngineMeta,
 	GoldenVetoResult,
 	MovieDetail,
+	TropeExtraction,
 	Run,
 	RunDetail,
 	RunStats,
@@ -244,6 +245,25 @@ export function useMovieDetail(movieId: number | undefined, enabled = true) {
 	return {
 		movie: hydrated.data ?? base.data,
 		isHydrating: needsHydration && hydrated.isFetching,
+	};
+}
+
+/** A film's extracted tropes. Reads the cached ones off the detail; when they are missing and the
+ * LLM is on, asks the server to extract (and cache) them once. Empty = none / LLM off. */
+export function useMovieTropes(movieId: number | undefined, enabled = true) {
+	const { data: llm } = useLlmStatus();
+	const { movie } = useMovieDetail(movieId, enabled);
+	const cached = movie?.extracted_tropes ?? null;
+	const extraction = useQuery({
+		queryKey: ["movies", movieId, "tropes"],
+		queryFn: () => api.post<TropeExtraction>(`/movies/${movieId}/tropes/extract`),
+		enabled: enabled && movieId !== undefined && !!movie && cached === null && !!llm?.enabled,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+	});
+	return {
+		tropes: cached ?? extraction.data?.tropes ?? [],
+		isExtracting: extraction.isFetching,
 	};
 }
 

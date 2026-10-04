@@ -1,4 +1,4 @@
-"""JIT feature extraction for cached movies: poster colour and overview embedding.
+"""JIT feature extraction for cached movies: poster colour, overview embedding and LLM tropes.
 
 Both are computed lazily, persisted on `cached_movies`, and never recomputed
 unless the source (poster / overview) changes. Failures are logged and leave the
@@ -15,7 +15,7 @@ import anyio
 from sqlmodel import Session
 
 from app.models.cache import CachedMovie
-from app.services import embeddings
+from app.services import embeddings, llm
 from app.services.aesthetic import extract_dominant_color
 from app.services.tmdb import TMDBClient
 
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 POSTER_CONCURRENCY = 8
 EMBED_BATCH_SIZE = 32
+TROPE_CONCURRENCY = 2
 
 
 async def ensure_dominant_color(
@@ -103,3 +104,49 @@ async def ensure_embeddings(session: Session, movies: Iterable[CachedMovie]) -> 
             session.add(movie)
         session.commit()
     return True
+
+
+async def extract_and_store_tropes(
+    session: Session, movie: CachedMovie, config: llm.LlmConfig
+) -> list[str]:
+    """Extract and persist `movie`'s tropes. [] when the model is off; raises `LlmUnavailable`
+    when it fails, so a failure is never cached as "no tropes"."""
+    tropes = await llm.extract_tropes(movie.overview or "", config)
+    if tropes:
+        movie.extracted_tropes = tropes
+        session.add(movie)
+        session.commit()
+    return tropes
+
+
+async def ensure_tropes(session: Session, movies: Iterable[CachedMovie]) -> None:
+    """Fill `extracted_tropes` for films that lack them, when the generative model is on.
+    A failing model is logged once and skips the rest: films stay NULL (never "no tropes")."""
+    config = llm.load_config(session)
+    if not config.enabled:
+        return
+    pending = list({
+        m.tmdb_id: m for m in movies
+        if m.extracted_tropes is None and (m.overview or "").strip()}.values())
+    if not pending:
+        return
+    gate = asyncio.Semaphore(TROPE_CONCURRENCY)
+    failed = False
+
+    async def extract(movie: CachedMovie) -> tuple[CachedMovie, list[str]]:
+        nonlocal failed
+        async with gate:
+            if failed:
+                return movie, []
+            try:
+                return movie, await llm.extract_tropes(movie.overview or "", config)
+            except llm.LlmUnavailable as exc:
+                failed = True
+                logger.warning("Trope extraction unavailable: %s", exc)
+                return movie, []
+
+    for movie, tropes in await asyncio.gather(*(extract(m) for m in pending)):
+        if tropes:
+            movie.extracted_tropes = tropes
+            session.add(movie)
+    session.commit()

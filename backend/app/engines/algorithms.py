@@ -1,7 +1,8 @@
 """Algorithm Sandbox engines: standalone modes with a *computed* rule between hops.
 
 - Aesthetic Gradient: consecutive posters must have similar dominant colours.
-- Semantic Trope Web: consecutive plot overviews must be semantically close.
+- Semantic Trope Web: consecutive plot overviews must be semantically close, or the two films
+  must share a discrete LLM-extracted trope ("heist", "time-loop").
 
 Both derive a per-film feature lazily (see `movie_features`), persist it on the
 movie cache and enforce the rule as a hard block, like the other mutators. A film
@@ -41,6 +42,8 @@ COLOR_DISTANCE_THRESHOLD = 100.0
 SEMANTIC_SIMILARITY_THRESHOLD = 0.5
 # Pool films judged per request: bounds poster downloads / model work.
 POOL_FEATURE_BUDGET = 80
+# Pool films whose tropes are extracted per Pick Next request (each costs an LLM call).
+POOL_TROPE_BUDGET = 8
 
 
 class FeatureEngine(MutatorEngine):
@@ -248,7 +251,7 @@ class AestheticGradientEngine(FeatureEngine):
         if tail_movie_id is None:
             return ConstraintInfo(
                 kind="color", title="Any film starts the gradient",
-                detail="Every later poster must be a similar colour to the one before it.")
+                detail="Every later poster must be a similar colour to the one before it - or share a trope with it.")
         tail = await self._load(tail_movie_id)
         await self.prepare([tail])
         if not tail.dominant_color:
@@ -260,14 +263,22 @@ class AestheticGradientEngine(FeatureEngine):
             detail=f"Colour distance of at most {COLOR_DISTANCE_THRESHOLD:.0f} (RGB, 0-442).")
 
 
+def shared_trope(earlier: CachedMovie, later: CachedMovie) -> str | None:
+    """A discrete trope both films carry (in the earlier film's order), or None."""
+    theirs = set(later.extracted_tropes or [])
+    return next((t for t in earlier.extracted_tropes or [] if t in theirs), None)
+
+
 class SemanticTropeEngine(FeatureEngine):
-    """Consecutive films must have semantically similar plots (overview embeddings)."""
+    """Consecutive films must have semantically similar plots (overview embeddings) or share
+    at least one discrete trope (LLM-extracted, kebab-case)."""
 
     game_type = "semantic_trope"
     display_name = "Semantic Trope Web"
     description = (
         "Follow the plot: every film must be a close semantic match to the last, judged by a "
-        "small on-device language model. Any film counts - no shared cast needed."
+        "small on-device language model - or share a trope with it (heist, time-loop...). "
+        "Any film counts - no shared cast needed."
     )
     needs_detail = True  # overviews come from the full TMDB detail
 
@@ -290,32 +301,95 @@ class SemanticTropeEngine(FeatureEngine):
             embeddings.cosine_similarity(vector_a, vector_b), fingerprint)
 
     def violation(self, earlier: CachedMovie, later: CachedMovie, metric: float) -> str | None:
-        if metric > SEMANTIC_SIMILARITY_THRESHOLD:
+        if metric > SEMANTIC_SIMILARITY_THRESHOLD or shared_trope(earlier, later):
             return None
         return (
             f"Semantic Trope Web: {later.title} is only a {_percent(metric)}% plot match for "
-            f"{earlier.title} - it needs more than {_percent(SEMANTIC_SIMILARITY_THRESHOLD)}%"
+            f"{earlier.title} and they share no trope - it needs more than "
+            f"{_percent(SEMANTIC_SIMILARITY_THRESHOLD)}% or a common trope"
         )
 
     async def prepare(self, movies: list[CachedMovie]) -> None:
         await movie_features.ensure_embeddings(self.session, movies)
 
+    async def prepare_tropes(self, movies: Sequence[CachedMovie]) -> None:
+        """Extract missing tropes (an LLM call each, so only for the films that matter)."""
+        await movie_features.ensure_tropes(self.session, movies)
+
+    async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
+        result = await super().validate_candidate(movie_id, rules)
+        await self.prepare_tropes([await self._load(movie_id, hydrate=True)])
+        return result
+
+    async def validate_primary(
+        self,
+        from_movie_id: int,
+        to_movie_id: int,
+        cast_limit: int | None = None,
+        rules: dict | None = None,
+        previous_transition: dict | None = None,
+    ) -> ValidationResult:
+        # A hop is valid on either plot similarity or a shared trope (see `violation`).
+        earlier = await self._load(from_movie_id, hydrate=True)
+        later = await self._load(to_movie_id, hydrate=True)
+        await self.prepare_tropes([earlier, later])
+        result = await super().validate_primary(
+            from_movie_id, to_movie_id, cast_limit=cast_limit, rules=rules,
+            previous_transition=previous_transition)
+        if result.valid:
+            result.shared_trope = shared_trope(earlier, later)
+        return result
+
     def annotate(self, candidate: DiscoveryCandidate, row: CachedMovie, metric: float | None) -> None:
         candidate.semantic_score = None if metric is None else max(0.0, round(metric, 4))
+        candidate.tropes = list(row.extracted_tropes or [])
 
     def with_metric(self, result: ValidationResult, metric: float | None) -> ValidationResult:
         result.similarity = None if metric is None else round(metric, 4)
         return result
 
     def metadata_fields(self, result: ValidationResult) -> dict:
-        return {"semantic_score": result.similarity}
+        return {"semantic_score": result.similarity, "shared_trope": result.shared_trope}
+
+    async def _filter_pool(
+        self, frontier: CachedMovie, candidates: list[DiscoveryCandidate],
+        rules: dict | None = None,
+    ) -> list[DiscoveryCandidate]:
+        await self.prepare_tropes([frontier])
+        return await super()._filter_pool(frontier, candidates, rules)
+
+    def _scored_candidates(
+        self, frontier: CachedMovie, rows: list[CachedMovie], best_first: str
+    ) -> list[DiscoveryCandidate]:
+        """Films that match the plot or share a trope, closest plot first (films whose plot
+        can't be measured but share a trope still qualify)."""
+        scored: list[tuple[float, DiscoveryCandidate]] = []
+        for row in rows:
+            if row.tmdb_id == frontier.tmdb_id or not is_reality_eligible(row):
+                continue
+            metric = self.measure(frontier, row)
+            linked = shared_trope(frontier, row) is not None
+            if metric is None and not linked:
+                continue
+            if metric is not None and self.violation(frontier, row, metric):
+                continue
+            candidate = candidate_from_row(row)
+            self.annotate(candidate, row, metric)
+            rank = metric if metric is not None else SEMANTIC_SIMILARITY_THRESHOLD
+            scored.append((-rank, candidate))
+        scored.sort(key=lambda pair: (pair[0], -(pair[1].popularity or 0.0)))
+        return [candidate for _, candidate in scored[:RULE_POOL_SIZE]]
 
     async def discover_rule_candidates(
         self, frontier: CachedMovie, rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         await self.prepare([frontier])
-        if embeddings.decode_embedding(frontier.overview_embedding) is None:
+        await self.prepare_tropes([frontier])
+        if (
+            embeddings.decode_embedding(frontier.overview_embedding) is None
+            and not frontier.extracted_tropes
+        ):
             return []
         pool: dict[int, CachedMovie] = {}
 
@@ -342,6 +416,16 @@ class SemanticTropeEngine(FeatureEngine):
         ranked = sorted(rows.values(), key=lambda r: -(r.popularity or 0.0))
         await self.prepare(ranked[:POOL_FEATURE_BUDGET])
         pool.update(rows)
+
+        # Films sharing one of the frontier's tropes qualify even without a close plot match.
+        if frontier.extracted_tropes:
+            tagged = self.session.exec(select(CachedMovie).where(
+                CachedMovie.extracted_tropes.is_not(None))).all()  # type: ignore[union-attr]
+            pool.update({r.tmdb_id: r for r in tagged if shared_trope(frontier, r)})
+            by_popularity = sorted(
+                (r for r in pool.values() if r.extracted_tropes is None and r.overview),
+                key=lambda r: -(r.popularity or 0.0))
+            await self.prepare_tropes(by_popularity[:POOL_TROPE_BUDGET])
         return self._scored_candidates(frontier, list(pool.values()), best_first="high")
 
     async def describe_constraint(
@@ -354,8 +438,8 @@ class SemanticTropeEngine(FeatureEngine):
                 kind="semantic", title="Any film starts the web",
                 detail=f"Every later film's plot must be a semantic match of {floor} to the one before it.")
         return ConstraintInfo(
-            kind="semantic", title="Next film's plot must be a close semantic match",
-            detail=f"Plot similarity {floor} to the last film's overview.")
+            kind="semantic", title="Next film must match the plot or share a trope",
+            detail=f"Plot similarity {floor} to the last film's overview, or at least one trope in common.")
 
 
 def _percent(similarity: float) -> int:

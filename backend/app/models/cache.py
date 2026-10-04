@@ -39,6 +39,9 @@ class CachedMovie(SQLModel, table=True):
     # "provider:model" that produced `overview_embedding`; NULL = the local ONNX model (pre-23b rows).
     # Vectors from different models live in different spaces and are never compared.
     overview_embedding_model: str | None = None
+    # LLM-extracted kebab-case tropes/themes ("heist", "time-loop"); NULL = not extracted yet.
+    extracted_tropes: list[str] | None = Field(
+        default=None, sa_column=Column(JSON(none_as_null=True)))
 
 
 class CachedActor(SQLModel, table=True):

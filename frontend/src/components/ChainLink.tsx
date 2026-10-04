@@ -8,6 +8,7 @@ import { SemanticMatchBadge } from "./ColorSwatch";
 import LinkBonusBadges from "./LinkBonusBadges";
 import RoleBadge from "./RoleBadge";
 import PitchButton from "./PitchButton";
+import { TropeLinkBadge } from "./TropeChips";
 import type { RunStep } from "../types/api";
 
 interface TransitionMeta {
@@ -27,6 +28,7 @@ interface TransitionMeta {
   pendulum_genre?: string;
   pendulum_step?: number;
   semantic_score?: number;
+  shared_trope?: string;
   color_distance?: number;
   year_delta?: number;
   from_country?: string | null;
@@ -110,6 +112,7 @@ export default function ChainLink({
               </div>
               {characters && <p className="truncate text-[10px] text-zinc-500">{characters}</p>}
               <LinkBonusBadges meta={step.transition_metadata} className="mt-1" />
+              <TropeLinkBadge meta={step.transition_metadata} className="mt-1" />
             </div>
           </>
         ) : meta?.character_hop ? (
@@ -117,7 +120,10 @@ export default function ChainLink({
         ) : castLinked ? (
           <p className="text-[10px] text-zinc-600">Chain broken — no shared cast</p>
         ) : (
-          <RuleLink meta={meta} />
+          <div className="flex min-w-0 flex-col gap-1">
+            <RuleLink meta={meta} />
+            <TropeLinkBadge meta={step.transition_metadata} />
+          </div>
         )}
         {previousMovieId !== undefined && (
           <PitchButton
@@ -171,6 +177,7 @@ function RuleLink({ meta }: { meta: TransitionMeta | null }) {
       </p>
     );
   }
+  if (meta?.shared_trope) return null;
   if (meta?.semantic_score !== undefined || meta?.color_distance !== undefined) {
     return <p className="text-xs text-zinc-500">Linked by the mode's rule</p>;
   }

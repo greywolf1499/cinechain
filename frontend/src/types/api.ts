@@ -156,6 +156,16 @@ export interface MovieDetail extends MovieSummary {
 	original_language: string | null;
 	genre_ids: number[];
 	ratings: MovieRatings | null;
+	/** LLM-extracted kebab-case tropes; null = not extracted yet. */
+	extracted_tropes?: string[] | null;
+}
+
+export interface TropeExtraction {
+	tmdb_id: number;
+	tropes: string[];
+	cached: boolean;
+	/** False when the LLM is off: an empty list then means "not extracted". */
+	enabled: boolean;
 }
 
 export interface MovieRatings {
@@ -425,6 +435,8 @@ export interface DiscoveryCandidate {
 	dominant_color?: string | null;
 	/** Semantic Trope Web: plot similarity to the frontier film, 0..1. */
 	semantic_score?: number | null;
+	/** Semantic Trope Web: the candidate's LLM-extracted tropes. */
+	tropes?: string[];
 	/** Chrono modes: release year minus the frontier film's (negative on a descent). */
 	year_delta?: number | null;
 }

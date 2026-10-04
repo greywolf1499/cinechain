@@ -9,13 +9,14 @@ import AcquisitionControl from "./AcquisitionControl";
 import MovieTagline from "./MovieTagline";
 import LinkBonusBadges from "./LinkBonusBadges";
 import RoleBadge from "./RoleBadge";
+import { TropeChips, TropeLinkBadge } from "./TropeChips";
 import { stepCraftLink } from "../lib/crewRoles";
 import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
-import { useCanonBadgesBulk, useMovieDetail, useUpdateStep } from "../lib/queries";
+import { useCanonBadgesBulk, useMovieDetail, useMovieTropes, useUpdateStep } from "../lib/queries";
 import type { ActorClickPayload } from "./actorClickTypes";
 import type { GenreOut, JellyfinItemSummary, RunStep } from "../types/api";
 
@@ -63,6 +64,7 @@ export default function MovieDetailModal({
     enabled: open,
   });
   const { data: badgesMap } = useCanonBadgesBulk(open ? [step.movie_id] : []);
+  const { tropes, isExtracting } = useMovieTropes(step.movie_id, open);
 
   const updateStep = useUpdateStep(runId);
   const [notes, setNotes] = useState(step.user_notes ?? "");
@@ -134,6 +136,16 @@ export default function MovieDetailModal({
                 </span>
               ))}
             </div>
+            {(tropes.length > 0 || isExtracting) && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <TropeChips tropes={tropes} className="[&>span]:text-[10px]" />
+                {isExtracting && (
+                  <span className="flex items-center gap-1 text-[10px] text-zinc-600">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Extracting tropes...
+                  </span>
+                )}
+              </div>
+            )}
             {movie ? (
               <>
               <MovieTagline tagline={movie.tagline} />
@@ -148,6 +160,8 @@ export default function MovieDetailModal({
             )}
           </div>
         </div>
+
+        <TropeLinkBadge meta={step.transition_metadata} />
 
         {(meta?.actor_name || craft) && (
           <div className="flex items-center gap-2.5 rounded-md border border-app-border bg-app-bg p-2.5">

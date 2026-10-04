@@ -14,8 +14,10 @@ turn into a friendly message, and nothing else in the app waits on it.
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import gc
+import json
 import logging
 import os
 import re
@@ -422,3 +424,81 @@ async def teaser(config: LlmConfig, movie: CachedMovie) -> str:
     )
     text = mask_title(await generate(config, TEASER_SYSTEM, prompt, max_tokens=64), movie.title)
     return _remember(key, text)
+
+
+TROPE_SYSTEM = (
+    "You tag films for cinephiles. From a plot summary, extract 3 to 5 concise, normalized "
+    "tropes or themes (for example heist, time-loop, cyberpunk, unreliable-narrator). Reply "
+    "with ONLY a JSON array of lowercase kebab-case strings and nothing else."
+)
+MAX_TROPES = 5
+MAX_TROPE_LENGTH = 40
+_NON_SLUG = re.compile(r"[^a-z0-9]+")
+_tropes_inflight: dict[str, asyncio.Future[list[str]]] = {}
+_JSON_ARRAY = re.compile(r"\[.*?\]", re.DOTALL)
+
+
+def normalize_trope(raw: object) -> str | None:
+    """A trope as a kebab-case slug ("Time Loop!" -> "time-loop"); None if nothing usable."""
+    if not isinstance(raw, str):
+        return None
+    slug = _NON_SLUG.sub("-", raw.lower()).strip("-")
+    return slug if slug and len(slug) <= MAX_TROPE_LENGTH else None
+
+
+def parse_tropes(text: str) -> list[str]:
+    """Normalized, de-duplicated tropes from a model reply: a JSON array, else a loose list."""
+    text = _THINK_BLOCK.sub("", text).split("</think>")[-1]
+    items: list[object] = []
+    match = _JSON_ARRAY.search(text)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            items = parsed if isinstance(parsed, list) else []
+        except ValueError:
+            items = []
+    if not items:  # small models sometimes answer with a bare or bulleted list
+        items = re.split(r"[,\n;]", text.replace("[", "").replace("]", ""))
+    tropes: list[str] = []
+    for item in items:
+        slug = normalize_trope(item)
+        if slug and slug not in tropes:
+            tropes.append(slug)
+    return tropes[:MAX_TROPES]
+
+
+def _env_config() -> LlmConfig:
+    base = get_settings()
+    provider = base.llm_provider if base.llm_provider in PROVIDERS else PROVIDER_OFF
+    return LlmConfig(
+        provider=provider, base_url=base.llm_base_url, api_key=base.llm_api_key,
+        model=base.llm_model, keep_alive_seconds=base.llm_keep_alive_seconds)
+
+
+async def extract_tropes(overview: str, config: LlmConfig | None = None) -> list[str]:
+    """3-5 kebab-case cinephile tropes/themes for a plot overview.
+
+    `config` defaults to the `.env` settings; pass `load_config(session)` to honour the admin's
+    saved ones. Returns `[]` when the model is off or there is no plot to read; raises
+    `LlmUnavailable` when the model is on but fails (so callers don't cache a false "none").
+    """
+    config = config or _env_config()
+    overview = (overview or "").strip()
+    if not config.enabled or not overview:
+        return []
+    # Concurrent requests for the same plot (Pick Next + the modal) share one generation.
+    key = f"{config.fingerprint}|{overview}"
+    task = _tropes_inflight.get(key)
+    if task is None:
+        task = asyncio.ensure_future(_generate_tropes(config, overview))
+        _tropes_inflight[key] = task
+        task.add_done_callback(lambda _: _tropes_inflight.pop(key, None))
+    return list(await asyncio.shield(task))
+
+
+async def _generate_tropes(config: LlmConfig, overview: str) -> list[str]:
+    prompt = f"Plot: {overview[:800]}\nReply with the JSON array of 3 to 5 kebab-case tropes."
+    tropes = parse_tropes(await generate(config, TROPE_SYSTEM, prompt, max_tokens=64))
+    if not tropes:
+        raise LlmUnavailable("The model returned no usable tropes")
+    return tropes

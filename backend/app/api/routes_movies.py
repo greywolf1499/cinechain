@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -18,8 +18,9 @@ from app.schemas.movies import (
     MovieSearchResponse,
     MovieSummary,
     SeedSuggestionOut,
+    TropeExtraction,
 )
-from app.services import cache_repo, seed_suggestions
+from app.services import cache_repo, llm, movie_features, seed_suggestions
 from app.services.cache_repo import CastEntry
 from app.services.crew_roles import role_for_job
 from app.services.movie_filters import passes_filters
@@ -57,6 +58,7 @@ def _movie_to_detail(movie: CachedMovie, ratings: MovieRatings | None = None) ->
         original_language=movie.original_language,
         genre_ids=movie.genre_ids or [],
         ratings=ratings,
+        extracted_tropes=movie.extracted_tropes,
     )
 
 
@@ -148,6 +150,31 @@ async def get_movie(
         else None
     )
     return _movie_to_detail(movie, ratings)
+
+
+@router.post("/movies/{tmdb_id}/tropes/extract", response_model=TropeExtraction)
+async def extract_movie_tropes(
+    tmdb_id: int,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> TropeExtraction:
+    """JIT trope extraction: asks the configured LLM once and caches the result on the movie.
+    Already-extracted films are returned as-is; with the LLM off the answer is an empty,
+    uncached list (`enabled=false`) so enabling it later still extracts."""
+    movie = await cache_repo.get_movie(session, tmdb, tmdb_id)
+    if movie.overview is None:
+        movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=True)
+    if movie.extracted_tropes is not None:
+        return TropeExtraction(tmdb_id=tmdb_id, tropes=movie.extracted_tropes, cached=True)
+    config = llm.load_config(session)
+    if not config.enabled:
+        return TropeExtraction(tmdb_id=tmdb_id, tropes=[], cached=False, enabled=False)
+    try:
+        tropes = await movie_features.extract_and_store_tropes(session, movie, config)
+    except llm.LlmUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return TropeExtraction(tmdb_id=tmdb_id, tropes=tropes, cached=False)
 
 
 @router.get("/movies/{tmdb_id}/ratings", response_model=MovieRatings | None)

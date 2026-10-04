@@ -32,6 +32,8 @@ class ValidationResult(BaseModel):
     # Algorithm Sandbox modes: how close the two films measured (None = unknown).
     similarity: float | None = None  # Semantic Trope Web, cosine similarity (-1..1)
     color_distance: float | None = None  # Aesthetic Gradient, RGB Euclidean distance
+    # Semantic Trope Web: the discrete trope (kebab-case) both films share, when there is one.
+    shared_trope: str | None = None
     # Rule evidence for this hop (Chrono year delta, Passport countries), stored on the step.
     mechanic: dict[str, Any] | None = None
     # Meet in the Middle: this film would also connect the opposite end - the chains collide.

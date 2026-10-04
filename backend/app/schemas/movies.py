@@ -26,6 +26,16 @@ class MovieDetail(MovieSummary):
     original_language: str | None = None
     genre_ids: list[int] = []
     ratings: MovieRatings | None = None
+    # LLM-extracted kebab-case tropes; None = not extracted yet (see POST .../tropes/extract).
+    extracted_tropes: list[str] | None = None
+
+
+class TropeExtraction(BaseModel):
+    tmdb_id: int
+    tropes: list[str]
+    cached: bool  # True when the stored tropes were returned without calling the model
+    # False when the LLM is off, so an empty list means "not extracted" rather than "none".
+    enabled: bool = True
 
 
 class CastMember(BaseModel):

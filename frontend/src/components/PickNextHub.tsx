@@ -35,6 +35,8 @@ import { countryName } from "../lib/countryNames";
 import { gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { connectionMetadata } from "../lib/connections";
 import { ROLE_STYLES, connectionRole } from "../lib/crewRoles";
+import { TropeChips } from "./TropeChips";
+import { tropeLabel } from "../lib/tropes";
 import RoleBadge from "./RoleBadge";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
 import { SIDE_LABELS } from "../lib/tunnel";
@@ -44,6 +46,7 @@ import {
   useOfferFork,
   useDiscoverCandidates,
   useMovieDetail,
+  useMovieTropes,
   useRunConstraint,
 } from "../lib/queries";
 import type {
@@ -63,6 +66,7 @@ import type {
 } from "../types/api";
 
 const CREW_CRAFT = "crew_craft";
+const SEMANTIC_TROPE = "semantic_trope";
 
 type CoStarMode = "or" | "and";
 type SortBy = "match" | "year" | "popularity" | "imdb" | "rt";
@@ -285,8 +289,10 @@ function DiscoveryGrid({
   const [sortBy, setSortBy] = useState<SortBy>(defaultSort);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
+  const [tropeFilter, setTropeFilter] = useState<string | null>(null);
 
   function clearFilters() {
+    setTropeFilter(null);
     setSelectedActorIds(new Set());
     setSearch("");
     setGenreId(null);
@@ -296,7 +302,11 @@ function DiscoveryGrid({
   }
 
   const hasActiveFilters =
-    selectedActorIds.size > 0 || search.trim() !== "" || genreId !== null || decadeKey !== "all";
+    selectedActorIds.size > 0 ||
+    search.trim() !== "" ||
+    genreId !== null ||
+    decadeKey !== "all" ||
+    tropeFilter !== null;
 
   const { data: cast } = useQuery({
     queryKey: ["movies", frontierStep.movie_id, "cast"],
@@ -311,6 +321,12 @@ function DiscoveryGrid({
     enabled: castLinked && craftMode,
   });
   const people = useMemo(() => mergeFilterPeople(craftMode ? (crew ?? []) : [], cast ?? []), [craftMode, crew, cast]);
+  // Semantic Trope Web: the frontier's extracted tropes are filter chips over the pool.
+  const tropeMode = gameType === SEMANTIC_TROPE;
+  const { tropes: frontierTropes, isExtracting: extractingTropes } = useMovieTropes(
+    frontierStep.movie_id,
+    tropeMode,
+  );
   const { data: constraint } = useRunConstraint(runId);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
@@ -364,6 +380,9 @@ function DiscoveryGrid({
           : [...selectedActorIds].some((id) => connectedIds.has(id));
       });
     }
+    if (tropeFilter !== null) {
+      list = list.filter((candidate) => candidate.tropes?.includes(tropeFilter));
+    }
     if (genreId !== null) {
       list = list.filter((candidate) => candidate.genre_ids.includes(genreId));
     }
@@ -392,7 +411,7 @@ function DiscoveryGrid({
       return direction * (ratingSortValue(b, key) - ratingSortValue(a, key));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, selectedActorIds, mode, genreId, decadeKey, search, sortBy, sortDir, ratingsMap]);
+  }, [candidates, selectedActorIds, mode, genreId, decadeKey, tropeFilter, search, sortBy, sortDir, ratingsMap]);
 
   function toggleActor(actorId: number) {
     setSelectedActorIds((prev) => {
@@ -462,6 +481,36 @@ function DiscoveryGrid({
           detail={constraint?.detail}
           frontierTitle={frontierStep.movie_title}
         />
+      )}
+
+      {tropeMode && (frontierTropes.length > 0 || extractingTropes) && (
+        <div className="flex flex-wrap items-center gap-1.5" aria-label="Filter by trope">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+            {frontierStep.movie_title} tropes
+          </span>
+          {frontierTropes.map((trope) => (
+            <button
+              key={trope}
+              type="button"
+              onClick={() => setTropeFilter((current) => (current === trope ? null : trope))}
+              aria-pressed={tropeFilter === trope}
+              title={`Only films that share the trope "${tropeLabel(trope)}"`}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                tropeFilter === trope
+                  ? "border-rose-400 bg-rose-500/20 text-rose-100"
+                  : "border-app-border text-zinc-400 hover:border-zinc-600 hover:text-zinc-200",
+              )}
+            >
+              🏷️ {trope}
+            </button>
+          ))}
+          {extractingTropes && (
+            <span className="flex items-center gap-1 text-[10px] text-zinc-600">
+              <Loader2 className="h-3 w-3 animate-spin" /> Extracting tropes...
+            </span>
+          )}
+        </div>
       )}
 
       {castLinked && people.length > 0 && (
@@ -639,6 +688,7 @@ function DiscoveryGrid({
               badges={badgesMap?.[String(candidate.movie_id)]}
               gameType={gameType}
               castLinked={castLinked}
+              frontierTropes={frontierTropes}
               frontierMovieId={frontierStep.movie_id}
               allowRepeats={allowRepeats}
               onServer={jellyfinStatus?.[String(candidate.movie_id)]?.on_server}
@@ -709,6 +759,7 @@ function CandidateCard({
   badges,
   gameType,
   castLinked,
+  frontierTropes,
   frontierMovieId,
   allowRepeats,
   onServer,
@@ -724,6 +775,8 @@ function CandidateCard({
   badges: { badge_label: string; badge_color: string }[] | undefined;
   gameType: string;
   castLinked: boolean;
+  /** The frontier's tropes: the ones this candidate shares are highlighted. */
+  frontierTropes: string[];
   /** The film this candidate would follow: the "Why this link?" pitch compares the two. */
   frontierMovieId: number;
   allowRepeats: boolean;
@@ -785,6 +838,7 @@ function CandidateCard({
 
         {castLinked && <ConnectionBadge connections={candidate.connections} />}
         <MechanicBadge candidate={candidate} gameType={gameType} />
+        <TropeChips tropes={candidate.tropes} highlight={frontierTropes} max={4} />
         <PitchButton
           previousMovieId={frontierMovieId}
           candidateMovieId={candidate.movie_id}

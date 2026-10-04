@@ -34,5 +34,7 @@ class DiscoveryCandidate(BaseModel):
     # semantic (plot) similarity to the frontier film, 0..1.
     dominant_color: str | None = None
     semantic_score: float | None = None
+    # Semantic Trope Web: the candidate's LLM-extracted tropes (empty = none extracted yet).
+    tropes: list[str] = []
     # Chrono modes: release year minus the frontier film's (negative on a descent).
     year_delta: int | None = None

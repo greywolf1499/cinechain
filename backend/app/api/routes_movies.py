@@ -21,7 +21,7 @@ from app.schemas.movies import (
     SeedSuggestionOut,
     TropeExtraction,
 )
-from app.services import cache_repo, llm, movie_features, seed_suggestions
+from app.services import cache_repo, llm, movie_features, pool_options, seed_suggestions
 from app.services.cache_repo import CastEntry
 from app.services.crew_roles import role_for_job
 from app.services.movie_filters import passes_filters
@@ -71,6 +71,7 @@ def _search_result_to_summary(raw: dict[str, Any]) -> MovieSummary:
         poster_path=raw.get("poster_path"),
         release_year=parse_release_year(raw.get("release_date")),
         origin_country=None,
+        popularity=raw.get("popularity"),
     )
 
 
@@ -88,13 +89,22 @@ def _cast_entry_to_member(entry: CastEntry) -> CastMember:
 async def search_movies(
     q: str = Query(..., min_length=1),
     page: int = Query(default=1, ge=1),
+    sort_by: str | None = Query(
+        default=None, pattern="^underdog$",
+        description="underdog = least popular first, dropping dead entries (popularity < 1.0)"),
     tmdb: TMDBClient = Depends(get_tmdb_client),
     _current_user: User = Depends(get_current_user),
 ) -> MovieSearchResponse:
-    """No popularity/vote/year restrictions - raw TMDB search, world cinema included."""
+    """No popularity/vote/year restrictions - raw TMDB search, world cinema included (the
+    Underdog B-Sides flip is the one opt-in exception: it hides dead entries)."""
     raw = await tmdb.search_movies(q, page)
+    results = [_search_result_to_summary(r) for r in raw.get("results", [])]
+    if sort_by == pool_options.UNDERDOG:
+        results = sorted(
+            (r for r in results if pool_options.is_underdog(r.popularity)),
+            key=lambda r: (r.popularity, r.title))
     return MovieSearchResponse(
-        results=[_search_result_to_summary(r) for r in raw.get("results", [])],
+        results=results,
         page=raw.get("page", page),
         total_pages=raw.get("total_pages", 1),
     )

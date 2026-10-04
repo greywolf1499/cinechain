@@ -283,19 +283,42 @@ export function useCanonBadgesBulk(movieIds: number[]) {
 	});
 }
 
+export interface DiscoverOptions {
+	/** The Chaser: only short (<= 95 min) Comedy / Animation palate cleansers. */
+	chaser?: boolean;
+	/** Underdog B-Sides: least popular first, dead entries (popularity < 1) dropped. */
+	underdog?: boolean;
+}
+
 export function useDiscoverCandidates(
 	runId: string,
 	frontierMovieId: number | undefined,
 	mode: "or" | "and",
+	options: DiscoverOptions = {},
 ) {
+	const { chaser = false, underdog = false } = options;
 	return useQuery({
-		queryKey: queryKeys.discover(runId, frontierMovieId ?? 0, mode),
+		queryKey: [...queryKeys.discover(runId, frontierMovieId ?? 0, mode), { chaser, underdog }],
 		queryFn: () =>
 			api.get<DiscoveryCandidate[]>(
-				`/runs/${runId}/discover?frontier_movie_id=${frontierMovieId}&mode=${mode}`,
+				`/runs/${runId}/discover?frontier_movie_id=${frontierMovieId}&mode=${mode}` +
+					(chaser ? "&chaser=true" : "") +
+					(underdog ? "&sort_by=underdog" : ""),
 			),
 		enabled: !!frontierMovieId,
 	});
+}
+
+/** The Chaos Button: roll (POST) or cancel (DELETE) the one-step handicap. */
+export function useChaos(runId: string) {
+	const queryClient = useQueryClient();
+	const onSuccess = () => {
+		queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+	};
+	return {
+		roll: useMutation({ mutationFn: () => api.post<RunDetail>(`/runs/${runId}/chaos`), onSuccess }),
+		cancel: useMutation({ mutationFn: () => api.delete<RunDetail>(`/runs/${runId}/chaos`), onSuccess }),
+	};
 }
 
 export function useCreateRun() {

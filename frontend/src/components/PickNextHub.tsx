@@ -23,6 +23,8 @@ import ModifierChips from "./ModifierChips";
 import PitchButton from "./PitchButton";
 import MoviePoster from "./MoviePoster";
 import AcquisitionControl from "./AcquisitionControl";
+import ChaosBanner from "./ChaosBanner";
+import ChaosButton from "./ChaosButton";
 import MovieTagline from "./MovieTagline";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import RatingBadges from "./RatingBadges";
@@ -135,6 +137,7 @@ export default function PickNextHub({
   gameType = "cinechain",
   tunnelSide,
   forkMode = false,
+  initialChaser = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -147,6 +150,8 @@ export default function PickNextHub({
   tunnelSide?: TunnelSide;
   /** Blind Fork: select three films to offer the partner instead of logging one. */
   forkMode?: boolean;
+  /** Open with The Chaser on: only short, lighthearted palate cleansers. */
+  initialChaser?: boolean;
 }) {
   const castLinked = usesCastLinks(gameType, rulesConfig);
   const [stack, setStack] = useState<Screen[]>([{ kind: "grid", label: "Pick Next" }]);
@@ -222,6 +227,7 @@ export default function PickNextHub({
             castLinked={castLinked}
             tunnelSide={tunnelSide}
             forkMode={forkMode}
+            initialChaser={initialChaser}
             onOpenMovie={(screen) => pushScreen(screen)}
             onClose={handleClose}
           />
@@ -266,6 +272,7 @@ function DiscoveryGrid({
   castLinked,
   tunnelSide,
   forkMode,
+  initialChaser = false,
   onOpenMovie,
   onClose,
 }: {
@@ -277,6 +284,7 @@ function DiscoveryGrid({
   castLinked: boolean;
   tunnelSide?: TunnelSide;
   forkMode?: boolean;
+  initialChaser?: boolean;
   onOpenMovie: (screen: Screen & { kind: "movie" }) => void;
   onClose: () => void;
 }) {
@@ -292,8 +300,16 @@ function DiscoveryGrid({
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
   const [tropeFilter, setTropeFilter] = useState<string | null>(null);
+  // The Chaser (palate cleansers) and the Underdog B-Sides flip are server-side pool options.
+  const [chaser, setChaser] = useState(initialChaser);
+  const [underdog, setUnderdog] = useState(false);
+  // Tagline Roulette masks every poster and title behind its tagline; only a page is shown at a time.
+  const [roulette, setRoulette] = useState(false);
+  const [rouletteShown, setRouletteShown] = useState(ROULETTE_PAGE);
 
   function clearFilters() {
+    setChaser(false);
+    setUnderdog(false);
     setTropeFilter(null);
     setSelectedActorIds(new Set());
     setSearch("");
@@ -304,6 +320,8 @@ function DiscoveryGrid({
   }
 
   const hasActiveFilters =
+    chaser ||
+    underdog ||
     selectedActorIds.size > 0 ||
     search.trim() !== "" ||
     genreId !== null ||
@@ -339,6 +357,7 @@ function DiscoveryGrid({
     runId,
     frontierStep.movie_id,
     mode,
+    { chaser, underdog },
   );
 
   // Rabbit Hole: with every life spent and nothing left that obeys the tier, the descent is over.
@@ -412,6 +431,7 @@ function DiscoveryGrid({
       );
     }
 
+    if (underdog) return list; // the server already ordered it least popular first
     if (sortBy === "match") return sortDir === "desc" ? list : [...list].reverse();
     const direction = sortDir === "asc" ? -1 : 1;
     return [...list].sort((a, b) => {
@@ -421,7 +441,7 @@ function DiscoveryGrid({
       return direction * (ratingSortValue(b, key) - ratingSortValue(a, key));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, selectedActorIds, mode, genreId, decadeKey, tropeFilter, search, sortBy, sortDir, ratingsMap]);
+  }, [candidates, selectedActorIds, mode, genreId, decadeKey, tropeFilter, search, sortBy, sortDir, ratingsMap, underdog]);
 
   function toggleActor(actorId: number) {
     setSelectedActorIds((prev) => {
@@ -581,6 +601,8 @@ function DiscoveryGrid({
         </div>
       )}
 
+      {rulesConfig.active_chaos && <ChaosBanner runId={runId} chaos={rulesConfig.active_chaos} />}
+
       <div className="flex flex-wrap items-center gap-2">
         {castLinked && (
         <div className="inline-flex rounded-full border border-app-border bg-app-surface p-1 text-xs font-medium">
@@ -656,6 +678,56 @@ function DiscoveryGrid({
           {sortDir === "asc" ? "Asc" : "Desc"}
         </button>
 
+        {!forkMode && <ChaosButton runId={runId} active={!!rulesConfig.active_chaos} />}
+
+        <button
+          type="button"
+          aria-pressed={underdog}
+          onClick={() => setUnderdog((v) => !v)}
+          title="Least popular first: surface hidden gems"
+          className={cn(
+            "flex items-center gap-1.5 rounded-md border px-2.5 py-2 text-sm font-medium transition-colors",
+            underdog
+              ? "border-emerald-400 bg-emerald-500/15 text-emerald-200"
+              : "border-app-border bg-app-bg text-zinc-300 hover:bg-app-surface-hover",
+          )}
+        >
+          <span aria-hidden>💎</span>
+          Underdog B-Sides
+        </button>
+
+        <button
+          type="button"
+          aria-pressed={roulette}
+          onClick={() => {
+            setRoulette((v) => !v);
+            setRouletteShown(ROULETTE_PAGE);
+          }}
+          title="Hide the posters and titles: pick on the tagline alone"
+          className={cn(
+            "flex items-center gap-1.5 rounded-md border px-2.5 py-2 text-sm font-medium transition-colors",
+            roulette
+              ? "border-fuchsia-400 bg-fuchsia-500/15 text-fuchsia-200"
+              : "border-app-border bg-app-bg text-zinc-300 hover:bg-app-surface-hover",
+          )}
+        >
+          <span aria-hidden>🎭</span>
+          Tagline Roulette
+        </button>
+
+        {chaser && (
+          <button
+            type="button"
+            onClick={() => setChaser(false)}
+            title="Back to every candidate"
+            className="flex items-center gap-1.5 rounded-md border border-amber-400 bg-amber-400/15 px-2.5 py-2 text-sm font-medium text-amber-200"
+          >
+            <span aria-hidden>🍺</span>
+            Chaser: ≤ 95 min, Comedy / Animation
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+
         {hasActiveFilters && (
           <button
             type="button"
@@ -714,9 +786,10 @@ function DiscoveryGrid({
 
       {!isLoading && filtered.length > 0 && (
         <div className="grid grid-cols-2 items-stretch gap-3 sm:grid-cols-3 md:grid-cols-4">
-          {filtered.map((candidate) => (
+          {(roulette ? filtered.slice(0, rouletteShown) : filtered).map((candidate) => (
             <CandidateCard
               key={candidate.movie_id}
+              roulette={roulette}
               candidate={candidate}
               genres={genres}
               ratings={ratingsMap?.[String(candidate.movie_id)]}
@@ -760,6 +833,16 @@ function DiscoveryGrid({
         </div>
       )}
 
+      {roulette && !isLoading && filtered.length > rouletteShown && (
+        <button
+          type="button"
+          onClick={() => setRouletteShown((n) => n + ROULETTE_PAGE)}
+          className="self-center rounded-md border border-fuchsia-400/50 px-3 py-1.5 text-xs font-semibold text-fuchsia-200 hover:bg-fuchsia-500/10"
+        >
+          Spin {Math.min(ROULETTE_PAGE, filtered.length - rouletteShown)} more
+        </button>
+      )}
+
       {forkMode && (
         <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-fuchsia-400/40 bg-app-surface/95 px-4 py-3 backdrop-blur">
           <div className="min-w-0 text-xs text-zinc-400">
@@ -791,8 +874,10 @@ function DiscoveryGrid({
 }
 
 const FORK_OFFER_SIZE = 3;
+const ROULETTE_PAGE = 12;
 
 function CandidateCard({
+  roulette = false,
   candidate,
   genres,
   ratings,
@@ -810,6 +895,8 @@ function CandidateCard({
   onLogWatched,
   onOpenDetails,
 }: {
+  /** Tagline Roulette: poster and title stay masked behind the tagline until revealed. */
+  roulette?: boolean;
   candidate: DiscoveryCandidate;
   genres: GenreOut[] | undefined;
   ratings: MovieRatings | null | undefined;
@@ -835,6 +922,11 @@ function CandidateCard({
     .map((id) => genres?.find((g) => g.id === id)?.name)
     .filter((name): name is string => !!name);
   const isLockedDuplicate = candidate.already_in_run && !allowRepeats;
+  const [revealed, setRevealed] = useState(false);
+  const masked = roulette && !revealed;
+  // The tagline (or, failing that, the plot) is fetched lazily - only while roulette is on.
+  const { movie: detail } = useMovieDetail(candidate.movie_id, roulette);
+  const teaser = detail?.tagline?.trim() || firstSentence(detail?.overview) || null;
 
   return (
     <div
@@ -846,20 +938,50 @@ function CandidateCard({
       <div className="flex flex-col gap-2">
         <button
           type="button"
-          onClick={onOpenDetails}
-          className="relative text-left transition-opacity hover:opacity-85"
+          onClick={masked ? () => setRevealed(true) : onOpenDetails}
+          aria-label={masked ? "Reveal this film" : `Open ${candidate.title}`}
+          className="relative overflow-hidden rounded-md text-left transition-opacity hover:opacity-85"
         >
-          <MoviePoster path={candidate.poster_path} title={candidate.title} className="w-full" />
-          <div className="absolute left-1 top-1">
-            <OnServerBadge onServer={onServer} />
+          <div className={cn(masked && "scale-110 backdrop-blur-md filter blur-md")}>
+            <MoviePoster
+              path={candidate.poster_path}
+              title={masked ? "Hidden film" : candidate.title}
+              className="w-full"
+            />
           </div>
-          {candidate.dominant_color && (
+          {!masked && (
+            <div className="absolute left-1 top-1">
+              <OnServerBadge onServer={onServer} />
+            </div>
+          )}
+          {candidate.dominant_color && !masked && (
             <ColorSwatch color={candidate.dominant_color} className="absolute right-1 top-1" />
           )}
         </button>
 
+        {roulette && (
+          <div className="flex flex-col items-start gap-1.5">
+            <p className="font-serif text-base font-semibold italic leading-snug text-fuchsia-100">
+              {teaser ? `“${teaser}”` : detail ? "No tagline on file." : "Fetching the tagline..."}
+            </p>
+            {masked && (
+              <button
+                type="button"
+                onClick={() => setRevealed(true)}
+                className="rounded-md border border-fuchsia-400/50 px-2 py-1 text-[10px] font-semibold text-fuchsia-200 hover:bg-fuchsia-500/10"
+              >
+                🎭 Reveal
+              </button>
+            )}
+          </div>
+        )}
+
         <div>
-          <p className="line-clamp-2 text-xs font-medium text-zinc-100">{candidate.title}</p>
+          {masked ? (
+            <p className="text-xs font-medium tracking-widest text-zinc-600">? ? ?</p>
+          ) : (
+            <p className="line-clamp-2 text-xs font-medium text-zinc-100">{candidate.title}</p>
+          )}
           <p className="text-[10px] text-zinc-500">{candidate.release_year ?? "—"}</p>
           <RatingBadges ratings={ratings} />
           <div className="mt-1">
@@ -894,12 +1016,14 @@ function CandidateCard({
           </span>
         )}
         <TropeChips tropes={candidate.tropes} highlight={frontierTropes} max={4} />
-        <PitchButton
-          previousMovieId={frontierMovieId}
-          candidateMovieId={candidate.movie_id}
-          linkLabel={candidate.connections[0]?.actor_name}
-          className="w-fit"
-        />
+        {!masked && (
+          <PitchButton
+            previousMovieId={frontierMovieId}
+            candidateMovieId={candidate.movie_id}
+            linkLabel={candidate.connections[0]?.actor_name}
+            className="w-fit"
+          />
+        )}
         {candidate.constraint_unverified && (
           <span
             title="This run's rule couldn't be checked for this film yet - logging will check it."
@@ -962,6 +1086,14 @@ function CandidateCard({
       </div>
     </div>
   );
+}
+
+/** The opening sentence of a plot, used as the tagline stand-in. */
+function firstSentence(text: string | null | undefined): string | null {
+  const trimmed = text?.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^.+?[.!?](\s|$)/);
+  return (match ? match[0] : trimmed).trim();
 }
 
 /** The game's own mechanic for a candidate: year jump, country, poster colour or plot match. */

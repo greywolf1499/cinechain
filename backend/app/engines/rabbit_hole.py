@@ -27,10 +27,11 @@ from typing import ClassVar
 
 from app.engines.cinechain import CineChainEngine
 from app.engines.conditions import RunOutcome
-from app.models.cache import CachedMovie, CachedMovieRating
+from app.models.cache import CachedMovie
 from app.models.run import RUN_STATUS_FAILED, Run, RunStep
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import ConstraintInfo, RabbitHoleState, ValidationResult
+from app.services.movie_filters import rating_of
 from app.utils.dates import parse_release_year
 
 RABBIT_HOLE = "rabbit_hole"
@@ -98,18 +99,6 @@ def tier_state(depth: int, rules: dict | None) -> RabbitHoleState:
             state.upcoming_tier_warning = (
                 f"⚠️ Warning: Tier {upcoming.number} ({upcoming.rule}) begins {when}!")
     return state
-
-
-def rating_of(session, row: CachedMovie) -> float | None:
-    """IMDb rating when OMDb has cached one, else TMDB's user score. Cache-only: judging a film
-    never costs an OMDb call."""
-    rated = session.get(CachedMovieRating, row.tmdb_id)
-    if rated is not None and rated.imdb_rating and rated.imdb_rating != "N/A":
-        try:
-            return float(rated.imdb_rating)
-        except ValueError:
-            pass
-    return row.vote_average
 
 
 def compliance(session, tier: Tier, row: CachedMovie) -> bool | None:

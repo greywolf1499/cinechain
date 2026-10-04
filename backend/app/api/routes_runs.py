@@ -3,7 +3,7 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client, run_participant_guard
 from app.db import get_session
-from app.engines import rabbit_hole
+from app.engines import chaos, rabbit_hole
 from app.engines.base import RunSetupError
 from app.engines.meet_in_middle import (
     MEET_IN_THE_MIDDLE,
@@ -67,7 +67,7 @@ from app.schemas.runs import (
     RunUpdate,
     StepValidateRequest,
 )
-from app.services import blind_fork, bounties, cache_repo
+from app.services import blind_fork, bounties, cache_repo, pool_options
 from app.services.tmdb import TMDBClient
 from app.services.veto import consume_veto_token
 from app.utils.dates import parse_release_year
@@ -665,6 +665,10 @@ async def _log_step(
     if bounty is not None:
         run.rules_config = bounties.award(run.rules_config or {}, *bounty)
         session.add(run)
+    if chaos.active(run.rules_config) is not None:
+        # The handicap was for this step only.
+        run.rules_config = chaos.clear(run.rules_config or {})
+        session.add(run)
     _apply_run_outcome(session, tmdb, run)
     return step
 
@@ -1101,6 +1105,8 @@ async def get_run_suggestions(
     country: str | None = Query(default=None),
     decade: int | None = Query(default=None),
     genre_id: int | None = Query(default=None),
+    chaser: bool = Query(default=False),
+    sort_by: str | None = Query(default=None, pattern="^underdog$"),
 ) -> list[Suggestion]:
     current = _last_step(session, run.id)
     if current is None:
@@ -1111,8 +1117,55 @@ async def get_run_suggestions(
     engine = get_engine(run.game_type, session, tmdb)
     filters = SuggestionFilters(
         country=country, decade=decade, genre_id=genre_id)
-    return await engine.get_suggestions(
+    suggestions = await engine.get_suggestions(
         current.movie_id, logged_movie_ids, filters, rules=_run_rules(run))
+    if chaser or sort_by:
+        by_id = {s.movie_id: s for s in suggestions}
+        kept = await pool_options.shape_pool(
+            session, tmdb, [s.movie_id for s in suggestions], chaser=chaser, sort_by=sort_by)
+        suggestions = [by_id[movie_id] for movie_id in kept]
+    return suggestions
+
+
+def _ensure_chaos_allowed(run: Run) -> None:
+    _ensure_run_open(run)
+    engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if engine_class is None or "discover_candidates" not in engine_class.capabilities:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The Chaos Button needs a mode with a Pick Next pool")
+
+
+@router.post("/{run_id}/chaos", response_model=RunDetail)
+def roll_chaos(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    """Rolls one random handicap for the next film only: `rules_config["active_chaos"]`. It
+    expires when a step is logged (or is cancelled with DELETE)."""
+    _ensure_chaos_allowed(run)
+    if chaos.active(run.rules_config) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="A chaos handicap is already active")
+    run.rules_config = {**_run_rules(run), chaos.ACTIVE_KEY: chaos.roll()}
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
+@router.delete("/{run_id}/chaos", response_model=RunDetail)
+def cancel_chaos(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    """Backs out of the active handicap (e.g. nothing in the pool fits it)."""
+    _ensure_chaos_allowed(run)
+    run.rules_config = chaos.clear(_run_rules(run))
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
 
 
 @router.get("/{run_id}/stats", response_model=RunStats)
@@ -1135,6 +1188,10 @@ async def get_run_stats(
 async def discover_next_movies(
     frontier_movie_id: int = Query(...),
     mode: str = Query(default="or", pattern="^(or|and)$"),
+    chaser: bool = Query(default=False, description="Only palate cleansers: <= 95 min, Comedy/Animation"),
+    sort_by: str | None = Query(
+        default=None, pattern="^underdog$",
+        description="underdog = least popular first (popularity >= 1.0)"),
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
@@ -1175,8 +1232,15 @@ async def discover_next_movies(
     step_number_by_movie_id: dict[int, int] = {}
     for index, step in enumerate(ordered_steps):
         step_number_by_movie_id.setdefault(step.movie_id, index + 1)
+    if chaser or sort_by:
+        by_id = {c.movie_id: c for c in candidates}
+        kept = await pool_options.shape_pool(
+            session, tmdb, [c.movie_id for c in candidates], chaser=chaser, sort_by=sort_by)
+        candidates = [by_id[movie_id] for movie_id in kept]
     for candidate in candidates:
         candidate.already_in_run = candidate.movie_id in logged_movie_ids
         candidate.existing_step_number = step_number_by_movie_id.get(
             candidate.movie_id)
+        row = session.get(CachedMovie, candidate.movie_id)
+        candidate.runtime = row.runtime if row is not None else None
     return candidates

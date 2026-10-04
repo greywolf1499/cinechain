@@ -40,14 +40,16 @@ export default function MovieSearchAutocomplete({
   const [validating, setValidating] = useState(false);
   const [watchStatus, setWatchStatus] = useState<"watched" | "planned">("watched");
   const [watchedDate, setWatchedDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Underdog B-Sides: least popular matches first, dead entries hidden.
+  const [underdog, setUnderdog] = useState(false);
 
   const createStep = useCreateStep(runId ?? "");
 
   const { data, isFetching } = useQuery({
-    queryKey: ["movies", "search", debouncedQuery],
+    queryKey: ["movies", "search", debouncedQuery, underdog],
     queryFn: () =>
       api.get<{ results: MovieSummary[] }>(
-        `/movies/search?q=${encodeURIComponent(debouncedQuery)}`,
+        `/movies/search?q=${encodeURIComponent(debouncedQuery)}${underdog ? "&sort_by=underdog" : ""}`,
       ),
     enabled: debouncedQuery.trim().length > 1 && !picked,
   });
@@ -251,6 +253,20 @@ export default function MovieSearchAutocomplete({
           className="w-full bg-transparent text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
         />
         {isFetching && <Loader2 className="h-4 w-4 animate-spin text-zinc-600" />}
+        <button
+          type="button"
+          aria-pressed={underdog}
+          onClick={() => setUnderdog((v) => !v)}
+          title="Least popular matches first: surface hidden gems"
+          className={`flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+            underdog
+              ? "border-emerald-400 bg-emerald-500/15 text-emerald-200"
+              : "border-app-border text-zinc-400 hover:bg-app-surface-hover"
+          }`}
+        >
+          <span aria-hidden>💎</span>
+          Underdog B-Sides
+        </button>
       </div>
 
       {debouncedQuery.trim().length > 1 && (

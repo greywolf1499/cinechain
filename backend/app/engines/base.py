@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 
 from sqlmodel import Session
 
-from app.engines import modifiers
+from app.engines import chaos, modifiers
 from app.engines.conditions import RunOutcome, evaluate_conditions, validate_conditions
 from app.models.cache import CachedMovie
 from app.models.run import (
@@ -103,7 +103,8 @@ class BaseChallengeEngine(ABC):
         history: Sequence[RunStep] | None = None,
     ) -> str | None:
         return modifiers.pair_modifier_violation(
-            self.active_modifiers(rules), earlier, later, history)
+            self.active_modifiers(rules), earlier, later, history
+        ) or chaos.violation(self.session, later, rules)
 
     def cooldown_countries(
         self, rules: dict | None, history: Sequence[RunStep] | None,
@@ -113,6 +114,8 @@ class BaseChallengeEngine(ABC):
 
     def _modifiers_need_detail(self, row: CachedMovie, rules: dict | None) -> bool:
         active = self.active_modifiers(rules)
+        if chaos.needs_detail(row, rules):
+            return True
         if active.get(modifiers.COOLDOWN_KEY) and row.origin_country is None:
             return True
         return bool(active.get(modifiers.STAIRCASE_KEY)) and row.runtime is None
@@ -171,7 +174,7 @@ class BaseChallengeEngine(ABC):
     ) -> list[DiscoveryCandidate]:
         """Drop pool films that break an active modifier, so the UI never offers a pick
         it would reject. Films whose detail couldn't be fetched stay (flagged unverified)."""
-        if not self.active_modifiers(rules) or not candidates:
+        if (not self.active_modifiers(rules) and chaos.active(rules) is None) or not candidates:
             return candidates
         frontier = await self._load(frontier_movie_id, hydrate=True, rules=rules)
         rows = await self._hydrate_pool(candidates, rules)
@@ -298,11 +301,11 @@ class BaseChallengeEngine(ABC):
             from_movie_id, to_movie_id, cast_limit=cast_limit, rules=rules,
             previous_transition=previous_transition)
         active = self.active_modifiers(rules)
-        if result.blocked or not active:
+        if result.blocked or (not active and chaos.active(rules) is None):
             return result
         earlier = await self._load(from_movie_id, hydrate=True, rules=rules)
         later = await self._load(to_movie_id, hydrate=True, rules=rules)
-        reason = modifiers.pair_modifier_violation(active, earlier, later, history)
+        reason = self.modifier_violation(earlier, later, rules, history)
         mechanic = modifiers.modifier_mechanic(active, earlier, later)
         if mechanic:
             result.mechanic = {**(result.mechanic or {}), **mechanic}

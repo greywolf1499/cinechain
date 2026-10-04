@@ -38,6 +38,8 @@ import TugOfWarMeter from "../components/TugOfWarMeter";
 import PendulumMeter from "../components/PendulumMeter";
 import AuteurTrack from "../components/AuteurTrack";
 import BountyBoardPanel from "../components/BountyBoardPanel";
+import ChaosBanner from "../components/ChaosBanner";
+import ChaserPrompt from "../components/ChaserPrompt";
 import SplitBoard from "../components/SplitBoard";
 import BracketView from "../components/BracketView";
 import ExpeditionBoard from "../components/ExpeditionBoard";
@@ -642,6 +644,7 @@ function ActiveFrontierCard({
 }) {
   const navigate = useNavigate();
   const [showHub, setShowHub] = useState(false);
+  const [chaserHub, setChaserHub] = useState(false);
   const [showForkHub, setShowForkHub] = useState(false);
   const forkEnabled = !!rulesConfig.blind_fork;
   const forkPending = !!rulesConfig.pending_fork;
@@ -685,6 +688,10 @@ function ActiveFrontierCard({
         </div>
       )}
 
+      {!locked && canDiscover && rulesConfig.active_chaos && (
+        <ChaosBanner runId={runId} chaos={rulesConfig.active_chaos} className="mb-3" />
+      )}
+
       {!locked && canFork && tailStep && (
         <BlindForkToggle runId={runId} rules={rulesConfig} participantCount={participantCount} />
       )}
@@ -724,6 +731,15 @@ function ActiveFrontierCard({
           <Plus className="h-4 w-4" />
           Pick Next Movie
         </button>
+        )}
+        {canDiscover && tailStep && (
+          <ChaserPrompt
+            frontier={tailStep}
+            onGrab={() => {
+              setChaserHub(true);
+              setShowHub(true);
+            }}
+          />
         )}
         {canBridge && (
         <button
@@ -780,12 +796,16 @@ function ActiveFrontierCard({
       {!locked && canDiscover && showHub && tailStep && (
         <PickNextHub
           open={showHub}
-          onClose={() => setShowHub(false)}
+          onClose={() => {
+            setShowHub(false);
+            setChaserHub(false);
+          }}
           runId={runId}
           frontierStep={tailStep}
           rulesConfig={rulesConfig}
           steps={steps}
           gameType={gameType}
+          initialChaser={chaserHub}
         />
       )}
     </div>

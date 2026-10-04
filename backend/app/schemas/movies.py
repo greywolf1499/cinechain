@@ -7,6 +7,7 @@ class MovieSummary(BaseModel):
     poster_path: str | None = None
     release_year: int | None = None
     origin_country: str | None = None
+    popularity: float | None = None
 
 
 class PersonSummary(BaseModel):

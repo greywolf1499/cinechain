@@ -22,6 +22,7 @@ class DiscoveryCandidate(BaseModel):
     origin_country: str | None = None
     genre_ids: list[int] = []
     popularity: float | None = None
+    runtime: int | None = None  # minutes, when the film's detail is cached
     connections: list[DiscoveryConnection] = []
     already_in_run: bool = False
     # 1-based position in the run's step order, when already_in_run - lets the

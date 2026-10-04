@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from app.models.cache import CachedMovie
+from app.models.cache import CachedMovie, CachedMovieRating
 from app.schemas.engine import SuggestionFilters
 from app.utils.dates import parse_release_year
 
@@ -47,3 +47,15 @@ def passes_filters(movie: CachedMovie, filters: SuggestionFilters) -> bool:
         return bool(movie.genre_ids and filters.genre_id in movie.genre_ids)
     # `on_server` is reserved for the Phase 7 Jellyfin integration - no-op for now.
     return True
+
+
+def rating_of(session, row: CachedMovie) -> float | None:
+    """IMDb rating when OMDb has cached one, else TMDB's user score. Cache-only: judging a film
+    never costs an OMDb call."""
+    rated = session.get(CachedMovieRating, row.tmdb_id)
+    if rated is not None and rated.imdb_rating and rated.imdb_rating != "N/A":
+        try:
+            return float(rated.imdb_rating)
+        except ValueError:
+            pass
+    return row.vote_average

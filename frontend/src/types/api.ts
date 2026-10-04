@@ -106,6 +106,14 @@ export interface RulesConfig {
 	target_points?: number;
 	split_scores?: { team_a: number; team_b: number };
 	split_players?: { team_a: string | null; team_b: string | null };
+	/** The Chaos Button: a handicap for the next film only (null/absent = none). */
+	active_chaos?: ActiveChaos | null;
+}
+
+export interface ActiveChaos {
+	id: string;
+	/** "Time Machine: Pre-1970 only" */
+	label: string;
 }
 
 export type BountyId =
@@ -290,6 +298,8 @@ export interface MovieSummary {
 	poster_path: string | null;
 	release_year: number | null;
 	origin_country: string | null;
+	/** TMDB popularity (search results only). */
+	popularity?: number | null;
 }
 
 export interface MovieDetail extends MovieSummary {
@@ -585,6 +595,8 @@ export interface DiscoveryCandidate {
 	origin_country: string | null;
 	genre_ids: number[];
 	popularity: number | null;
+	/** Minutes, when the film's detail is cached. */
+	runtime?: number | null;
 	connections: DiscoveryConnection[];
 	already_in_run: boolean;
 	existing_step_number: number | null;

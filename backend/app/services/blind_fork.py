@@ -22,6 +22,8 @@ SERVER_OWNED_RULES = (
     "bracket", "bracket_films", "actor", "filmography", "director", "expedition",
     # Bounty Board state and Rotten Tomatoes Split scoreboard.
     "active_bounties", "completed_bounties", "split_scores", "split_players",
+    # The Chaos Button's one-step handicap is only ever rolled by the server.
+    "active_chaos",
 )
 
 

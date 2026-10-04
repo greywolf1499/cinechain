@@ -292,8 +292,8 @@ async def roulette_spin(
     if drawn is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No cached films match those filters - loosen them, or browse a few "
-                   "lists/actors to grow your local cache")
+            detail="No movies found in cache matching criteria - loosen the filters, or browse "
+                   "a few lists/actors to grow your local cache")
     picks, pool_size = drawn
     movies = [
         RouletteMovie(

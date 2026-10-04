@@ -29,6 +29,71 @@ single-container app that fits comfortably alongside the rest of your homelab.
 - **Passport stats** — countries visited, decades traversed, and your most-frequent "keystone"
   connecting actors for any run.
 
+## Game Modes & Engines
+
+Every mode is a pluggable engine (see [Extensibility](#extensibility-adding-a-new-challenge-engine)),
+and most can be mixed with composable modifiers, veto tokens, bounties and the Chaos Button.
+
+| Mode                          | The rule                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------ |
+| **CineChain**                 | The classic: every film shares a credited actor with the previous one.                           |
+| **Canon-Only Island**         | Shared-cast chain, but every film must belong to one curated canon list.                         |
+| **Auteur Relay**              | Alternate links: a shared actor, then a shared director, then an actor...                        |
+| **Crew & Craft Trail**        | Chain through anyone who worked on a film: actor, composer, cinematographer, writer, director.   |
+| **Genre Pendulum**            | Each film must share a genre with the last _and_ carry the swinging target genre.                |
+| **Chrono Climb**              | Every film must be released after (Climb) or before (Descent) the last.                          |
+| **Historical Time-Travel**    | Move forward or backward by the year a film's _story_ is set, not its release year.              |
+| **World Cinema Passport**     | Every film must come from a different country than the last.                                     |
+| **Semantic Trope Web**        | Each film must be a close plot/trope match to the last (on-device embeddings).                   |
+| **Aesthetic Gradient**        | Fade from poster to poster: dominant colours must stay close.                                    |
+| **Meet in the Middle**        | Co-op tunnel: two partners extend chains towards each other until they collide.                  |
+| **Tug of War**                | Two partners pull a rope: each film scores for one side (old vs new, West vs the world).         |
+| **Watchlist March Madness**   | 16-film single-elimination tournament seeded from your Letterboxd watchlist.                     |
+| **The Method Actor Marathon** | Follow one actor's career in order, from debut to modern resurgence.                             |
+| **The Auteur Marathon**       | Work through one director's features in release order.                                           |
+| **Regional Deep Dive**        | Slice a canon list by country and/or decade and conquer the slice.                               |
+| **The Rabbit Hole**           | Rogue-like survival: a nastier rule every five films, three lives.                               |
+| **The Rotten Tomatoes Split** | Critics vs audiences: watch films the two disagree on and see whose side the household lands on. |
+| **Decade Sieve**              | Work through one decade of cinema.                                                               |
+| **Movie Night Roulette**      | Can't decide? Spin for a random cached film (filters, Blind Draft).                              |
+
+Plus the **Bounty Board** wildcard quests, the **Chaos Button**, **The Chaser**, B-Side flips and
+AI bracket commentary.
+
+## Tools Suite
+
+Under **Tools** in the nav (`/tools`):
+
+- **Bridge Solver 2.0** — bidirectional-BFS path finder with path tags (canon-heavy, multi-country,
+  epic runtimes), same-actor node swapping, alternate routes and "Search Deeper"; queue any
+  bridge straight into a run. The search time ceiling is configurable up to 600 s.
+- **Daily Bridge** — a Cine-Wordle style puzzle: one deterministic start/target pair per UTC day,
+  graded hops, a shareable result grid and "convert to run".
+- **Watchlist Bingo** — deals a bingo board of cinephile challenges and suggests matching films
+  from your Letterboxd watchlist.
+- **Run Map** — plots a run's journey across the world map with numbered pins and route legs.
+- **Marathon Router** — reorders a film list for the smoothest tonal flow (a genre / era / runtime /
+  rating "whiplash" optimiser) and queues it as a run.
+
+## AI & Homelab Features
+
+- **Zero-daemon architecture** — no Redis, Celery, vector DB or sidecar: background work runs on
+  FastAPI tasks and everything lives in one SQLite file.
+- **Arctic-Embed-XS ONNX** — the default embedding model runs in-process on CPU via ONNX Runtime
+  (downloaded once into `/config`); `multilingual-e5-small` and `all-minilm-l6-v2` are selectable
+  presets.
+- **Opt-in Qwen 0.8B** — pitches, teasers, trope extraction and commentary can use a local GGUF
+  Qwen model. It is **off by default**, loaded on demand and unloaded after
+  `LLM_IDLE_TIMEOUT_SECONDS` idle. It needs the optional `llm` extra (`llama-cpp-python`, built
+  from source), which the default Docker image deliberately leaves out so the build never needs a
+  C++ toolchain.
+- **Ollama / OpenAI-compatible support** — point embeddings and/or the generative model at your
+  homelab's Ollama (or any OpenAI-compatible endpoint) instead; this is the easiest way to get
+  generative features in Docker.
+- **Graceful cold boot** — a fresh install with an empty cache and no TMDB key starts cleanly and
+  answers with friendly hints (Daily Bridge `503`, Roulette `404`, empty seed suggestion) rather
+  than errors.
+
 ## Architecture
 
 CineChain is a single Docker image: a multi-stage build compiles the React/Vite/Tailwind frontend
@@ -99,6 +164,17 @@ First launch creates the SQLite DB and prompts you to create the first (admin) a
 | `SEERR_URL`        |    No    | _(empty)_ | Overseerr/Jellyseerr base URL (defaults to `http://seerr:5055` once a key is set). Also editable in Settings.                                                     |
 | `SEERR_API_KEY`    |    No    | _(empty)_ | Seerr admin API key. Setting it enables one-click requests (Auto-Route or per-request folder/server/profile).                                                     |
 | `CINECHAIN_PORT`   |    No    | `8787`    | Host port published (container always listens on 8787 internally).                                                                                                |
+| `CONFIG_DIR`       |    No    | `/config` | Where the DB, secret key and downloaded models live. Leave as-is in Docker (mount a volume at `/config`); use a local folder for non-Docker dev.                 |
+| `SECRET_KEY`       |    No    | _(empty)_ | Session-signing key. Blank = auto-generate and persist `secret.key` in the config dir (recommended).                                                              |
+| `COOKIE_SECURE`    |    No    | `false`   | Set `true` when served over HTTPS (reverse proxy) so session cookies get the `Secure` flag.                                                                       |
+| `OMDB_API_KEY`     |    No    | _(empty)_ | Optional OMDb key for IMDb / Rotten Tomatoes ratings.                                                                                                             |
+| `EMBEDDING_PROVIDER` | No     | `local_onnx` | `local_onnx` (in-process), `ollama` or `openai` (OpenAI-compatible). Also editable in Settings.                                                                |
+| `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | No | _(empty)_ | Remote embedding endpoint, key and model name (ollama / openai only).                                                             |
+| `ONNX_MODEL_PRESET` | No      | `arctic-embed-xs` | On-device model: `arctic-embed-xs`, `multilingual-e5-small` or `all-minilm-l6-v2` (alias of `EMBEDDING_LOCAL_PRESET`).                                  |
+| `LLM_PROVIDER`     |    No    | `off`     | Generative model: `off`, `local_gguf` (needs the `llm` extra), `ollama` or `openai`.                                                                              |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | No | _(empty)_ | Endpoint, key and model name for `ollama` / `openai`.                                                                                                |
+| `LLM_IDLE_TIMEOUT_SECONDS` | No | `300` | `local_gguf` only: idle seconds before the model is unloaded (`0` = right after each call). Alias of `LLM_KEEP_ALIVE_SECONDS`.                                    |
+| `BRIDGE_MAX_DURATION_SECONDS` | No | `45` | Wall-clock ceiling for one Bridge search (5-600).                                                                                                              |
 
 \* `TMDB_API_KEY` can be left blank in `.env` and set later via **Settings → Integrations** instead
 — both paths write to the same effective config (DB overrides always take precedence over `.env`).

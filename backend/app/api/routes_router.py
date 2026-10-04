@@ -38,7 +38,8 @@ def _distinct(ids: list[int]) -> list[int]:
 
 
 class OptimizeRequest(BaseModel):
-    movie_ids: list[int] = Field(min_length=mr.MIN_FILMS, max_length=mr.MAX_FILMS)
+    # The lower bound is enforced in the route so an empty/one-film request gets a friendly 400.
+    movie_ids: list[int] = Field(max_length=mr.MAX_FILMS)
     # Relative importance; rescaled so the four sum to 1. Omitted = the router's defaults.
     weight_genre: float | None = Field(default=None, ge=0, le=1)
     weight_year: float | None = Field(default=None, ge=0, le=1)
@@ -172,6 +173,14 @@ async def optimize_marathon(
     _user: User = Depends(get_current_user),
 ) -> OptimizeResponse:
     """Reorders the films for the least tonal whiplash and scores the before and after."""
+    if len(payload.movie_ids) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Add at least 2 movies to optimize a marathon order")
+    if len(payload.movie_ids) < mr.MIN_FILMS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"The router needs at least {mr.MIN_FILMS} films to find a smoother order")
     defaults = mr.Weights()
     try:
         weights = mr.Weights(

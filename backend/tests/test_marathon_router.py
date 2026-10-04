@@ -356,3 +356,10 @@ def test_convert_to_run_validation(client, db_engine):
         "run_name": "x", "movie_ids": [1]}).status_code == 422
     assert post("/api/tools/router/convert-to-run", json={
         "run_name": "x", "movie_ids": [1, 1]}).status_code == 422
+
+
+def test_optimize_with_fewer_than_two_movies_is_a_friendly_400(client, db_engine):
+    for ids in ([], [1]):
+        resp = client.post("/api/tools/router/optimize", json={"movie_ids": ids})
+        assert resp.status_code == 400
+        assert "at least 2" in resp.json()["detail"]

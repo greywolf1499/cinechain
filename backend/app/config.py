@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,7 +49,11 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
     embedding_model: str = ""
     # On-device model for local_onnx: arctic-embed-xs | multilingual-e5-small | all-minilm-l6-v2
-    embedding_local_preset: str = "arctic-embed-xs"
+    # ONNX_MODEL_PRESET is accepted as a friendlier alias for EMBEDDING_LOCAL_PRESET.
+    embedding_local_preset: str = Field(
+        default="arctic-embed-xs",
+        validation_alias=AliasChoices("embedding_local_preset", "onnx_model_preset"),
+    )
 
     # --- Generative model for pitches/teasers (opt-in; admin settings override these) ---
     llm_provider: str = "off"  # off | local_gguf | ollama | openai
@@ -56,7 +61,11 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = ""
     # Local GGUF: seconds idle before the model is unloaded (0 = unload right after each call).
-    llm_keep_alive_seconds: int = 300
+    # LLM_IDLE_TIMEOUT_SECONDS is accepted as an alias for LLM_KEEP_ALIVE_SECONDS.
+    llm_keep_alive_seconds: int = Field(
+        default=300,
+        validation_alias=AliasChoices("llm_keep_alive_seconds", "llm_idle_timeout_seconds"),
+    )
     llm_gguf_url: str = (
         "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf"
     )

@@ -375,3 +375,9 @@ def test_spin_rejects_inverted_ranges_and_bad_operators(client, db_engine):
         "min_rating": 8, "max_rating": 3}).status_code == 422
     assert client.get("/api/engine/roulette/spin", params={
         "genre_ids": [35], "genre_operator": "XOR"}).status_code == 422
+
+
+def test_spin_on_a_cold_cache_is_a_helpful_404(client):
+    resp = client.get("/api/engine/roulette/spin")
+    assert resp.status_code == 404
+    assert "No movies found in cache matching criteria" in resp.json()["detail"]

@@ -280,13 +280,14 @@ class SemanticTropeEngine(FeatureEngine):
         if vector_a is None or vector_b is None:
             return None
         # Different models (or widths) live in different vector spaces: can't tell.
+        fingerprint = embeddings.row_fingerprint(earlier.overview_embedding_model)
         if (
-            embeddings.row_fingerprint(earlier.overview_embedding_model)
-            != embeddings.row_fingerprint(later.overview_embedding_model)
+            fingerprint != embeddings.row_fingerprint(later.overview_embedding_model)
             or vector_a.shape != vector_b.shape
         ):
             return None
-        return embeddings.cosine_similarity(vector_a, vector_b)
+        return embeddings.normalize_similarity(
+            embeddings.cosine_similarity(vector_a, vector_b), fingerprint)
 
     def violation(self, earlier: CachedMovie, later: CachedMovie, metric: float) -> str | None:
         if metric > SEMANTIC_SIMILARITY_THRESHOLD:

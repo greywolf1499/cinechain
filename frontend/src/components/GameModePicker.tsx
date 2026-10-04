@@ -10,6 +10,7 @@ import type { EngineMeta, RulesConfig } from "../types/api";
 const MODE_ORDER = [
   "cinechain",
   "auteur_relay",
+  "crew_craft",
   "canon_island",
   "meet_in_the_middle",
   "tug_of_war",

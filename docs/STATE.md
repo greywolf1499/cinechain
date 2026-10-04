@@ -1,4 +1,4 @@
 # CineChain Project State
-**Current Phase:** Phase 24b: The Blind Fork, Veto Tokens & Tug of War
-**Current Task:** Implementing the Blind Fork offer/veto workflow, Golden Veto tokens, and the Tug of War engine.
-**Next Steps:** Phase 24b complete. Await human confirmation to begin the next phase.
+**Current Phase:** Phase 25a: The Crew & Craft Trail + The Arctic ONNX Upgrade
+**Current Task:** Ingesting key crew credits (Composers, DPs, Writers), building the CrewCraftEngine, and adding the Arctic-Embed and Multilingual ONNX model presets.
+**Next Steps:** Phase 25a complete. Await human confirmation to begin the next phase.

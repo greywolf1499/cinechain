@@ -42,19 +42,13 @@ class Settings(BaseSettings):
     # No longer enforced on the streamed solve (bounded by depth + bridge_max_duration_seconds);
     # kept so existing env files still load.
     pathfinder_call_budget: int = 150
-    # --- Semantic Trope Web (ONNX embeddings, fetched once on first use) ---
-    onnx_model_url: str = (
-        "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_quantized.onnx"
-    )
-    onnx_tokenizer_url: str = (
-        "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
-    )
-
     # --- Embedding provider for the Semantic Trope Web (admin settings override these) ---
     embedding_provider: str = "local_onnx"  # local_onnx | ollama | openai
     embedding_base_url: str = ""
     embedding_api_key: str = ""
     embedding_model: str = ""
+    # On-device model for local_onnx: arctic-embed-xs | multilingual-e5-small | all-minilm-l6-v2
+    embedding_local_preset: str = "arctic-embed-xs"
 
     # --- Generative model for pitches/teasers (opt-in; admin settings override these) ---
     llm_provider: str = "off"  # off | local_gguf | ollama | openai
@@ -73,10 +67,6 @@ class Settings(BaseSettings):
     @property
     def llm_model_dir(self) -> Path:
         return self.config_dir / "models" / "qwen3.5-0.8b"
-
-    @property
-    def onnx_model_dir(self) -> Path:
-        return self.config_dir / "models" / "all-MiniLM-L6-v2"
 
     @property
     def database_path(self) -> Path:

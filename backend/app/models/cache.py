@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import LargeBinary
+from sqlalchemy import LargeBinary, UniqueConstraint
 from sqlmodel import JSON, Column, Field, SQLModel
 
 from app.utils.ids import utcnow
@@ -30,6 +30,8 @@ class CachedMovie(SQLModel, table=True):
     cast_fetched_at: datetime | None = None
     # Same idea for directors: NULL = never fetched, set + no rows = "no directors".
     directors_fetched_at: datetime | None = None
+    # Same again for the craft crew (composer, cinematographer, writers, director).
+    crew_fetched_at: datetime | None = None
     # Aesthetic Gradient: poster's dominant colour as "#rrggbb"; NULL = not computed yet.
     dominant_color: str | None = Field(default=None, max_length=7)
     # Semantic Trope Web: float32 little-endian 384-d unit vector of `overview`; NULL = not computed.
@@ -103,3 +105,30 @@ class CachedMovieDirector(SQLModel, table=True):
     name: str
     # TMDB gender code (0 unspecified, 1 female, 2 male, 3 non-binary); NULL = cached before it was stored.
     gender: int | None = None
+
+
+class CachedCrewCredit(SQLModel, table=True):
+    """One key craft credit on a film (Crew & Craft Trail). Only the jobs in
+    `app.services.crew_roles.CRAFT_JOBS` are ever stored - never a film's full crew list."""
+
+    __tablename__ = "cached_crew_credits"
+    __table_args__ = (UniqueConstraint("movie_id", "person_id", "job"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    movie_id: int = Field(foreign_key="cached_movies.tmdb_id", index=True)
+    person_id: int = Field(index=True)
+    person_name: str
+    job: str
+    department: str
+    profile_path: str | None = None
+
+
+class CachedCrewPerson(SQLModel, table=True):
+    """A person whose full filmography (cast + craft credits) has been fetched for the Crew &
+    Craft Trail: presence = "filmography cached"."""
+
+    __tablename__ = "cached_crew_people"
+
+    person_id: int = Field(primary_key=True)
+    name: str
+    credits_fetched_at: datetime = Field(default_factory=utcnow)

@@ -36,6 +36,17 @@ class CastMember(BaseModel):
     cast_order: int | None = None
 
 
+class CrewMember(BaseModel):
+    """A key craft credit (Crew & Craft Trail): composer, cinematographer, writer or director."""
+
+    person_id: int
+    name: str
+    job: str
+    department: str
+    role: str  # composer | cinematographer | writer | director
+    profile_path: str | None = None
+
+
 class MovieSearchResponse(BaseModel):
     results: list[MovieSummary]
     page: int

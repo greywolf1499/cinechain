@@ -79,7 +79,7 @@ def _needs_embedding(
     stored = embeddings.row_fingerprint(movie.overview_embedding_model)
     if stored == config.fingerprint:
         return False
-    return not (suspended and stored == embeddings.LOCAL_FINGERPRINT)
+    return not (suspended and stored == config.local_fingerprint)
 
 
 async def ensure_embeddings(session: Session, movies: Iterable[CachedMovie]) -> bool:

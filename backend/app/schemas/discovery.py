@@ -2,12 +2,16 @@ from pydantic import BaseModel
 
 
 class DiscoveryConnection(BaseModel):
-    kind: str = "actor"  # actor | director (director links carry the director's id/name)
+    # actor | director (director links carry the director's id/name) | craft (Crew & Craft Trail:
+    # `actor_id`/`actor_name` are the shared person, `role_in_*` what they were on each film)
+    kind: str = "actor"
     actor_id: int
     actor_name: str
     profile_path: str | None = None
     character_in_frontier: str | None = None
     character_in_candidate: str | None = None
+    role_in_frontier: str | None = None
+    role_in_candidate: str | None = None
 
 
 class DiscoveryCandidate(BaseModel):

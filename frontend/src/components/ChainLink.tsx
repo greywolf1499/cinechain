@@ -1,8 +1,11 @@
 import { ArrowDown, ArrowUp, Clapperboard, Star, User } from "lucide-react";
+import { cn } from "../lib/cn";
 import { countryName } from "../lib/countryNames";
 import { isoToFlagEmoji } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
+import { ROLE_STYLES, stepCraftLink } from "../lib/crewRoles";
 import { SemanticMatchBadge } from "./ColorSwatch";
+import RoleBadge from "./RoleBadge";
 import PitchButton from "./PitchButton";
 import type { RunStep } from "../types/api";
 
@@ -12,6 +15,10 @@ interface TransitionMeta {
   director_name?: string;
   actor_id?: number;
   actor_name?: string;
+  person_id?: number;
+  person_name?: string;
+  role?: string;
+  from_role?: string;
   profile_path?: string | null;
   character_in_from?: string | null;
   character_in_to?: string | null;
@@ -36,8 +43,9 @@ export default function ChainLink({
   previousMovieId?: number;
 }) {
   const meta = step.transition_metadata as TransitionMeta | null;
+  const craft = stepCraftLink(step);
   const isDirector = meta?.connection_type === "director";
-  const actorName = isDirector ? meta?.director_name : meta?.actor_name;
+  const actorName = craft ? craft.name : isDirector ? meta?.director_name : meta?.actor_name;
   const photo = meta?.profile_path ? profileUrl(meta.profile_path) : null;
   const characters = [meta?.character_in_from, meta?.character_in_to].filter(Boolean).join(" → ");
 
@@ -49,7 +57,17 @@ export default function ChainLink({
       <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg border border-dashed border-app-border bg-app-bg/60 px-2.5 py-1.5">
         {actorName ? (
           <>
-            {isDirector ? (
+            {craft && !photo ? (
+              <div
+                className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base",
+                  ROLE_STYLES[craft.role].className,
+                )}
+                aria-hidden
+              >
+                {ROLE_STYLES[craft.role].emoji}
+              </div>
+            ) : isDirector ? (
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
                 <Clapperboard className="h-4 w-4" />
               </div>
@@ -63,6 +81,14 @@ export default function ChainLink({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <p className="truncate text-xs font-medium text-zinc-300">{actorName}</p>
+                {craft && (
+                  <RoleBadge
+                    role={craft.role}
+                    name={craft.name}
+                    fromRole={craft.fromRole}
+                    className="shrink"
+                  />
+                )}
                 {isDirector && (
                   <span className="shrink-0 rounded-full bg-accent/15 px-1.5 py-0.5 text-[9px] font-semibold text-accent">
                     Director

@@ -10,6 +10,8 @@ import type {
   IntegrationConfig,
   LlmProvider,
   LlmTestResult,
+  LocalPresetInfo,
+  LocalPresetKey,
 } from "../../types/api";
 
 const CONFIG_KEY = ["settings", "integrations"] as const;
@@ -18,7 +20,7 @@ const PROVIDERS: { value: EmbeddingProvider; label: string; detail: string }[] =
   {
     value: "local_onnx",
     label: "Local ONNX",
-    detail: "all-MiniLM-L6-v2 runs inside CineChain (a ~23 MB model is downloaded on first use). No setup.",
+    detail: "A small INT8 model runs inside CineChain, downloaded on first use. Pick the preset below. No setup.",
   },
   {
     value: "ollama",
@@ -52,11 +54,13 @@ export default function EmbeddingsCard() {
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [preset, setPreset] = useState<LocalPresetKey>("arctic-embed-xs");
   const [result, setResult] = useState<EmbeddingTestResult | null>(null);
 
   useEffect(() => {
     if (!config) return;
     setProvider(config.embedding_provider);
+    setPreset(config.embedding_local_preset);
     setBaseUrl(config.embedding_base_url);
     setModel(config.embedding_model);
   }, [config]);
@@ -71,6 +75,7 @@ export default function EmbeddingsCard() {
         embedding_base_url: baseUrl.trim(),
         embedding_model: model.trim(),
         embedding_api_key: apiKey.trim() || undefined,
+        embedding_local_preset: preset,
       }),
     onSuccess: setResult,
     onError: (err) =>
@@ -82,6 +87,7 @@ export default function EmbeddingsCard() {
     mutationFn: () =>
       api.patch<IntegrationConfig>("/settings/integrations", {
         embedding_provider: provider,
+        embedding_local_preset: preset,
         embedding_base_url: external ? baseUrl.trim() : "",
         embedding_model: external ? model.trim() : "",
         ...(provider === "openai" && apiKey.trim() ? { embedding_api_key: apiKey.trim() } : {}),
@@ -130,6 +136,17 @@ export default function EmbeddingsCard() {
             </button>
           ))}
         </div>
+
+        {!external && (
+          <LocalPresetPicker
+            presets={config?.embedding_local_presets ?? []}
+            value={preset}
+            onChange={(next) => {
+              setPreset(next);
+              setResult(null);
+            }}
+          />
+        )}
 
         {external && (
           <div className="flex flex-col gap-3 sm:flex-row">
@@ -244,6 +261,67 @@ const KEEP_ALIVE_OPTIONS = [
 ];
 
 /** The opt-in generative model behind "Why this link?" pitches and cryptic Blind Draft teasers. */
+/** The "Local ONNX Model Preset" dropdown, with a card explaining the selected model's strengths. */
+function LocalPresetPicker({
+  presets,
+  value,
+  onChange,
+}: {
+  presets: LocalPresetInfo[];
+  value: LocalPresetKey;
+  onChange: (next: LocalPresetKey) => void;
+}) {
+  const selected = presets.find((p) => p.key === value);
+  return (
+    <div className="flex flex-col gap-2">
+      <label className={labelClass}>
+        Local ONNX Model Preset
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value as LocalPresetKey)}
+          disabled={presets.length === 0}
+          className={`${inputClass} normal-case`}
+        >
+          {presets.map((preset) => (
+            <option key={preset.key} value={preset.key}>
+              {preset.label} {preset.badge}
+              {preset.recommended ? " (Recommended)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {selected && (
+        <div className="flex flex-col gap-1.5 rounded-lg border border-app-border bg-app-bg/60 px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent">
+              {selected.badge}
+            </span>
+            {selected.recommended && (
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                Recommended
+              </span>
+            )}
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                selected.downloaded ? "bg-sky-500/15 text-sky-300" : "bg-app-surface-hover text-zinc-400"
+              }`}
+            >
+              {selected.downloaded ? "Downloaded" : `Downloads ~${selected.size_mb}MB on first use`}
+            </span>
+          </div>
+          <p className="text-[11px] leading-snug text-zinc-500">
+            {selected.description} All presets produce 384-dimension vectors from{" "}
+            <span className="font-mono">{selected.hf_repo}</span>.
+          </p>
+          <p className="text-[11px] leading-snug text-zinc-600">
+            Switching preset re-embeds films as they come up: vectors from different models can't be compared.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LlmSection({
   config,
   onToast,

@@ -11,6 +11,7 @@ import {
   Swords,
   Palette,
   Sparkles,
+  SwatchBook,
   type LucideIcon,
 } from "lucide-react";
 import type { RulesConfig } from "../types/api";
@@ -52,6 +53,14 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     bubble: "bg-cyan-500/15 text-cyan-300",
     ring: "border-cyan-400 shadow-[0_0_0_1px_rgba(34,211,238,0.6),0_8px_30px_-8px_rgba(34,211,238,0.35)]",
     text: "text-cyan-300",
+  },
+  crew_craft: {
+    icon: SwatchBook,
+    tagline: "Follow the craft, not just the cast",
+    tags: ["Cast or crew", "Composer", "Cinematographer", "Writer", "Director"],
+    bubble: "bg-fuchsia-500/15 text-fuchsia-300",
+    ring: "border-fuchsia-400 shadow-[0_0_0_1px_rgba(232,121,249,0.6),0_8px_30px_-8px_rgba(232,121,249,0.35)]",
+    text: "text-fuchsia-300",
   },
   tug_of_war: {
     icon: Swords,

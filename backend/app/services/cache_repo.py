@@ -13,6 +13,7 @@ module-level functions, never construct/await `CacheRepo` directly.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TypedDict
 
 import anyio
@@ -23,6 +24,8 @@ from app.config import get_settings
 from app.integrations.omdb import OMDbClient, OMDbRatings
 from app.models.cache import (
     CachedActor,
+    CachedCrewCredit,
+    CachedCrewPerson,
     CachedDirector,
     CachedGenre,
     CachedMovie,
@@ -30,9 +33,12 @@ from app.models.cache import (
     CachedMovieDirector,
     CachedMovieRating,
 )
+from app.services.crew_roles import CRAFT_JOBS, ROLE_ACTOR, role_for_job
 from app.services.tmdb import (
     TMDBCastMember,
     TMDBClient,
+    TMDBCraftCredit,
+    TMDBCrewMember,
     TMDBDirector,
     TMDBGenre,
     TMDBMovie,
@@ -48,6 +54,16 @@ class CastEntry(TypedDict):
     profile_path: str | None
     character_name: str | None
     cast_order: int | None
+
+
+@dataclass(frozen=True)
+class PersonFilm:
+    """One film in a person's cast + key-craft filmography, with the role they filled."""
+
+    movie: CachedMovie
+    role: str
+    job: str | None = None
+    character: str | None = None
 
 
 class CacheRepo:
@@ -188,6 +204,99 @@ class CacheRepo:
                     movie_id=movie.tmdb_id, person_id=person_id, name=name))
         self.session.commit()
         return movies
+
+    # --- key crew (Crew & Craft Trail): composer, cinematographer, writers, director ---
+
+    def get_cached_crew(self, movie_id: int) -> list[CachedCrewCredit] | None:
+        """None = never fetched; an empty list = fetched, TMDB lists none of the key crafts."""
+        movie = self.session.get(CachedMovie, movie_id)
+        if movie is None or movie.crew_fetched_at is None:
+            return None
+        return list(self.session.exec(
+            select(CachedCrewCredit).where(CachedCrewCredit.movie_id == movie_id)
+            .order_by(CachedCrewCredit.id)
+        ).all())
+
+    def upsert_crew(
+        self, movie_id: int, crew: list[TMDBCrewMember]
+    ) -> list[CachedCrewCredit]:
+        """Replaces a film's key crew with its full, authoritative list."""
+        movie = self.session.get(CachedMovie, movie_id)
+        if movie is None:
+            raise ValueError(f"Movie {movie_id} must be cached before its crew")
+        try:
+            for existing in self.session.exec(
+                select(CachedCrewCredit).where(CachedCrewCredit.movie_id == movie_id)
+            ).all():
+                self.session.delete(existing)
+            self.session.flush()
+            rows = [
+                CachedCrewCredit(
+                    movie_id=movie_id, person_id=member["id"], person_name=member["name"],
+                    job=member["job"],
+                    department=member.get("department") or CRAFT_JOBS[member["job"]][1],
+                    profile_path=member.get("profile_path"))
+                for member in crew if member.get("job") in CRAFT_JOBS
+            ]
+            self.session.add_all(rows)
+            movie.crew_fetched_at = utcnow()
+            self.session.add(movie)
+            self.session.commit()
+        except IntegrityError:
+            # a concurrent request stored the same crew first: use theirs
+            self.session.rollback()
+            return self.get_cached_crew(movie_id) or []
+        return rows
+
+    def get_cached_crew_person(self, person_id: int) -> CachedCrewPerson | None:
+        return self.session.get(CachedCrewPerson, person_id)
+
+    def upsert_person_craft_credits(
+        self, person_id: int, name: str, credits: list[TMDBCraftCredit]
+    ) -> None:
+        """Stores a person's key-craft filmography. A stub movie gains partial crew rows without
+        `crew_fetched_at`, so its full crew list is still fetched (and replaces them) when needed."""
+        person = self.session.get(CachedCrewPerson, person_id) or CachedCrewPerson(
+            person_id=person_id, name=name)
+        person.name = name or person.name
+        person.credits_fetched_at = utcnow()
+        self.session.add(person)
+        for credit in credits:
+            job = credit.get("job")
+            if job not in CRAFT_JOBS:
+                continue
+            movie = self.upsert_movie_stub(credit)
+            exists = self.session.exec(select(CachedCrewCredit).where(
+                CachedCrewCredit.movie_id == movie.tmdb_id,
+                CachedCrewCredit.person_id == person_id,
+                CachedCrewCredit.job == job)).first()
+            if exists is None:
+                self.session.add(CachedCrewCredit(
+                    movie_id=movie.tmdb_id, person_id=person_id, person_name=name, job=job,
+                    department=credit.get("department") or CRAFT_JOBS[job][1]))
+        try:
+            self.session.commit()
+        except IntegrityError:
+            self.session.rollback()
+
+    def get_cached_person_films(self, person_id: int) -> list[PersonFilm]:
+        """Cache-only: every film where this person has a cast credit or a key-craft credit."""
+        films: list[PersonFilm] = []
+        crew_rows = self.session.exec(
+            select(CachedMovie, CachedCrewCredit)
+            .join(CachedCrewCredit, CachedCrewCredit.movie_id == CachedMovie.tmdb_id)
+            .where(CachedCrewCredit.person_id == person_id)).all()
+        for movie, credit in crew_rows:
+            role = role_for_job(credit.job)
+            if role:
+                films.append(PersonFilm(movie, role, credit.job))
+        cast_rows = self.session.exec(
+            select(CachedMovie, CachedMovieCast)
+            .join(CachedMovieCast, CachedMovieCast.movie_id == CachedMovie.tmdb_id)
+            .where(CachedMovieCast.actor_id == person_id)).all()
+        films += [
+            PersonFilm(movie, ROLE_ACTOR, None, cast.character_name) for movie, cast in cast_rows]
+        return films
 
     # --- cast (top-N billing for a given movie) ---
 
@@ -473,6 +582,48 @@ async def get_director_credits(
         return cached
     credits_ = await tmdb.get_person_directed_credits(person_id)
     return await anyio.to_thread.run_sync(repo.upsert_director_credits, person_id, name, credits_)
+
+
+async def get_movie_crew(
+    session: Session, tmdb: TMDBClient, tmdb_id: int
+) -> list[CachedCrewCredit]:
+    """Read-through key crew of a film (composer, cinematographer, writers, director): served
+    from `cached_crew_credits`, one TMDB credits call on a miss."""
+    repo = CacheRepo(session)
+    await get_movie(session, tmdb, tmdb_id)  # crew rows FK to a cached movie
+    cached = await anyio.to_thread.run_sync(repo.get_cached_crew, tmdb_id)
+    if cached is not None:
+        return cached
+    crew = await tmdb.get_movie_crew(tmdb_id)
+    return await anyio.to_thread.run_sync(repo.upsert_crew, tmdb_id, crew)
+
+
+async def get_person_filmography(
+    session: Session, tmdb: TMDBClient, person_id: int, name: str = ""
+) -> list[PersonFilm]:
+    """Read-through "every film this person acted in or held a key craft on", from one TMDB call
+    on a miss. Cast credits land in the existing actor tables, craft credits in the crew table."""
+    repo = CacheRepo(session)
+    actor = await anyio.to_thread.run_sync(session.get, CachedActor, person_id)
+    needs_cast = actor is None or actor.credits_fetched_at is None
+    needs_crew = await anyio.to_thread.run_sync(repo.get_cached_crew_person, person_id) is None
+    if needs_cast or needs_crew:
+        cast, craft = await tmdb.get_person_craft_credits(person_id)
+        if needs_cast:
+            await anyio.to_thread.run_sync(repo.upsert_actor_credits, person_id, cast)
+            if name:
+                await anyio.to_thread.run_sync(_name_placeholder_actor, session, person_id, name)
+        if needs_crew:
+            await anyio.to_thread.run_sync(repo.upsert_person_craft_credits, person_id, name, craft)
+    return await anyio.to_thread.run_sync(repo.get_cached_person_films, person_id)
+
+
+def _name_placeholder_actor(session: Session, person_id: int, name: str) -> None:
+    actor = session.get(CachedActor, person_id)
+    if actor is not None and actor.name.startswith("Unknown actor"):
+        actor.name = name
+        session.add(actor)
+        session.commit()
 
 
 async def get_movie_ratings(

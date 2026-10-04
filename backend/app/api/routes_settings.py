@@ -20,6 +20,17 @@ from app.services.tmdb import check_tmdb_connectivity
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
+class LocalPresetInfo(BaseModel):
+    key: str
+    label: str
+    badge: str
+    description: str
+    size_mb: int
+    hf_repo: str
+    recommended: bool
+    downloaded: bool
+
+
 class IntegrationConfigOut(BaseModel):
     tmdb_configured: bool
     tmdb_api_key_masked: str | None = None
@@ -42,6 +53,8 @@ class IntegrationConfigOut(BaseModel):
     embedding_base_url: str = ""
     embedding_model: str = ""
     embedding_api_key_masked: str | None = None
+    embedding_local_preset: str = embeddings.DEFAULT_LOCAL_PRESET
+    embedding_local_presets: list[LocalPresetInfo] = []
     llm_provider: Literal["off", "local_gguf", "ollama", "openai"] = "off"
     llm_base_url: str = ""
     llm_model: str = ""
@@ -68,6 +81,7 @@ class IntegrationConfigUpdate(BaseModel):
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_model: str | None = None
+    embedding_local_preset: Literal["arctic-embed-xs", "multilingual-e5-small", "all-minilm-l6-v2"] | None = None
     llm_provider: Literal["off", "local_gguf", "ollama", "openai"] | None = None
     llm_base_url: str | None = None
     llm_api_key: str | None = None
@@ -88,6 +102,7 @@ class EmbeddingTestRequest(BaseModel):
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_model: str | None = None
+    embedding_local_preset: Literal["arctic-embed-xs", "multilingual-e5-small", "all-minilm-l6-v2"] | None = None
 
 
 class EmbeddingTestResult(BaseModel):
@@ -186,6 +201,14 @@ def _build_config(session: Session) -> IntegrationConfigOut:
         embedding_base_url=embedding.base_url,
         embedding_model=embedding.model,
         embedding_api_key_masked=_mask(embedding.api_key),
+        embedding_local_preset=embedding.local_preset,
+        embedding_local_presets=[
+            LocalPresetInfo(
+                key=preset.key, label=preset.label, badge=preset.badge,
+                description=preset.description, size_mb=preset.size_mb, hf_repo=preset.hf_repo,
+                recommended=preset.recommended, downloaded=preset.downloaded)
+            for preset in embeddings.LOCAL_PRESETS.values()
+        ],
         llm_provider=generative.provider,  # type: ignore[arg-type]
         llm_base_url=generative.base_url,
         llm_model=generative.model,
@@ -294,6 +317,7 @@ async def test_embedding_provider(
         base_url=payload.embedding_base_url or "",
         api_key=payload.embedding_api_key or stored.api_key,
         model=payload.embedding_model or "",
+        local_preset=payload.embedding_local_preset or stored.local_preset,
     )
     return EmbeddingTestResult(**await embeddings.check_connection(config))
 

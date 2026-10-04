@@ -1,10 +1,11 @@
 """Text embeddings for the Semantic Trope Web, behind one pluggable provider interface.
 
 Providers (`embedding_provider` setting):
-- `local_onnx` (default): all-MiniLM-L6-v2 on ONNX Runtime, no PyTorch. The quantized
-  model (~23 MB) is downloaded once into `config_dir/models`, loaded only for the
-  duration of one batch, then dropped and garbage-collected so the process stays under
-  its RAM ceiling between requests.
+- `local_onnx` (default): a small INT8 model on ONNX Runtime, no PyTorch, chosen from
+  `LOCAL_PRESETS` (Snowflake Arctic-Embed-XS by default, multilingual-e5-small for world cinema,
+  all-MiniLM-L6-v2 as the legacy preset). All presets emit 384-d vectors. The model is
+  downloaded once into `config_dir/models/<preset>`, loaded only for the duration of one batch,
+  then dropped and garbage-collected so the process stays under its RAM ceiling between requests.
 - `ollama`: a local Ollama server (`POST {base}/api/embeddings`, one prompt per call).
 - `openai`: any OpenAI-compatible `POST {base}/v1/embeddings` endpoint with an API key.
 
@@ -41,6 +42,7 @@ PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI = "openai"
 PROVIDERS = (PROVIDER_LOCAL, PROVIDER_OLLAMA, PROVIDER_OPENAI)
 LOCAL_MODEL_NAME = "all-MiniLM-L6-v2"
+# What vectors stored before presets existed (a NULL model column) were made with.
 LOCAL_FINGERPRINT = f"{PROVIDER_LOCAL}:{LOCAL_MODEL_NAME}"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
@@ -54,6 +56,101 @@ MAX_TOKENS = 256
 MODEL_FILE = "model_quantized.onnx"
 TOKENIZER_FILE = "tokenizer.json"
 
+
+@dataclass(frozen=True)
+class LocalPreset:
+    """One selectable on-device embedding model. All of them are 384-d, matching the float32
+    blob schema, so switching preset only means re-embedding (the fingerprint differs)."""
+
+    key: str
+    model_name: str  # the fingerprint's model part
+    hf_repo: str
+    label: str
+    badge: str
+    description: str
+    size_mb: int  # model + tokenizer, as downloaded
+    model_url: str
+    tokenizer_url: str
+    pooling: str  # "mean" | "cls"
+    text_prefix: str = ""  # prepended to every text (e5 wants "query: " for symmetric tasks)
+    recommended: bool = False
+    # Retrieval-tuned models are anisotropic: unrelated plots already score ~0.75-0.8 cosine.
+    # `similarity_floor` is that "unrelated" level; `normalize_similarity` rescales above it so
+    # one threshold means the same thing for every preset.
+    similarity_floor: float = 0.0
+
+    @property
+    def directory(self) -> Path:
+        return get_settings().config_dir / "models" / self.model_name
+
+    @property
+    def fingerprint(self) -> str:
+        return f"{PROVIDER_LOCAL}:{self.model_name}"
+
+    @property
+    def downloaded(self) -> bool:
+        return (self.directory / MODEL_FILE).exists() and (self.directory / TOKENIZER_FILE).exists()
+
+
+def _hf(repo: str, path: str) -> str:
+    return f"https://huggingface.co/{repo}/resolve/main/{path}"
+
+
+LOCAL_PRESETS: dict[str, LocalPreset] = {
+    preset.key: preset
+    for preset in (
+        LocalPreset(
+            key="arctic-embed-xs",
+            model_name="arctic-embed-xs",
+            hf_repo="Snowflake/snowflake-arctic-embed-xs",
+            label="Arctic-Embed XS",
+            badge="[~24MB] High-Precision Retrieval",
+            description=(
+                "Snowflake's retrieval-tuned model: the sharpest plot matching for its size. "
+                "English-first."),
+            size_mb=24,
+            model_url=_hf("Snowflake/snowflake-arctic-embed-xs", "onnx/model_int8.onnx"),
+            tokenizer_url=_hf("Snowflake/snowflake-arctic-embed-xs", "tokenizer.json"),
+            pooling="cls",
+            recommended=True,
+            similarity_floor=0.78,
+        ),
+        LocalPreset(
+            key="multilingual-e5-small",
+            model_name="multilingual-e5-small",
+            hf_repo="intfloat/multilingual-e5-small",
+            label="Multilingual E5 Small",
+            badge="[~135MB] 100+ Languages",
+            description=(
+                "The World Cinema preset: understands overviews in 100+ languages, so "
+                "non-English plots match properly. Bigger download."),
+            size_mb=135,
+            model_url=_hf("Xenova/multilingual-e5-small", "onnx/model_quantized.onnx"),
+            tokenizer_url=_hf("Xenova/multilingual-e5-small", "tokenizer.json"),
+            pooling="mean",
+            text_prefix="query: ",
+            similarity_floor=0.74,
+        ),
+        LocalPreset(
+            key="all-minilm-l6-v2",
+            model_name=LOCAL_MODEL_NAME,
+            hf_repo="sentence-transformers/all-MiniLM-L6-v2",
+            label="MiniLM L6 v2",
+            badge="[~23MB] Legacy",
+            description="The original general-purpose model; keeps vectors from older installs valid.",
+            size_mb=23,
+            model_url=_hf("Xenova/all-MiniLM-L6-v2", "onnx/model_quantized.onnx"),
+            tokenizer_url=_hf("Xenova/all-MiniLM-L6-v2", "tokenizer.json"),
+            pooling="mean",
+        ),
+    )
+}
+DEFAULT_LOCAL_PRESET = "arctic-embed-xs"
+
+
+def get_preset(key: str | None) -> LocalPreset:
+    return LOCAL_PRESETS.get(key or "", LOCAL_PRESETS[DEFAULT_LOCAL_PRESET])
+
 # One model in memory at a time, however many requests ask for embeddings.
 _inference_lock = threading.Lock()
 _download_lock = threading.Lock()
@@ -63,8 +160,8 @@ class EmbeddingUnavailable(Exception):
     """The model can't be fetched or run (offline, disk full, corrupt file)."""
 
 
-def model_paths() -> tuple[Path, Path]:
-    directory = get_settings().onnx_model_dir
+def model_paths(preset: LocalPreset | None = None) -> tuple[Path, Path]:
+    directory = (preset or get_preset(None)).directory
     return directory / MODEL_FILE, directory / TOKENIZER_FILE
 
 
@@ -78,17 +175,17 @@ def _download(url: str, destination: Path) -> None:
     tmp.replace(destination)
 
 
-def ensure_model_files() -> tuple[Path, Path]:
-    """Blocking: fetch the model + tokenizer on first use. Run it in a worker thread."""
-    model_path, tokenizer_path = model_paths()
-    settings = get_settings()
+def ensure_model_files(preset: LocalPreset | None = None) -> tuple[Path, Path]:
+    """Blocking: fetch the preset's model + tokenizer on first use. Run it in a worker thread."""
+    preset = preset or get_preset(None)
+    model_path, tokenizer_path = model_paths(preset)
     with _download_lock:
         try:
             model_path.parent.mkdir(parents=True, exist_ok=True)
             if not tokenizer_path.exists():
-                _download(settings.onnx_tokenizer_url, tokenizer_path)
+                _download(preset.tokenizer_url, tokenizer_path)
             if not model_path.exists():
-                _download(settings.onnx_model_url, model_path)
+                _download(preset.model_url, model_path)
         except (httpx.HTTPError, OSError) as exc:
             raise EmbeddingUnavailable(f"Could not fetch the embedding model: {exc}") from exc
     return model_path, tokenizer_path
@@ -102,12 +199,13 @@ def _release_memory() -> None:
         pass
 
 
-def embed_texts(texts: list[str]) -> list[np.ndarray]:
+def embed_texts(texts: list[str], preset: LocalPreset | None = None) -> list[np.ndarray]:
     """Unit-length 384-d float32 embeddings, one per text. Blocking and CPU-bound:
     call from a worker thread. The model lives only for the duration of the call."""
     if not texts:
         return []
-    model_path, tokenizer_path = ensure_model_files()
+    preset = preset or get_preset(None)
+    model_path, tokenizer_path = ensure_model_files(preset)
     with _inference_lock:
         session = None
         try:
@@ -116,7 +214,11 @@ def embed_texts(texts: list[str]) -> list[np.ndarray]:
 
             tokenizer = Tokenizer.from_file(str(tokenizer_path))
             tokenizer.enable_truncation(max_length=MAX_TOKENS)
-            tokenizer.enable_padding()  # pad to the longest text in the batch
+            # pad to the longest text in the batch, with the tokenizer's own pad token
+            pad_token = next(
+                (t for t in ("[PAD]", "<pad>") if tokenizer.token_to_id(t) is not None), "[PAD]")
+            tokenizer.enable_padding(
+                pad_id=tokenizer.token_to_id(pad_token) or 0, pad_token=pad_token)
 
             options = ort.SessionOptions()
             options.intra_op_num_threads = 1
@@ -125,7 +227,7 @@ def embed_texts(texts: list[str]) -> list[np.ndarray]:
             session = ort.InferenceSession(
                 str(model_path), sess_options=options, providers=["CPUExecutionProvider"])
 
-            encodings = tokenizer.encode_batch(texts)
+            encodings = tokenizer.encode_batch([preset.text_prefix + text for text in texts])
             feeds = {
                 "input_ids": np.array([e.ids for e in encodings], dtype=np.int64),
                 "attention_mask": np.array([e.attention_mask for e in encodings], dtype=np.int64),
@@ -134,8 +236,11 @@ def embed_texts(texts: list[str]) -> list[np.ndarray]:
             wanted = {i.name for i in session.get_inputs()}
             hidden = session.run(None, {k: v for k, v in feeds.items() if k in wanted})[0]
 
-            mask = feeds["attention_mask"][..., None].astype(np.float32)
-            pooled = (hidden * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1e-9)
+            if preset.pooling == "cls":
+                pooled = hidden[:, 0]
+            else:
+                mask = feeds["attention_mask"][..., None].astype(np.float32)
+                pooled = (hidden * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1e-9)
             norms = np.maximum(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12)
             return [row.astype(np.float32) for row in pooled / norms]
         except EmbeddingUnavailable:
@@ -157,6 +262,16 @@ def decode_embedding(blob: bytes | None) -> np.ndarray | None:
     return np.frombuffer(blob, dtype="<f4")
 
 
+def normalize_similarity(cosine: float, fingerprint: str) -> float:
+    """Cosine rescaled so a local preset's "unrelated" floor reads as 0 and identical as 1;
+    other models (legacy MiniLM, Ollama, OpenAI) are used as they are."""
+    floor = next(
+        (p.similarity_floor for p in LOCAL_PRESETS.values() if p.fingerprint == fingerprint), 0.0)
+    if floor <= 0.0:
+        return cosine
+    return (cosine - floor) / (1.0 - floor)
+
+
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     if a.shape != b.shape:
         return 0.0
@@ -173,6 +288,16 @@ class EmbeddingConfig:
     base_url: str = ""
     api_key: str = ""
     model: str = ""
+    # Which on-device model the `local_onnx` provider (and every fallback to it) uses.
+    local_preset: str = DEFAULT_LOCAL_PRESET
+
+    @property
+    def local(self) -> LocalPreset:
+        return get_preset(self.local_preset)
+
+    @property
+    def local_fingerprint(self) -> str:
+        return self.local.fingerprint
 
     @property
     def external(self) -> bool:
@@ -184,7 +309,7 @@ class EmbeddingConfig:
             return self.model or DEFAULT_OLLAMA_MODEL
         if self.provider == PROVIDER_OPENAI:
             return self.model or DEFAULT_OPENAI_MODEL
-        return LOCAL_MODEL_NAME
+        return self.local.model_name
 
     @property
     def fingerprint(self) -> str:
@@ -210,6 +335,8 @@ def load_config(session: Session) -> EmbeddingConfig:
         base_url=overrides.get("embedding_base_url") or base.embedding_base_url,
         api_key=overrides.get("embedding_api_key") or base.embedding_api_key,
         model=overrides.get("embedding_model") or base.embedding_model,
+        local_preset=get_preset(
+            overrides.get("embedding_local_preset") or base.embedding_local_preset).key,
     )
 
 
@@ -320,10 +447,10 @@ async def embed_batch(config: EmbeddingConfig, texts: list[str]) -> EmbeddingBat
         except EmbeddingUnavailable as exc:
             _suspended_until[_suspension_key(config)] = time.monotonic() + SUSPEND_SECONDS
             logger.warning("%s; using the local model for now", exc)
-            vectors = await anyio.to_thread.run_sync(embed_texts, texts)
-            return EmbeddingBatch(vectors, LOCAL_FINGERPRINT, fell_back=True)
-    vectors = await anyio.to_thread.run_sync(embed_texts, texts)
-    return EmbeddingBatch(vectors, LOCAL_FINGERPRINT, fell_back=config.external)
+            vectors = await anyio.to_thread.run_sync(embed_texts, texts, config.local)
+            return EmbeddingBatch(vectors, config.local_fingerprint, fell_back=True)
+    vectors = await anyio.to_thread.run_sync(embed_texts, texts, config.local)
+    return EmbeddingBatch(vectors, config.local_fingerprint, fell_back=config.external)
 
 
 async def check_connection(config: EmbeddingConfig) -> dict:
@@ -338,7 +465,8 @@ async def check_connection(config: EmbeddingConfig) -> dict:
         if config.external:
             vectors = await embed_external(config, ["CineChain connection test"])
         else:
-            vectors = await anyio.to_thread.run_sync(embed_texts, ["CineChain connection test"])
+            vectors = await anyio.to_thread.run_sync(
+                embed_texts, ["CineChain connection test"], config.local)
     except EmbeddingUnavailable as exc:
         result["detail"] = str(exc)
         return result

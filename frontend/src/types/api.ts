@@ -184,15 +184,31 @@ export interface EngineMeta {
 }
 
 /** How two films are linked. `kind: "director"` reuses the shape: actor_id/actor_name hold the director. */
-export type ConnectionKind = "actor" | "director";
+export type ConnectionKind = "actor" | "director" | "craft";
+
+/** What a person was on a film (Crew & Craft Trail). */
+export type CraftRole = "actor" | "composer" | "cinematographer" | "writer" | "director";
 
 export interface SharedActorConnection {
 	kind?: ConnectionKind;
+	/** For `kind: "craft"`: the shared person; `role_in_*` is what they were on each film. */
 	actor_id: number;
 	actor_name: string;
 	profile_path: string | null;
 	character_in_from: string | null;
 	character_in_to: string | null;
+	role_in_from?: CraftRole | null;
+	role_in_to?: CraftRole | null;
+}
+
+/** A key craft credit on a film (`GET /movies/{id}/crew`). */
+export interface CrewMember {
+	person_id: number;
+	name: string;
+	job: string;
+	department: string;
+	role: CraftRole;
+	profile_path: string | null;
 }
 
 /** The rule shaping a run's next hop (backend `ConstraintInfo`). */
@@ -385,6 +401,8 @@ export interface DiscoveryConnection {
 	profile_path: string | null;
 	character_in_frontier: string | null;
 	character_in_candidate: string | null;
+	role_in_frontier?: CraftRole | null;
+	role_in_candidate?: CraftRole | null;
 }
 
 export interface DiscoveryCandidate {
@@ -478,6 +496,8 @@ export interface IntegrationConfig {
 	embedding_base_url: string;
 	embedding_model: string;
 	embedding_api_key_masked: string | null;
+	embedding_local_preset: LocalPresetKey;
+	embedding_local_presets: LocalPresetInfo[];
 	llm_provider: LlmProvider;
 	llm_base_url: string;
 	llm_model: string;
@@ -487,6 +507,22 @@ export interface IntegrationConfig {
 }
 
 export type EmbeddingProvider = "local_onnx" | "ollama" | "openai";
+
+export type LocalPresetKey = "arctic-embed-xs" | "multilingual-e5-small" | "all-minilm-l6-v2";
+
+/** One on-device ONNX embedding model the admin can pick (backend `LocalPresetInfo`). */
+export interface LocalPresetInfo {
+	key: LocalPresetKey;
+	label: string;
+	/** Short strength badge, e.g. "[~24MB] High-Precision Retrieval". */
+	badge: string;
+	description: string;
+	size_mb: number;
+	hf_repo: string;
+	recommended: boolean;
+	/** The model files are already in config_dir/models. */
+	downloaded: boolean;
+}
 
 /** Result of "Test Connection" for an embedding provider (backend `EmbeddingTestResult`). */
 export interface EmbeddingTestResult {

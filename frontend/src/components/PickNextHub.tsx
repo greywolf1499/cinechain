@@ -34,6 +34,8 @@ import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
 import { countryName } from "../lib/countryNames";
 import { gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { connectionMetadata } from "../lib/connections";
+import { connectionRole } from "../lib/crewRoles";
+import RoleBadge from "./RoleBadge";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
 import { SIDE_LABELS } from "../lib/tunnel";
 import {
@@ -45,6 +47,7 @@ import {
   useRunConstraint,
 } from "../lib/queries";
 import type {
+  CraftRole,
   TunnelSide,
   CastMember,
   DiscoveryCandidate,
@@ -900,12 +903,32 @@ function RuleBanner({
 }
 
 function sharedLabel(connections: DiscoveryConnection[]): string {
+  if (connections.some((c) => c.kind === "craft")) return "Credits";
   if (connections.every((c) => c.kind === "director")) return "Directors";
   return connections.some((c) => c.kind === "director") ? "Links" : "Actors";
 }
 
 function ConnectionBadge({ connections }: { connections: DiscoveryConnection[] }) {
   if (connections.length === 0) return null;
+
+  // Crew & Craft Trail: one role badge per connecting person ("🎼 Composer: Hans Zimmer").
+  if (connections.every((c) => connectionRole(c))) {
+    return (
+      <div className="flex flex-col items-start gap-1">
+        {connections.slice(0, 3).map((connection) => (
+          <RoleBadge
+            key={`${connection.actor_id}-${connection.role_in_candidate}`}
+            role={connectionRole(connection) as CraftRole}
+            name={connection.actor_name}
+            fromRole={connection.role_in_frontier}
+          />
+        ))}
+        {connections.length > 3 && (
+          <span className="text-[10px] text-zinc-500">+{connections.length - 3} more links</span>
+        )}
+      </div>
+    );
+  }
 
   if (connections.length === 1) {
     const connection = connections[0];

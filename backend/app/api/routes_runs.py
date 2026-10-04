@@ -264,10 +264,13 @@ async def _enforce_run_rules(
             extra_metadata["collision"] = True
             extra_metadata["collision_with"] = opposing_steps[-1].movie_id
         if result.valid and rules.get("no_consecutive_actor", True):
-            chosen_actor_id = (
-                payload.transition_metadata or {}).get("actor_id")
-            previous_actor_id = (
-                previous.transition_metadata or {}).get("actor_id")
+            # Crew & Craft links name a person (any role); the classic ones an actor.
+            chosen = (
+                linked_metadata if linked_metadata and "person_id" in linked_metadata
+                else payload.transition_metadata) or {}
+            chosen_actor_id = chosen.get("person_id", chosen.get("actor_id"))
+            before = previous.transition_metadata or {}
+            previous_actor_id = before.get("person_id", before.get("actor_id"))
             if (
                 chosen_actor_id is not None
                 and previous_actor_id is not None

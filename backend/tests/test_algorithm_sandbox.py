@@ -97,18 +97,32 @@ def test_embed_texts_reports_an_unavailable_model(config_dir, monkeypatch):
         embeddings.embed_texts(["anything"])
 
 
-def test_model_is_downloaded_once_into_the_config_dir(config_dir, monkeypatch):
+@pytest.fixture(autouse=True)
+def _legacy_local_preset(config_dir, monkeypatch):
+    """The fake embedders below produce MiniLM-scaled cosines: keep the unscaled legacy preset."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("EMBEDDING_LOCAL_PRESET", "all-minilm-l6-v2")
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("key", list(embeddings.LOCAL_PRESETS))
+def test_each_preset_is_downloaded_once_into_its_own_dir(config_dir, monkeypatch, key):
+    preset = embeddings.LOCAL_PRESETS[key]
     fetched = []
 
     def fake_download(url, destination):
-        fetched.append(destination.name)
+        fetched.append((url, destination.name))
         destination.write_bytes(b"x")
 
     monkeypatch.setattr(embeddings, "_download", fake_download)
-    embeddings.ensure_model_files()
-    embeddings.ensure_model_files()
-    assert sorted(fetched) == [embeddings.MODEL_FILE, embeddings.TOKENIZER_FILE]
-    assert (config_dir / "models" / "all-MiniLM-L6-v2" / embeddings.MODEL_FILE).exists()
+    assert not preset.downloaded
+    embeddings.ensure_model_files(preset)
+    embeddings.ensure_model_files(preset)
+    assert sorted(fetched) == sorted([
+        (preset.model_url, embeddings.MODEL_FILE), (preset.tokenizer_url, embeddings.TOKENIZER_FILE)])
+    assert (config_dir / "models" / preset.model_name / embeddings.MODEL_FILE).exists()
+    assert preset.downloaded
 
 
 # --- fake universe ---
@@ -129,9 +143,14 @@ VECTORS = {
 
 @pytest.fixture()
 def fake_model(monkeypatch):
+    from app.config import get_settings
+
+    # MiniLM-scaled cosines: keep the unscaled legacy preset whichever module uses this fixture
+    monkeypatch.setenv("EMBEDDING_LOCAL_PRESET", "all-minilm-l6-v2")
+    get_settings.cache_clear()
     calls: list[list[str]] = []
 
-    def embed_texts(texts):
+    def embed_texts(texts, preset=None):
         calls.append(list(texts))
         return [VECTORS[text] for text in texts]
 
@@ -327,7 +346,7 @@ def test_semantic_hybrid_pool_is_filtered_and_scored(client, fake_model):
 
 
 def test_semantic_is_lenient_when_the_model_is_unavailable(client, monkeypatch):
-    def offline(texts):
+    def offline(texts, preset=None):
         raise embeddings.EmbeddingUnavailable("offline")
 
     monkeypatch.setattr(embeddings, "embed_texts", offline)

@@ -12,6 +12,7 @@ from typing import Any, TypedDict
 import httpx
 
 from app.config import Settings, get_settings
+from app.services.crew_roles import CRAFT_JOBS
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,14 @@ class TMDBDirector(TypedDict, total=False):
     gender: int  # TMDB: 0 unspecified, 1 female, 2 male, 3 non-binary
 
 
+class TMDBCrewMember(TypedDict, total=False):
+    id: int
+    name: str
+    job: str
+    department: str
+    profile_path: str | None
+
+
 class TMDBPersonCredit(TypedDict, total=False):
     id: int
     title: str
@@ -77,6 +86,13 @@ class TMDBPersonCredit(TypedDict, total=False):
     genre_ids: list[int]
     original_language: str
     popularity: float | None
+
+
+class TMDBCraftCredit(TMDBPersonCredit, total=False):
+    """A person's film as a key craft (the crew entry's job + department)."""
+
+    job: str
+    department: str
 
 
 class TMDBGenre(TypedDict):
@@ -262,6 +278,41 @@ class TMDBClient:
                     id=member["id"], name=member.get("name", ""),
                     gender=member.get("gender", 0)))
         return directors
+
+    async def get_movie_crew(self, tmdb_id: int) -> list[TMDBCrewMember]:
+        """The key craft crew only (composer, cinematographer, writers, director): everyone else
+        in the credits payload is dropped before it can reach storage."""
+        data = await self._get(f"/movie/{tmdb_id}/credits")
+        seen: set[tuple[int, str]] = set()
+        crew: list[TMDBCrewMember] = []
+        for member in data.get("crew", []):
+            job = member.get("job")
+            if job not in CRAFT_JOBS or (member["id"], job) in seen:
+                continue
+            seen.add((member["id"], job))
+            crew.append(TMDBCrewMember(
+                id=member["id"], name=member.get("name", ""), job=job,
+                department=member.get("department") or CRAFT_JOBS[job][1],
+                profile_path=member.get("profile_path")))
+        return crew
+
+    async def get_person_craft_credits(
+        self, person_id: int
+    ) -> tuple[list[TMDBPersonCredit], list[TMDBCraftCredit]]:
+        """(cast credits, key-craft credits) of one person from a single TMDB call."""
+        data = await self._get(f"/person/{person_id}/movie_credits")
+        cast = [_normalize_person_credit(entry) for entry in data.get("cast", [])]
+        seen: set[tuple[int, str]] = set()
+        crew: list[TMDBCraftCredit] = []
+        for entry in data.get("crew", []):
+            job = entry.get("job")
+            if job not in CRAFT_JOBS or (entry["id"], job) in seen:
+                continue
+            seen.add((entry["id"], job))
+            crew.append(TMDBCraftCredit(
+                **_normalize_person_credit(entry), job=job,
+                department=entry.get("department") or CRAFT_JOBS[job][1]))
+        return cast, crew
 
     async def get_person_movie_credits(self, person_id: int) -> list[TMDBPersonCredit]:
         data = await self._get(f"/person/{person_id}/movie_credits")

@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
 import { connectionMetadata } from "../lib/connections";
+import { roleBadgeText } from "../lib/crewRoles";
 import { useCreateStep } from "../lib/queries";
 import MoviePoster from "./MoviePoster";
 import type { MovieSummary, RulesConfig, RunStep, ValidationResult } from "../types/api";
@@ -144,7 +145,13 @@ export default function MovieSearchAutocomplete({
                   <div className="text-xs text-emerald-400">
                     {validation.connections.length > 0
                       ? `Connects to Frontier via ${validation.connections
-                          .map((c) => (c.kind === "director" ? `${c.actor_name} (director)` : c.actor_name))
+                          .map((c) =>
+                            c.kind === "craft" && c.role_in_to
+                              ? roleBadgeText(c.role_in_to, c.actor_name, c.role_in_from)
+                              : c.kind === "director"
+                                ? `${c.actor_name} (director)`
+                                : c.actor_name,
+                          )
                           .join(", ")}`
                       : tailMovieId !== undefined
                         ? describeRuleFit(validation)

@@ -8,12 +8,16 @@ class SharedActorConnection(BaseModel):
     link (`kind="director"`, with `actor_id`/`actor_name` holding the director's
     id/name) so bridge paths and validation can describe both with one shape."""
 
-    kind: str = "actor"  # actor | director
+    kind: str = "actor"  # actor | director | craft (Crew & Craft Trail: any cast or crew link)
+    # For `kind="craft"` these hold the shared person's id/name, and the roles say what that
+    # person was on each film: actor | composer | cinematographer | writer | director.
     actor_id: int
     actor_name: str
     profile_path: str | None = None
     character_in_from: str | None = None
     character_in_to: str | None = None
+    role_in_from: str | None = None
+    role_in_to: str | None = None
 
 
 class ValidationResult(BaseModel):

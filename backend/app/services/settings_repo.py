@@ -32,6 +32,7 @@ OVERRIDABLE_KEYS = (
     "embedding_base_url",
     "embedding_api_key",
     "embedding_model",
+    "embedding_local_preset",
     "llm_provider",
     "llm_base_url",
     "llm_api_key",

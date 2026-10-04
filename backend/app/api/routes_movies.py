@@ -12,6 +12,7 @@ from app.models.user import User
 from app.schemas.engine import SuggestionFilters
 from app.schemas.movies import (
     CastMember,
+    CrewMember,
     MovieDetail,
     MovieRatings,
     MovieSearchResponse,
@@ -20,6 +21,7 @@ from app.schemas.movies import (
 )
 from app.services import cache_repo, seed_suggestions
 from app.services.cache_repo import CastEntry
+from app.services.crew_roles import role_for_job
 from app.services.movie_filters import passes_filters
 from app.services.tmdb import TMDBClient
 from app.utils.dates import parse_release_year
@@ -199,6 +201,24 @@ async def get_movie_cast(
 ) -> list[CastMember]:
     cast = await cache_repo.get_movie_cast(session, tmdb, tmdb_id, limit)
     return [_cast_entry_to_member(member) for member in cast]
+
+
+@router.get("/movies/{tmdb_id}/crew", response_model=list[CrewMember])
+async def get_movie_crew(
+    tmdb_id: int,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> list[CrewMember]:
+    """The film's key craft crew only (composer, cinematographer, writers, director)."""
+    crew = await cache_repo.get_movie_crew(session, tmdb, tmdb_id)
+    return [
+        CrewMember(
+            person_id=row.person_id, name=row.person_name, job=row.job,
+            department=row.department, role=role_for_job(row.job) or "",
+            profile_path=row.profile_path)
+        for row in crew
+    ]
 
 
 @router.get("/people/{person_id}/credits", response_model=list[MovieSummary])

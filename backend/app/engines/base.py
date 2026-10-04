@@ -54,6 +54,9 @@ class BaseChallengeEngine(ABC):
     default_modifiers: ClassVar[dict[str, Any]] = {}
     # The engine's own pair rule needs full film detail (country, overview) to be judged.
     needs_detail: ClassVar[bool] = False
+    # Survival modes: a forced (rule-breaking) step costs one of `rules_config["lives_remaining"]`
+    # instead of a wildcard.
+    uses_lives: ClassVar[bool] = False
 
     def __init__(self, session: Session, tmdb: TMDBClient) -> None:
         self.session = session
@@ -233,6 +236,12 @@ class BaseChallengeEngine(ABC):
         ):
             return None
         return evaluate_conditions(run.rules_config, steps)
+
+    @classmethod
+    def forfeit_outcome(cls, run: Run, steps: Sequence[RunStep]) -> RunOutcome | None:
+        """The terminal outcome when a participant gives up, if the engine wants to override the
+        plain "forfeited" (e.g. the Rabbit Hole counts a surrender at zero lives as a defeat)."""
+        return None
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
         """Run-scoped rules about the film *itself* (e.g. canon-only, decade

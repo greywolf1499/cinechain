@@ -36,5 +36,9 @@ class DiscoveryCandidate(BaseModel):
     semantic_score: float | None = None
     # Semantic Trope Web: the candidate's LLM-extracted tropes (empty = none extracted yet).
     tropes: list[str] = []
+    # The Rabbit Hole: True = verified to satisfy the active tier's rule (None = couldn't be checked),
+    # and the warning when a new tier is 1-2 hops away.
+    tier_compliant: bool | None = None
+    upcoming_tier_warning: str | None = None
     # Chrono modes: release year minus the frontier film's (negative on a descent).
     year_delta: int | None = None

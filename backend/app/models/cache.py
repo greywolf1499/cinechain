@@ -22,6 +22,8 @@ class CachedMovie(SQLModel, table=True):
     genre_ids: list[int] | None = Field(default=None, sa_column=Column(JSON))
     # TMDB's popularity score - display/sort only, never a filter
     popularity: float | None = None
+    # TMDB's 0-10 user score: only the Rabbit Hole's B-Movie Abyss reads it (when IMDb has no rating).
+    vote_average: float | None = None
     # TMDB release status ("Released", "Planned", "In Production", "Canceled",
     # etc) - used ONLY for the reality filter (unreleased/cancelled exclusion),
     # never for popularity/vote/quality filtering.

@@ -3,6 +3,7 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
 from app.db import get_session
+from app.engines import rabbit_hole
 from app.engines.meet_in_middle import (
     MEET_IN_THE_MIDDLE,
     SIDE_HEAD,
@@ -294,7 +295,21 @@ async def _enforce_run_rules(
                     )
                 broke_a_rule = True
 
-    if force and broke_a_rule:
+    engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if force and broke_a_rule and engine_class is not None and engine_class.uses_lives:
+        # Survival modes: a forced step costs a life, never a wildcard.
+        lives, _ = rabbit_hole.lives_of(rules)
+        if lives <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "valid": False, "blocked": True, "connections": [],
+                    "reason": "No lives remaining - only a legal film can continue this run"},
+            )
+        run.rules_config = {**rules, rabbit_hole.LIVES_KEY: lives - 1}
+        session.add(run)
+        extra_metadata["life_lost"] = True
+    elif force and broke_a_rule:
         budget = rules.get("wildcards_budget", 2)
         if budget != -1:
             if budget <= 0:
@@ -474,6 +489,11 @@ def update_run(
         else:
             run.completed_at = utcnow()
             run.status_reason = MANUAL_STATUS_REASONS.get(payload.status)
+            engine_class = ENGINE_REGISTRY.get(run.game_type)
+            if payload.status == RUN_STATUS_FORFEITED and engine_class is not None:
+                outcome = engine_class.forfeit_outcome(run, _run_history(session, run.id))
+                if outcome is not None:
+                    run.status, run.status_reason = outcome.status, outcome.reason
     session.add(run)
     session.commit()
     session.refresh(run)

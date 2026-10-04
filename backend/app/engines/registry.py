@@ -9,6 +9,7 @@ from app.engines.crew_craft import CrewCraftEngine
 from app.engines.genre_pendulum import GenrePendulumEngine
 from app.engines.meet_in_middle import MeetInTheMiddleEngine
 from app.engines.mutators import AuteurRelayEngine, ChronoClimbEngine, WorldPassportEngine
+from app.engines.rabbit_hole import RabbitHoleEngine
 from app.engines.trackers import DecadeSieveEngine, RouletteEngine
 from app.engines.tug_of_war import TugOfWarEngine
 from app.services.tmdb import TMDBClient
@@ -22,6 +23,7 @@ ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
         GenrePendulumEngine,
         MeetInTheMiddleEngine,
         TugOfWarEngine,
+        RabbitHoleEngine,
         DecadeSieveEngine,
         RouletteEngine,
         ChronoClimbEngine,

@@ -37,8 +37,9 @@ import { connectionMetadata } from "../lib/connections";
 import { ROLE_STYLES, connectionRole } from "../lib/crewRoles";
 import { TropeChips } from "./TropeChips";
 import { tropeLabel } from "../lib/tropes";
+import { RABBIT_HOLE } from "../lib/rabbitHole";
 import RoleBadge from "./RoleBadge";
-import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
+import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
 import { SIDE_LABELS } from "../lib/tunnel";
 import {
   useCanonBadgesBulk,
@@ -48,6 +49,7 @@ import {
   useMovieDetail,
   useMovieTropes,
   useRunConstraint,
+  useUpdateRun,
 } from "../lib/queries";
 import type {
   CraftRole,
@@ -328,6 +330,7 @@ function DiscoveryGrid({
     tropeMode,
   );
   const { data: constraint } = useRunConstraint(runId);
+  const surrender = useUpdateRun(runId);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
@@ -337,6 +340,13 @@ function DiscoveryGrid({
     frontierStep.movie_id,
     mode,
   );
+
+  // Rabbit Hole: with every life spent and nothing left that obeys the tier, the descent is over.
+  const deadEnd =
+    gameType === RABBIT_HOLE &&
+    rulesConfig.lives_remaining === 0 &&
+    !isLoading &&
+    (candidates?.length ?? 0) === 0;
 
   const tmdbIds = candidates?.map((c) => c.movie_id) ?? [];
   const { data: jellyfinStatus } = useQuery({
@@ -473,6 +483,15 @@ function DiscoveryGrid({
   return (
     <div className="flex flex-col gap-4">
       <ModifierChips constraint={constraint} />
+
+      {constraint?.rabbit_hole?.upcoming_tier_warning && (
+        <div
+          role="alert"
+          className="rounded-lg border border-amber-500/60 bg-amber-500/10 px-3.5 py-2.5 font-mono text-xs font-semibold text-amber-200"
+        >
+          {constraint.rabbit_hole.upcoming_tier_warning}
+        </div>
+      )}
 
       {!castLinked && (
         <RuleBanner
@@ -674,7 +693,23 @@ function DiscoveryGrid({
       )}
 
       {!isLoading && filtered.length === 0 && (
-        <p className="py-10 text-center text-sm text-zinc-500">No films match these filters.</p>
+        deadEnd ? (
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-red-900/60 bg-red-950/20 px-4 py-8 text-center font-mono">
+            <p className="text-sm font-semibold text-red-300">
+              💀 Dead end - no lives left and no film obeys the tier rule.
+            </p>
+            <button
+              type="button"
+              disabled={surrender.isPending}
+              onClick={() => surrender.mutate({ status: "forfeited" }, { onSuccess: onClose })}
+              className="rounded-md bg-red-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-red-500 disabled:opacity-60"
+            >
+              Accept your fate
+            </button>
+          </div>
+        ) : (
+          <p className="py-10 text-center text-sm text-zinc-500">No films match these filters.</p>
+        )
       )}
 
       {!isLoading && filtered.length > 0 && (
@@ -688,6 +723,11 @@ function DiscoveryGrid({
               badges={badgesMap?.[String(candidate.movie_id)]}
               gameType={gameType}
               castLinked={castLinked}
+              tierLabel={
+                gameType === RABBIT_HOLE && constraint?.rabbit_hole
+                  ? `Tier ${constraint.rabbit_hole.tier}: ${constraint.rabbit_hole.tier_rule}`
+                  : undefined
+              }
               frontierTropes={frontierTropes}
               frontierMovieId={frontierStep.movie_id}
               allowRepeats={allowRepeats}
@@ -759,6 +799,7 @@ function CandidateCard({
   badges,
   gameType,
   castLinked,
+  tierLabel,
   frontierTropes,
   frontierMovieId,
   allowRepeats,
@@ -775,6 +816,8 @@ function CandidateCard({
   badges: { badge_label: string; badge_color: string }[] | undefined;
   gameType: string;
   castLinked: boolean;
+  /** The Rabbit Hole's active tier ("Tier 3: Non-English"): shown as a check when the film complies. */
+  tierLabel?: string;
   /** The frontier's tropes: the ones this candidate shares are highlighted. */
   frontierTropes: string[];
   /** The film this candidate would follow: the "Why this link?" pitch compares the two. */
@@ -838,6 +881,18 @@ function CandidateCard({
 
         {castLinked && <ConnectionBadge connections={candidate.connections} />}
         <MechanicBadge candidate={candidate} gameType={gameType} />
+        {tierLabel && candidate.tier_compliant !== undefined && candidate.tier_compliant !== null && (
+          <span
+            title={candidate.tier_compliant ? "Satisfies the active tier's rule" : "Breaks the active tier's rule"}
+            className={cn(
+              "flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+              candidate.tier_compliant ? "bg-emerald-950 text-emerald-300" : "bg-red-950 text-red-300",
+            )}
+          >
+            {candidate.tier_compliant ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+            {tierLabel}
+          </span>
+        )}
         <TropeChips tropes={candidate.tropes} highlight={frontierTropes} max={4} />
         <PitchButton
           previousMovieId={frontierMovieId}
@@ -1124,8 +1179,9 @@ function MovieScreenView({
   const [guard, setGuard] = useState<GuardStatus | null>(null);
 
   const allowRepeats = allowsMovieRepeats(rulesConfig);
-  const wildcardsRemaining = rulesConfig.wildcards_budget;
-  const wildcardsExhausted = wildcardsRemaining !== -1 && wildcardsRemaining <= 0;
+  const pricing = forcePricing(rulesConfig);
+  const wildcardsRemaining = pricing.remaining;
+  const wildcardsExhausted = pricing.exhausted;
   const existingStepNumber = findExistingStepNumber(steps, screen.movieId);
   const isLockedDuplicate = existingStepNumber !== null && !allowRepeats;
 
@@ -1243,6 +1299,7 @@ function MovieScreenView({
           frontierMovieTitle={frontierMovieTitle}
           wildcardsRemaining={wildcardsRemaining}
           wildcardsExhausted={wildcardsExhausted}
+          pluralNoun={pricing.plural}
           castLinked={castLinked}
           onBuildBridge={() => navigate(`/tools/bridge?from=${frontierMovieId}&to=${screen.movieId}`)}
         />
@@ -1328,6 +1385,7 @@ function FrontierGuardPanel({
   frontierMovieTitle,
   wildcardsRemaining,
   wildcardsExhausted,
+  pluralNoun,
   castLinked,
   onBuildBridge,
 }: {
@@ -1335,6 +1393,8 @@ function FrontierGuardPanel({
   frontierMovieTitle: string;
   wildcardsRemaining: number;
   wildcardsExhausted: boolean;
+  /** What a forced step spends: "wildcards" (or "lives" in the Rabbit Hole). */
+  pluralNoun: string;
   castLinked: boolean;
   onBuildBridge: () => void;
 }) {
@@ -1373,13 +1433,14 @@ function FrontierGuardPanel({
     >
       {wildcardsExhausted ? (
         <p className="flex items-center gap-1.5 font-medium text-red-400">
-          <Lock className="h-3.5 w-3.5" /> No link to frontier & 0 wildcards remaining
+          <Lock className="h-3.5 w-3.5" /> Rule broken & 0 {pluralNoun} remaining
         </p>
       ) : (
         <p className="flex items-center gap-1.5 font-medium text-amber-400">
           <AlertTriangle className="h-3.5 w-3.5" />
-          Does not connect to current frontier ({frontierMovieTitle}). Adding this will consume 1 of{" "}
-          {wildcardsRemaining === -1 ? "unlimited" : wildcardsRemaining} remaining wildcards.
+          {guard.result.reason ?? `Does not connect to current frontier (${frontierMovieTitle}).`} Adding
+          this will consume 1 of {wildcardsRemaining === -1 ? "unlimited" : wildcardsRemaining} remaining{" "}
+          {pluralNoun}.
         </p>
       )}
       <button

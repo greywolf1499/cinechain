@@ -7,7 +7,7 @@ import MoviePoster from "./MoviePoster";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
-import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
+import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
 import { useCreateStep } from "../lib/queries";
 import type {
   JellyfinItemSummary,
@@ -72,8 +72,9 @@ export default function ForkInTheRoadModal({
   const createStep = useCreateStep(runId);
 
   const allowRepeats = allowsMovieRepeats(rulesConfig);
-  const wildcardsRemaining = rulesConfig.wildcards_budget;
-  const wildcardsExhausted = wildcardsRemaining !== -1 && wildcardsRemaining <= 0;
+  const pricing = forcePricing(rulesConfig);
+  const wildcardsRemaining = pricing.remaining;
+  const wildcardsExhausted = pricing.exhausted;
 
   const { data: allCredits } = useQuery({
     queryKey: ["people", actorId, "credits", "all"],
@@ -273,14 +274,14 @@ export default function ForkInTheRoadModal({
                 >
                   {wildcardsExhausted ? (
                     <p className="flex items-center gap-1.5 font-medium text-red-400">
-                      <Lock className="h-3 w-3" /> No link to frontier & 0 wildcards remaining
+                      <Lock className="h-3 w-3" /> No link to frontier & 0 {pricing.plural} remaining
                     </p>
                   ) : (
                     <p className="flex items-center gap-1.5 font-medium text-amber-400">
                       <AlertTriangle className="h-3 w-3" />
                       Does not connect to current frontier ({frontierMovieTitle ?? "unknown"}). Adding
                       this will consume 1 of{" "}
-                      {wildcardsRemaining === -1 ? "unlimited" : wildcardsRemaining} remaining wildcards.
+                      {wildcardsRemaining === -1 ? "unlimited" : wildcardsRemaining} remaining {pricing.plural}.
                     </p>
                   )}
                   <div className="mt-2 flex gap-2">
@@ -291,7 +292,7 @@ export default function ForkInTheRoadModal({
                         onClick={() => handleLog(movie)}
                         className="rounded-md bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
                       >
-                        Confirm Wildcard Jump
+                        {pricing.confirmLabel}
                       </button>
                     )}
                     <button

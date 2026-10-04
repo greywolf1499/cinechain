@@ -43,6 +43,9 @@ export interface RulesConfig {
 	max_cast_order: number;
 	min_runtime: number;
 	wildcards_budget: number; // -1 = unlimited
+	/** The Rabbit Hole: forced (rule-breaking) steps cost a life instead of a wildcard. */
+	lives_remaining?: number;
+	max_lives?: number;
 	/** Canon-Only Island: the CuratedList every film must belong to. */
 	allowed_curated_list_id?: string;
 	/** Decade Sieve: the decade start (e.g. 1970) every film must fall in. */
@@ -233,6 +236,22 @@ export interface ConstraintInfo {
 	cooldown_countries?: string[];
 	/** One-line notes for other active modifiers (chrono direction, runtime staircase). */
 	modifier_notes?: string[];
+	/** The Rabbit Hole: the active tier, lives and the tier boundary ahead. */
+	rabbit_hole?: RabbitHoleState | null;
+}
+
+export interface RabbitHoleState {
+	depth: number;
+	tier: number;
+	tier_name: string;
+	tier_rule: string;
+	lives_remaining: number;
+	max_lives: number;
+	next_tier: number | null;
+	next_tier_name: string | null;
+	next_tier_rule: string | null;
+	steps_until_next: number | null;
+	upcoming_tier_warning: string | null;
 }
 
 export interface ValidationResult {
@@ -437,6 +456,9 @@ export interface DiscoveryCandidate {
 	semantic_score?: number | null;
 	/** Semantic Trope Web: the candidate's LLM-extracted tropes. */
 	tropes?: string[];
+	/** The Rabbit Hole: true = verified to satisfy the active tier's rule (null = couldn't be checked). */
+	tier_compliant?: boolean | null;
+	upcoming_tier_warning?: string | null;
 	/** Chrono modes: release year minus the frontier film's (negative on a descent). */
 	year_delta?: number | null;
 }

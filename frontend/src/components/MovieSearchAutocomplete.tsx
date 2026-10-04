@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { AlertTriangle, GitBranch, Loader2, Lock, Search, X } from "lucide-react";
 import { api } from "../lib/api";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
-import { allowsMovieRepeats, findExistingStepNumber } from "../lib/rules";
+import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
 import { connectionMetadata } from "../lib/connections";
 import { roleBadgeText } from "../lib/crewRoles";
 import LinkBonusBadges from "./LinkBonusBadges";
@@ -104,8 +104,9 @@ export default function MovieSearchAutocomplete({
     const existingStepNumber = findExistingStepNumber(steps, picked.tmdb_id);
     const allowRepeats = rulesConfig ? allowsMovieRepeats(rulesConfig) : true;
     const isLockedDuplicate = existingStepNumber !== null && !allowRepeats;
-    const wildcardsRemaining = rulesConfig?.wildcards_budget ?? -1;
-    const wildcardsExhausted = wildcardsRemaining !== -1 && wildcardsRemaining <= 0;
+    const pricing = forcePricing(rulesConfig ?? { wildcards_budget: -1 });
+    const wildcardsRemaining = pricing.remaining;
+    const wildcardsExhausted = pricing.exhausted;
 
     return (
       <div className="rounded-lg border border-app-border bg-app-bg p-3">
@@ -168,13 +169,13 @@ export default function MovieSearchAutocomplete({
                   </div>
                 ) : wildcardsExhausted ? (
                   <div className="flex items-center gap-1.5 text-xs font-medium text-red-400">
-                    <Lock className="h-3 w-3" /> No link to frontier & 0 wildcards remaining
+                    <Lock className="h-3 w-3" /> Rule broken & 0 {pricing.plural} remaining
                   </div>
                 ) : (
                   <div className="flex items-center gap-1.5 text-xs font-medium text-amber-400">
                     <AlertTriangle className="h-3 w-3" />
                     {validation.reason ?? "No shared cast found"} - using this will consume 1 of{" "}
-                    {wildcardsRemaining === -1 ? "unlimited" : wildcardsRemaining} remaining wildcards.
+                    {wildcardsRemaining === -1 ? "unlimited" : wildcardsRemaining} remaining {pricing.plural}.
                   </div>
                 )}
 
@@ -217,7 +218,7 @@ export default function MovieSearchAutocomplete({
                     !validation.blocked &&
                     !wildcardsExhausted && (
                       <LogButton pending={createStep.isPending} onClick={() => handleLog(true)}>
-                        Confirm Wildcard Jump
+                        {pricing.confirmLabel}
                       </LogButton>
                     )
                   )}

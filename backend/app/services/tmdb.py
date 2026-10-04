@@ -52,6 +52,7 @@ class TMDBMovie(TypedDict, total=False):
     runtime: int | None
     genre_ids: list[int]
     popularity: float | None
+    vote_average: float | None
     status: str | None
 
 
@@ -86,6 +87,7 @@ class TMDBPersonCredit(TypedDict, total=False):
     genre_ids: list[int]
     original_language: str
     popularity: float | None
+    vote_average: float | None
 
 
 class TMDBCraftCredit(TMDBPersonCredit, total=False):
@@ -347,6 +349,7 @@ def _normalize_movie_detail(data: dict[str, Any]) -> TMDBMovie:
         runtime=data.get("runtime"),
         genre_ids=[g["id"] for g in data.get("genres", [])],
         popularity=data.get("popularity"),
+        vote_average=data.get("vote_average"),
         status=data.get("status"),
     )
 
@@ -361,6 +364,7 @@ def _normalize_person_credit(entry: dict[str, Any]) -> TMDBPersonCredit:
         genre_ids=entry.get("genre_ids", []),
         original_language=entry.get("original_language", ""),
         popularity=entry.get("popularity"),
+        vote_average=entry.get("vote_average"),
     )
 
 

@@ -102,6 +102,24 @@ class SwapNodeResult(BaseModel):
     total: int  # candidates found before the response cap
 
 
+class RabbitHoleState(BaseModel):
+    """Where a Rabbit Hole run stands: the active tier, the lives left, and the tier boundary ahead."""
+
+    depth: int
+    tier: int
+    tier_name: str
+    tier_rule: str  # short label, e.g. "Non-English"
+    lives_remaining: int
+    max_lives: int
+    next_tier: int | None = None
+    next_tier_name: str | None = None
+    next_tier_rule: str | None = None
+    # How many hops until the next tier's rule applies (1 = the very next hop); None on the last tier.
+    steps_until_next: int | None = None
+    # Set when the next tier is 1 or 2 hops away.
+    upcoming_tier_warning: str | None = None
+
+
 class ConstraintInfo(BaseModel):
     """The rule currently shaping a run's *next* hop (e.g. "must be a Director")."""
 
@@ -112,6 +130,7 @@ class ConstraintInfo(BaseModel):
     # (most recently visited first) and one-line notes for other active modifiers.
     cooldown_countries: list[str] = []
     modifier_notes: list[str] = []
+    rabbit_hole: RabbitHoleState | None = None
 
 
 class RouletteMovie(BaseModel):

@@ -16,6 +16,39 @@ export function findExistingStepNumber(
 	return index === -1 ? null : index + 1;
 }
 
+/** What a forced (rule-breaking) step costs in this run: a Rabbit Hole life, else a wildcard. */
+export interface ForcePricing {
+	/** "life" | "wildcard" */
+	noun: "life" | "wildcard";
+	/** Plural, lower-case: "lives" | "wildcards" */
+	plural: string;
+	/** -1 = unlimited */
+	remaining: number;
+	exhausted: boolean;
+	/** The confirm button's label. */
+	confirmLabel: string;
+}
+
+export function forcePricing(rules: Pick<RulesConfig, "wildcards_budget" | "lives_remaining">): ForcePricing {
+	if (typeof rules.lives_remaining === "number") {
+		return {
+			noun: "life",
+			plural: "lives",
+			remaining: rules.lives_remaining,
+			exhausted: rules.lives_remaining <= 0,
+			confirmLabel: "Spend a Life",
+		};
+	}
+	const remaining = rules.wildcards_budget;
+	return {
+		noun: "wildcard",
+		plural: "wildcards",
+		remaining,
+		exhausted: remaining !== -1 && remaining <= 0,
+		confirmLabel: "Confirm Wildcard Jump",
+	};
+}
+
 export function wildcardsRemainingLabel(budget: number): string {
 	return budget === -1 ? "unlimited" : String(budget);
 }

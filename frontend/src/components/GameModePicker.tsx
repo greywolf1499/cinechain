@@ -14,6 +14,7 @@ const MODE_ORDER = [
   "canon_island",
   "meet_in_the_middle",
   "tug_of_war",
+  "rabbit_hole",
   "chrono_climb",
   "genre_pendulum",
   "world_passport",
@@ -96,6 +97,22 @@ export default function GameModePicker({
               </div>
               {mode.description && (
                 <p className="line-clamp-4 text-[11px] leading-relaxed text-zinc-500">{mode.description}</p>
+              )}
+              {style.progression && (
+                <ol
+                  aria-label="Tier progression"
+                  className="flex flex-wrap items-center gap-x-1 gap-y-1 text-[10px] font-medium text-zinc-400"
+                >
+                  {style.progression.map((step, index) => (
+                    <li key={step} className="flex items-center gap-1">
+                      {index > 0 && <span aria-hidden className="text-zinc-600">→</span>}
+                      <span className={cn("rounded px-1.5 py-0.5 ring-1 ring-inset ring-zinc-700", style.text)}>
+                        <span className="mr-1 text-zinc-500">T{index + 1}</span>
+                        {step}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
               )}
               {style.tags.length > 0 && (
                 <div className="mt-auto flex flex-wrap gap-1 pt-1">

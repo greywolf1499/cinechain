@@ -99,6 +99,7 @@ class CacheRepo:
         row.runtime = movie.get("runtime")
         row.genre_ids = movie.get("genre_ids") or []
         row.popularity = movie.get("popularity")
+        row.vote_average = movie.get("vote_average")
         row.status = movie.get("status")
         self.session.add(row)
         self.session.commit()
@@ -129,6 +130,7 @@ class CacheRepo:
                     original_language=credit.get("original_language"),
                     genre_ids=credit.get("genre_ids") or [],
                     popularity=credit.get("popularity"),
+                    vote_average=credit.get("vote_average"),
                 )
                 self.session.add(row)
                 self.session.flush()

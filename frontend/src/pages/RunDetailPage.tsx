@@ -36,6 +36,8 @@ import RouletteSpinner from "../components/RouletteSpinner";
 import ForkOfferPanel from "../components/ForkOfferPanel";
 import TugOfWarMeter from "../components/TugOfWarMeter";
 import PendulumMeter from "../components/PendulumMeter";
+import RabbitHoleHud from "../components/RabbitHoleHud";
+import RabbitHoleGameOver from "../components/RabbitHoleGameOver";
 import PlayerAvatar from "../components/PlayerAvatar";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
@@ -59,6 +61,7 @@ import {
 import { useAuthStore } from "../store/authStore";
 import { TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar";
 import { GENRE_PENDULUM } from "../lib/pendulum";
+import { RABBIT_HOLE } from "../lib/rabbitHole";
 import type { ActorClickPayload } from "../components/actorClickTypes";
 import { STANDALONE_MODES, gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
@@ -192,6 +195,15 @@ export default function RunDetailPage() {
           users={users}
           finished={locked}
         />
+      )}
+
+      {run.game_type === RABBIT_HOLE && (
+        <>
+          {run.status === "failed" && (
+            <RabbitHoleGameOver steps={run.steps} rules={run.rules_config} reason={run.status_reason} />
+          )}
+          <RabbitHoleHud rules={run.rules_config} depth={run.steps.length} finished={locked} />
+        </>
       )}
 
       {run.game_type === GENRE_PENDULUM && (

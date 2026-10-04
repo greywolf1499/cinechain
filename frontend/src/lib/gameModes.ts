@@ -11,6 +11,7 @@ import {
   Network,
   Swords,
   Palette,
+  Skull,
   Sparkles,
   SwatchBook,
   type LucideIcon,
@@ -24,6 +25,8 @@ export interface GameModeStyle {
   tagline: string;
   /** Short chips: how films link in this mode. */
   tags: string[];
+  /** Optional progression chips shown in order under the tags (e.g. the Rabbit Hole's tiers). */
+  progression?: string[];
   /** Tinted icon bubble + selected-card ring/glow. */
   bubble: string;
   ring: string;
@@ -118,6 +121,15 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     bubble: "bg-teal-500/15 text-teal-300",
     ring: "border-teal-400 shadow-[0_0_0_1px_rgba(45,212,191,0.6),0_8px_30px_-8px_rgba(45,212,191,0.35)]",
     text: "text-teal-300",
+  },
+  rabbit_hole: {
+    icon: Skull,
+    tagline: "Descend. Survive. Don't blink.",
+    tags: ["Shared cast", "3 lives", "Rogue-like"],
+    progression: ["Freefall", "Pre-2000", "Non-English", "Under 100 min", "B-movies"],
+    bubble: "bg-red-500/15 text-red-300",
+    ring: "border-red-400 shadow-[0_0_0_1px_rgba(248,113,113,0.6),0_8px_30px_-8px_rgba(248,113,113,0.35)]",
+    text: "text-red-300",
   },
   aesthetic_gradient: {
     icon: Palette,

@@ -1,8 +1,8 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel, Field
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.api.deps import get_current_admin
 from app.config import get_settings
@@ -13,8 +13,9 @@ from app.integrations.radarr import DEFAULT_URL as RADARR_DEFAULT_URL
 from app.integrations.radarr import check_radarr_connectivity
 from app.integrations.seerr import DEFAULT_URL as SEERR_DEFAULT_URL
 from app.integrations.seerr import check_seerr_connectivity
+from app.models.system import SystemTask
 from app.models.user import User
-from app.services import embeddings, llm, settings_repo
+from app.services import embeddings, llm, settings_repo, task_runner
 from app.services.tmdb import check_tmdb_connectivity
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -339,6 +340,76 @@ async def test_llm_generation(
         keep_alive_seconds=0 if payload.llm_keep_alive_seconds is None else payload.llm_keep_alive_seconds,
     )
     return LlmTestResult(**await llm.check_connection(config))
+
+
+LLM_DOWNLOAD_TASK = "llm_model_download"
+
+
+class LlmDownloadStatus(BaseModel):
+    downloaded: bool
+    size_bytes: int
+    path: str
+    downloading: bool = False
+    bytes_downloaded: int = 0
+    total_bytes: int = llm.LOCAL_MODEL_APPROX_BYTES
+    percent: float = 0.0
+    error: str | None = None
+
+
+def _llm_download_status(session: Session) -> LlmDownloadStatus:
+    status = llm.local_model_status()
+    latest = session.exec(
+        select(SystemTask).where(SystemTask.name == LLM_DOWNLOAD_TASK)
+        .order_by(col(SystemTask.created_at).desc())
+    ).first()
+    out = LlmDownloadStatus(**status)
+    if status["downloaded"] or latest is None:
+        return out
+    if latest.status in task_runner.ACTIVE_STATUSES:
+        progress = (latest.progress_data or {}).get("progress") or {}
+        out.downloading = True
+        out.bytes_downloaded = int(progress.get("bytes_downloaded", 0))
+        out.total_bytes = int(progress.get("total_bytes", out.total_bytes))
+        out.percent = float(progress.get("percent", 0.0))
+    elif latest.status == task_runner.FAILED:
+        out.error = latest.error or "The download failed."
+    return out
+
+
+def _download_llm_model(ctx: task_runner.TaskContext) -> dict:
+    def report(done: int, total: int) -> None:
+        ctx.progress({"bytes_downloaded": done, "total_bytes": total,
+                      "percent": round(done * 100 / total, 1)})
+
+    try:
+        llm.ensure_model_file(progress=report)
+    except llm.LlmUnavailable as exc:
+        raise RuntimeError(str(exc)) from exc
+    return {"path": str(llm.local_model_path())}
+
+
+@router.get("/integrations/llm/download-status", response_model=LlmDownloadStatus)
+def llm_download_status(
+    session: Session = Depends(get_session),
+    _admin: User = Depends(get_current_admin),
+) -> LlmDownloadStatus:
+    """Is the local Qwen GGUF on disk, and how far along is a running download?"""
+    return _llm_download_status(session)
+
+
+@router.post("/integrations/llm/download", response_model=LlmDownloadStatus)
+def start_llm_download(
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    admin: User = Depends(get_current_admin),
+) -> LlmDownloadStatus:
+    """Fetches the fixed local Qwen GGUF into /config/models as a background task (a no-op if it
+    is already there or already downloading). Poll `download-status` for progress."""
+    if not llm.local_model_status()["downloaded"]:
+        task_runner.submit_task(
+            background_tasks, session, LLM_DOWNLOAD_TASK, _download_llm_model,
+            user_id=admin.id, dedupe_key=LLM_DOWNLOAD_TASK, label="Downloading Qwen 0.8B")
+    return _llm_download_status(session)
 
 
 class SolverConfigOut(BaseModel):

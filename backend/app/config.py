@@ -66,16 +66,9 @@ class Settings(BaseSettings):
         default=300,
         validation_alias=AliasChoices("llm_keep_alive_seconds", "llm_idle_timeout_seconds"),
     )
-    llm_gguf_url: str = (
-        "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf"
-    )
 
     # --- Bridge solver pacing (Phase 15.5) ---
     bridge_max_duration_seconds: int = 45
-
-    @property
-    def llm_model_dir(self) -> Path:
-        return self.config_dir / "models" / "qwen3.5-0.8b"
 
     @property
     def database_path(self) -> Path:

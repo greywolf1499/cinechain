@@ -24,6 +24,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,13 @@ DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:0.8b"
 DEFAULT_OPENAI_URL = "http://localhost:1234"
 DEFAULT_OPENAI_MODEL = "qwen3.5-0.8b"
-DEFAULT_GGUF_FILE = "Qwen3.5-0.8B-Q4_K_M.gguf"
+# The vetted local model: fixed URL and destination so nobody has to find or place a GGUF.
+LOCAL_MODEL_URL = (
+    "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf"
+)
+LOCAL_MODEL_FILENAME = "qwen3.5-0.8b-instruct-q4_k_m.gguf"
+LOCAL_MODEL_APPROX_BYTES = 532_517_120
+_LEGACY_MODEL_RELATIVE = Path("models") / "qwen3.5-0.8b" / "Qwen3.5-0.8B-Q4_K_M.gguf"
 REMOTE_TIMEOUT_SECONDS = 30.0
 MAX_KEEP_ALIVE_SECONDS = 3600
 CONTEXT_TOKENS = 2048
@@ -79,7 +86,7 @@ class LlmConfig:
         if self.provider == PROVIDER_OPENAI:
             return self.model or DEFAULT_OPENAI_MODEL
         if self.provider == PROVIDER_LOCAL:
-            return self.model or DEFAULT_GGUF_FILE
+            return LOCAL_MODEL_FILENAME
         return ""
 
     @property
@@ -184,36 +191,52 @@ def _schedule_unload(keep_alive_seconds: int) -> None:
     _unload_timer.start()
 
 
-def model_path(config: LlmConfig) -> Path:
-    named = config.effective_model
-    candidate = Path(named)
-    return candidate if candidate.is_absolute() else get_settings().llm_model_dir / candidate.name
+def local_model_path() -> Path:
+    return get_settings().config_dir / "models" / LOCAL_MODEL_FILENAME
 
 
-def _download(url: str, destination: Path) -> None:
+def local_model_status() -> dict[str, Any]:
+    """`{"downloaded", "size_bytes", "path"}` for the fixed local GGUF."""
+    path = local_model_path()
+    legacy = get_settings().config_dir / _LEGACY_MODEL_RELATIVE
+    if not path.exists() and legacy.exists():  # reuse a download from before the fixed path
+        legacy.replace(path)
+    exists = path.is_file()
+    return {"downloaded": exists, "size_bytes": path.stat().st_size if exists else 0,
+            "path": str(path)}
+
+
+def _download(url: str, destination: Path, progress: Callable[[int, int], None] | None = None) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(destination.suffix + ".part")
-    with httpx.stream("GET", url, follow_redirects=True, timeout=600.0) as response:
-        response.raise_for_status()
-        with tmp.open("wb") as handle:
-            for chunk in response.iter_bytes():
-                handle.write(chunk)
-    tmp.replace(destination)
+    try:
+        with httpx.stream("GET", url, follow_redirects=True, timeout=600.0) as response:
+            response.raise_for_status()
+            total = int(response.headers.get("content-length") or LOCAL_MODEL_APPROX_BYTES)
+            done = 0
+            with tmp.open("wb") as handle:
+                for chunk in response.iter_bytes(1024 * 256):
+                    handle.write(chunk)
+                    done += len(chunk)
+                    if progress is not None:
+                        progress(done, max(total, done))
+        tmp.replace(destination)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
-def ensure_model_file(config: LlmConfig) -> Path:
+def ensure_model_file(
+    config: LlmConfig | None = None, progress: Callable[[int, int], None] | None = None
+) -> Path:
     """Blocking: the GGUF on disk, downloaded on first use. Run it in a worker thread."""
-    path = model_path(config)
     with _download_lock:
-        if path.exists():
-            return path
-        if config.model and Path(config.model).is_absolute():
-            raise LlmUnavailable(f"No GGUF model file at {config.model}")
+        if local_model_status()["downloaded"]:
+            return local_model_path()
         try:
-            _download(get_settings().llm_gguf_url, path)
+            _download(LOCAL_MODEL_URL, local_model_path(), progress)
         except (httpx.HTTPError, OSError) as exc:
             raise LlmUnavailable(f"Could not fetch the local model: {exc}") from exc
-    return path
+    return local_model_path()
 
 
 def _generate_local(config: LlmConfig, system: str, prompt: str, max_tokens: int) -> str:

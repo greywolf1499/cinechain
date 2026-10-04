@@ -203,7 +203,7 @@ async def test_a_crashing_local_model_is_unloaded_and_reported(monkeypatch, tmp_
 def test_the_gguf_is_downloaded_once_into_the_config_dir(config_dir, monkeypatch):
     fetched = []
 
-    def fake_download(url, dest):
+    def fake_download(url, dest, progress=None):
         fetched.append(url)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"x")
@@ -212,11 +212,64 @@ def test_the_gguf_is_downloaded_once_into_the_config_dir(config_dir, monkeypatch
     config = llm.LlmConfig(provider="local_gguf")
     first = llm.ensure_model_file(config)
     assert llm.ensure_model_file(config) == first and len(fetched) == 1
-    assert first == config_dir / "models" / "qwen3.5-0.8b" / "Qwen3.5-0.8B-Q4_K_M.gguf"
+    assert first == config_dir / "models" / "qwen3.5-0.8b-instruct-q4_k_m.gguf"
     assert "Qwen3.5-0.8B-GGUF" in fetched[0]
 
 
+def test_a_legacy_download_is_reused_at_the_fixed_path(config_dir):
+    legacy = config_dir / "models" / "qwen3.5-0.8b" / "Qwen3.5-0.8B-Q4_K_M.gguf"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"gguf")
+    status = llm.local_model_status()
+    assert status["downloaded"] and status["size_bytes"] == 4
+    assert status["path"] == str(config_dir / "models" / "qwen3.5-0.8b-instruct-q4_k_m.gguf")
+
+
+def test_a_manual_model_name_never_changes_the_local_file(config_dir):
+    config = llm.LlmConfig(provider="local_gguf", model="/etc/passwd")
+    assert config.effective_model == llm.LOCAL_MODEL_FILENAME
+
+
 # --- settings API ---
+
+
+def test_llm_download_status_and_one_click_download(client, config_dir, monkeypatch):
+    before = client.get("/api/settings/integrations/llm/download-status").json()
+    assert before["downloaded"] is False and before["size_bytes"] == 0
+    assert before["path"] == str(config_dir / "models" / "qwen3.5-0.8b-instruct-q4_k_m.gguf")
+    assert before["downloading"] is False
+
+    def fake_download(url, dest, progress=None):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        progress(50, 100)
+        dest.write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(llm, "_download", fake_download)
+    started = client.post("/api/settings/integrations/llm/download")
+    assert started.status_code == 200
+    after = client.get("/api/settings/integrations/llm/download-status").json()
+    assert after["downloaded"] is True and after["size_bytes"] == 10
+
+    # Already on disk: a second request neither downloads nor errors.
+    monkeypatch.setattr(llm, "_download", lambda *a, **k: pytest.fail("downloaded twice"))
+    assert client.post("/api/settings/integrations/llm/download").json()["downloaded"] is True
+
+
+def test_a_failed_download_is_reported(client, monkeypatch):
+    def broken(url, dest, progress=None):
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(llm, "_download", broken)
+    client.post("/api/settings/integrations/llm/download")
+    status = client.get("/api/settings/integrations/llm/download-status").json()
+    assert status["downloaded"] is False and status["downloading"] is False
+    assert "offline" in status["error"]
+
+
+def test_download_endpoints_need_an_admin(config_dir):
+    with TestClient(app) as anonymous:
+        assert anonymous.get("/api/settings/integrations/llm/download-status").status_code == 401
+        assert anonymous.post("/api/settings/integrations/llm/download").status_code == 401
 
 
 def test_llm_settings_default_to_off_and_mask_the_key(client):

@@ -26,6 +26,14 @@ COPY backend/pyproject.toml backend/uv.lock* ./
 RUN uv sync --no-install-project --no-dev
 COPY backend/ ./
 RUN uv sync --no-dev
+# Local Qwen works out of the box: install llama-cpp-python from its pre-built CPU wheel index
+# (x86_64 and aarch64 manylinux wheels), so no C++ toolchain is needed. --only-binary makes the
+# build fail loudly rather than silently falling back to compiling from source. This must run
+# after `uv sync`, which would otherwise remove the "extraneous" package.
+RUN uv pip install --python /app/.venv/bin/python --only-binary llama-cpp-python \
+	"llama-cpp-python>=0.3,<0.4" \
+	--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+	&& /app/.venv/bin/python -c "import llama_cpp"
 
 ########################################
 # Stage 3: runtime

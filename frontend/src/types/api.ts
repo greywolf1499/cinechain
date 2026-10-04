@@ -462,6 +462,18 @@ export interface TeaserResult {
 
 export type LlmProvider = "off" | "local_gguf" | "ollama" | "openai";
 
+/** The fixed local Qwen GGUF on disk plus any running download (`GET /settings/integrations/llm/download-status`). */
+export interface LlmDownloadStatus {
+	downloaded: boolean;
+	size_bytes: number;
+	path: string;
+	downloading: boolean;
+	bytes_downloaded: number;
+	total_bytes: number;
+	percent: number;
+	error: string | null;
+}
+
 export interface LlmTestResult {
 	ok: boolean;
 	latency_ms: number | null;

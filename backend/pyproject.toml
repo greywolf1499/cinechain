@@ -25,7 +25,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Opt-in local GGUF inference for the generative features (needs a C++ toolchain to build).
+# Local GGUF inference for non-Docker installs (PyPI only ships an sdist, so it needs a C++
+# toolchain). The Docker image instead installs the pre-built CPU wheel; see the Dockerfile.
 llm = ["llama-cpp-python>=0.3"]
 
 [dependency-groups]

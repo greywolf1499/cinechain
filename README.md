@@ -84,9 +84,11 @@ Under **Tools** in the nav (`/tools`):
   presets.
 - **Opt-in Qwen 0.8B** — pitches, teasers, trope extraction and commentary can use a local GGUF
   Qwen model. It is **off by default**, loaded on demand and unloaded after
-  `LLM_IDLE_TIMEOUT_SECONDS` idle. It needs the optional `llm` extra (`llama-cpp-python`, built
-  from source), which the default Docker image deliberately leaves out so the build never needs a
-  C++ toolchain.
+  `LLM_IDLE_TIMEOUT_SECONDS` idle. `llama-cpp-python` ships pre-installed in the Docker image (from
+  its pre-built CPU wheels, so no compiler is involved). To enable it, pick **Local Qwen
+  (In-Process)** in **Settings → Integrations** and click **Download & Enable Qwen 0.8B** - the
+  ~530 MB model is fetched into `/config/models` with a live progress bar; there are no paths or
+  URLs to configure.
 - **Ollama / OpenAI-compatible support** — point embeddings and/or the generative model at your
   homelab's Ollama (or any OpenAI-compatible endpoint) instead; this is the easiest way to get
   generative features in Docker.
@@ -171,7 +173,7 @@ First launch creates the SQLite DB and prompts you to create the first (admin) a
 | `EMBEDDING_PROVIDER` | No     | `local_onnx` | `local_onnx` (in-process), `ollama` or `openai` (OpenAI-compatible). Also editable in Settings.                                                                |
 | `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | No | _(empty)_ | Remote embedding endpoint, key and model name (ollama / openai only).                                                             |
 | `ONNX_MODEL_PRESET` | No      | `arctic-embed-xs` | On-device model: `arctic-embed-xs`, `multilingual-e5-small` or `all-minilm-l6-v2` (alias of `EMBEDDING_LOCAL_PRESET`).                                  |
-| `LLM_PROVIDER`     |    No    | `off`     | Generative model: `off`, `local_gguf` (needs the `llm` extra), `ollama` or `openai`.                                                                              |
+| `LLM_PROVIDER`     |    No    | `off`     | Generative model: `off`, `local_gguf` (Local Qwen, preinstalled in Docker), `ollama` or `openai`.                                                                              |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | No | _(empty)_ | Endpoint, key and model name for `ollama` / `openai`.                                                                                                |
 | `LLM_IDLE_TIMEOUT_SECONDS` | No | `300` | `local_gguf` only: idle seconds before the model is unloaded (`0` = right after each call). Alias of `LLM_KEEP_ALIVE_SECONDS`.                                    |
 | `BRIDGE_MAX_DURATION_SECONDS` | No | `45` | Wall-clock ceiling for one Bridge search (5-600).                                                                                                              |

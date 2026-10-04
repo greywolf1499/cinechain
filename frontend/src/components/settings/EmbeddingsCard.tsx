@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, Download, Loader2, XCircle, Zap } from "lucide-react";
 import Toast, { type ToastState } from "../Toast";
 import { SettingsCard, inputClass } from "./shared";
 import { ApiError, api } from "../../lib/api";
@@ -8,6 +8,7 @@ import type {
   EmbeddingProvider,
   EmbeddingTestResult,
   IntegrationConfig,
+  LlmDownloadStatus,
   LlmProvider,
   LlmTestResult,
   LocalPresetInfo,
@@ -232,8 +233,8 @@ const LLM_PROVIDERS: { value: LlmProvider; label: string; detail: string }[] = [
   { value: "off", label: "Off", detail: "No generative features. Nothing is downloaded or loaded." },
   {
     value: "local_gguf",
-    label: "Local Qwen 0.8B",
-    detail: "Qwen3.5-0.8B-Instruct (Q4_K_M GGUF, ~530 MB) via llama-cpp-python, downloaded on first use.",
+    label: "Local Qwen (In-Process)",
+    detail: "Qwen3.5 0.8B runs inside CineChain. One click downloads it (~530 MB). No setup, no files to place.",
   },
   {
     value: "ollama",
@@ -249,10 +250,16 @@ const LLM_PROVIDERS: { value: LlmProvider; label: string; detail: string }[] = [
 
 const LLM_PLACEHOLDERS: Record<LlmProvider, { url: string; model: string }> = {
   off: { url: "", model: "" },
-  local_gguf: { url: "", model: "Qwen3.5-0.8B-Q4_K_M.gguf" },
+  local_gguf: { url: "", model: "" },
   ollama: { url: "http://localhost:11434", model: "qwen3.5:0.8b" },
   openai: { url: "http://localhost:1234", model: "qwen3.5-0.8b" },
 };
+
+const DOWNLOAD_KEY = ["settings", "integrations", "llm-download"] as const;
+
+function formatMb(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
 
 const KEEP_ALIVE_OPTIONS = [
   { value: 0, label: "Unload immediately after each generation" },
@@ -347,13 +354,41 @@ function LlmSection({
 
   const remote = provider === "ollama" || provider === "openai";
   const placeholders = LLM_PLACEHOLDERS[provider];
+  const local = provider === "local_gguf";
+
+  const { data: download } = useQuery({
+    queryKey: DOWNLOAD_KEY,
+    queryFn: () => api.get<LlmDownloadStatus>("/settings/integrations/llm/download-status"),
+    enabled: local,
+    refetchInterval: (query) => (query.state.data?.downloading ? 1000 : false),
+  });
+  const modelReady = download?.downloaded === true;
+
+  const startDownload = useMutation({
+    // Enabling and downloading are one click: persist the provider, then fetch the model.
+    mutationFn: async () => {
+      const updated = await api.patch<IntegrationConfig>("/settings/integrations", {
+        llm_provider: "local_gguf",
+        llm_base_url: "",
+        llm_model: "",
+        llm_keep_alive_seconds: keepAlive,
+        llm_api_key: "",
+      });
+      queryClient.setQueryData(CONFIG_KEY, updated);
+      queryClient.invalidateQueries({ queryKey: ["engine", "llm-status"] });
+      return api.post<LlmDownloadStatus>("/settings/integrations/llm/download");
+    },
+    onSuccess: (status) => queryClient.setQueryData(DOWNLOAD_KEY, status),
+    onError: (err) =>
+      onToast({ type: "error", message: err instanceof ApiError ? err.message : "Couldn't start the download." }),
+  });
 
   const test = useMutation({
     mutationFn: () =>
       api.post<LlmTestResult>("/settings/integrations/test-llm", {
         llm_provider: provider,
         llm_base_url: remote ? baseUrl.trim() : "",
-        llm_model: model.trim(),
+        llm_model: remote ? model.trim() : "",
         llm_keep_alive_seconds: keepAlive,
         llm_api_key: apiKey.trim() || undefined,
       }),
@@ -368,7 +403,7 @@ function LlmSection({
       api.patch<IntegrationConfig>("/settings/integrations", {
         llm_provider: provider,
         llm_base_url: remote ? baseUrl.trim() : "",
-        llm_model: provider === "off" ? "" : model.trim(),
+        llm_model: remote ? model.trim() : "",
         llm_keep_alive_seconds: keepAlive,
         ...(provider === "openai" && apiKey.trim() ? { llm_api_key: apiKey.trim() } : {}),
         ...(provider !== "openai" ? { llm_api_key: "" } : {}),
@@ -416,28 +451,28 @@ function LlmSection({
         ))}
       </div>
 
-      {provider === "local_gguf" && !config?.llm_local_available && (
+      {local && !config?.llm_local_available && (
         <p role="alert" className="rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
-          llama-cpp-python isn&apos;t installed on this server (<code>pip install llama-cpp-python</code>). Install it
-          to run the model in-process, or choose Ollama / OpenAI-compatible instead.
+          The local inference runtime (llama-cpp-python) isn&apos;t installed on this server. The official Docker image
+          includes it; otherwise choose Ollama / OpenAI-compatible instead.
         </p>
       )}
 
-      {provider !== "off" && (
+      {local && <LocalQwenPanel status={download} starting={startDownload.isPending} onDownload={() => startDownload.mutate()} />}
+
+      {remote && (
         <div className="flex flex-col gap-3 sm:flex-row">
-          {remote && (
-            <label className={`${labelClass} flex-1`}>
-              Base URL
-              <input
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={placeholders.url}
-                className={`${inputClass} normal-case`}
-              />
-            </label>
-          )}
           <label className={`${labelClass} flex-1`}>
-            {provider === "local_gguf" ? "GGUF file (optional)" : "Model"}
+            Base URL
+            <input
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder={placeholders.url}
+              className={`${inputClass} normal-case`}
+            />
+          </label>
+          <label className={`${labelClass} flex-1`}>
+            Model
             <input
               value={model}
               onChange={(e) => setModel(e.target.value)}
@@ -462,7 +497,7 @@ function LlmSection({
         </label>
       )}
 
-      {provider === "local_gguf" && (
+      {local && (
         <label className={labelClass}>
           Memory
           <select
@@ -491,19 +526,17 @@ function LlmSection({
         </button>
         <button
           type="button"
-          disabled={test.isPending || provider === "off"}
+          disabled={test.isPending || provider === "off" || (local && !modelReady)}
           onClick={() => {
             setResult(null);
             test.mutate();
           }}
           className="flex items-center gap-1.5 rounded-md border border-app-border px-3.5 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {test.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {test.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : local && <Zap className="h-3.5 w-3.5" />}
           Test LLM Generation
         </button>
-        {provider === "local_gguf" && test.isPending && (
-          <span className="text-xs text-zinc-500">First run downloads ~530 MB and loads the model...</span>
-        )}
+        {local && test.isPending && <span className="text-xs text-zinc-500">Loading the model...</span>}
       </div>
       {result && (
         <div
@@ -522,6 +555,74 @@ function LlmSection({
           </span>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Local Qwen status: a download button, a live progress bar, or the ready badge. No paths or URLs. */
+function LocalQwenPanel({
+  status,
+  starting,
+  onDownload,
+}: {
+  status: LlmDownloadStatus | undefined;
+  starting: boolean;
+  onDownload: () => void;
+}) {
+  if (!status) {
+    return (
+      <p className="flex items-center gap-2 text-xs text-zinc-500" role="status">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking the local model...
+      </p>
+    );
+  }
+  if (status.downloaded) {
+    return (
+      <div className="flex flex-wrap items-center gap-2" role="status">
+        <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+          ✅ Ready ({formatMb(status.size_bytes)} cached)
+        </span>
+      </div>
+    );
+  }
+  if (status.downloading || starting) {
+    const percent = Math.min(100, Math.max(0, status.percent));
+    return (
+      <div className="flex flex-col gap-1.5" role="status">
+        <span className="text-xs text-zinc-300">
+          Downloading Qwen 0.8B... {status.bytes_downloaded > 0 && `${formatMb(status.bytes_downloaded)} of ${formatMb(status.total_bytes)} `}
+          ({percent.toFixed(0)}%)
+        </span>
+        <div
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(percent)}
+          className="h-2 w-full overflow-hidden rounded-full bg-app-surface-hover"
+        >
+          <div className="h-full rounded-full bg-fuchsia-400 transition-all" style={{ width: `${percent}%` }} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <span className="rounded-full bg-app-surface-hover px-2.5 py-1 text-xs font-semibold text-zinc-300">
+        Status: Not Downloaded (~530 MB)
+      </span>
+      {status.error && (
+        <p role="alert" className="text-xs text-red-400">
+          {status.error}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onDownload}
+        className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong"
+      >
+        <Download className="h-3.5 w-3.5" />
+        Download &amp; Enable Qwen 0.8B
+      </button>
     </div>
   );
 }

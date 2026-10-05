@@ -13,10 +13,12 @@ module-level functions, never construct/await `CacheRepo` directly.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import TypedDict
 
 import anyio
+import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -40,12 +42,15 @@ from app.services.tmdb import (
     TMDBCraftCredit,
     TMDBCrewMember,
     TMDBDirector,
+    TMDBError,
     TMDBGenre,
     TMDBMovie,
     TMDBPersonCredit,
 )
 from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
+
+logger = logging.getLogger(__name__)
 
 
 class CastEntry(TypedDict):
@@ -350,7 +355,14 @@ class CacheRepo:
     def upsert_cast(
         self, movie_id: int, cast_members: list[TMDBCastMember], limit: int
     ) -> list[CastEntry]:
-        top = sorted(cast_members, key=lambda m: m["order"])[:limit]
+        top: list[TMDBCastMember] = []
+        seen_actor_ids: set[int] = set()
+        for member in sorted(cast_members, key=lambda m: m["order"]):
+            if member["id"] in seen_actor_ids:
+                continue
+            seen_actor_ids.add(member["id"])
+            top.append(member)
+        top = top[:limit]
         entries: list[CastEntry] = []
         for member in top:
             actor = self.session.get(CachedActor, member["id"])
@@ -378,8 +390,21 @@ class CacheRepo:
             cast_row = self.session.get(
                 CachedMovieCast, (movie_id, member["id"]))
             if cast_row is None:
-                cast_row = CachedMovieCast(
-                    movie_id=movie_id, actor_id=member["id"])
+                try:
+                    # Concurrent cold-cache requests can both observe this row
+                    # as missing. Isolate the insert so the losing request can
+                    # recover from the unique constraint without poisoning the
+                    # outer transaction.
+                    with self.session.begin_nested():
+                        cast_row = CachedMovieCast(
+                            movie_id=movie_id, actor_id=member["id"])
+                        self.session.add(cast_row)
+                        self.session.flush()
+                except IntegrityError:
+                    cast_row = self.session.get(
+                        CachedMovieCast, (movie_id, member["id"]))
+                    if cast_row is None:
+                        raise
             cast_row.cast_order = member["order"]
             cast_row.character_name = member.get("character")
             self.session.add(cast_row)
@@ -494,15 +519,33 @@ class CacheRepo:
 
 
 async def get_movie(
-    session: Session, tmdb: TMDBClient, tmdb_id: int, *, refresh: bool = False
+    session: Session,
+    tmdb: TMDBClient,
+    tmdb_id: int,
+    *,
+    refresh: bool = False,
+    require_detail: bool = False,
 ) -> CachedMovie:
     """Read-through detail fetch; `refresh` re-fetches `/movie/{id}` even when
-    a row is cached (search/credits stubs carry no overview or runtime)."""
+    a row is cached (search/credits stubs carry no overview or runtime).
+    `require_detail` refreshes cached stubs that lack origin-country metadata,
+    and serves the stub if TMDB is unavailable."""
     repo = CacheRepo(session)
     cached = await anyio.to_thread.run_sync(repo.get_cached_movie, tmdb_id)
-    if cached is not None and not refresh:
+    needs_detail = require_detail and cached is not None and cached.origin_country is None
+    if cached is not None and not refresh and not needs_detail:
         return cached
-    movie = await tmdb.get_movie(tmdb_id)
+    try:
+        movie = await tmdb.get_movie(tmdb_id)
+    except (TMDBError, httpx.HTTPError):
+        if not require_detail or cached is None:
+            raise
+        logger.warning(
+            "TMDB detail unavailable for cached movie %s; using its existing cache row",
+            tmdb_id,
+            exc_info=True,
+        )
+        return cached
     return await anyio.to_thread.run_sync(repo.upsert_movie, movie)
 
 

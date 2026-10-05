@@ -68,6 +68,7 @@ from app.schemas.runs import (
     StepValidateRequest,
 )
 from app.services import blind_fork, bounties, cache_repo, pool_options
+from app.services.bridge_paths import parse_countries
 from app.services.tmdb import TMDBClient
 from app.services.veto import consume_veto_token
 from app.utils.dates import parse_release_year
@@ -358,11 +359,38 @@ def _step_public(step: RunStep, info: dict[int, tuple]) -> RunStepPublic:
     return public
 
 
+def _heal_step_countries(session: Session, steps: list[RunStep]) -> None:
+    missing_steps = [step for step in steps if step.movie_origin_country is None]
+    if not missing_steps:
+        return
+
+    movie_ids = {step.movie_id for step in missing_steps}
+    rows = session.exec(
+        select(CachedMovie.tmdb_id, CachedMovie.origin_country)
+        .where(CachedMovie.tmdb_id.in_(movie_ids))
+    ).all()
+    countries_by_movie = {
+        movie_id: country
+        for movie_id, country in rows
+        if country and parse_countries(country)
+    }
+    changed = False
+    for step in missing_steps:
+        country = countries_by_movie.get(step.movie_id)
+        if country is not None:
+            step.movie_origin_country = country
+            session.add(step)
+            changed = True
+    if changed:
+        session.commit()
+
+
 def _to_run_detail(session: Session, run: Run) -> RunDetail:
     steps = session.exec(
         select(RunStep).where(RunStep.run_id ==
                               run.id).order_by(RunStep.logged_at)
     ).all()
+    _heal_step_countries(session, list(steps))
     info = _step_movie_info(session, list(steps))
     participants = session.exec(
         select(RunParticipant)
@@ -471,7 +499,8 @@ async def create_run(
     for seed_id, side in seeds:
         if seed_id is None:
             continue
-        movie = await cache_repo.get_movie(session, tmdb, seed_id)
+        movie = await cache_repo.get_movie(
+            session, tmdb, seed_id, require_detail=True)
         step = RunStep(
             run_id=run.id,
             logged_by_user_id=current_user.id,
@@ -629,7 +658,8 @@ async def _log_step(
     omdb: OMDbClient | None = None,
 ) -> RunStep:
     """Validate and add one step, then evaluate the run's outcome. Caller commits."""
-    movie = await cache_repo.get_movie(session, tmdb, payload.movie_id)
+    movie = await cache_repo.get_movie(
+        session, tmdb, payload.movie_id, require_detail=True)
     split = run.game_type == RT_SPLIT
     if split:
         if payload.status != "watched" or payload.household_score is None:

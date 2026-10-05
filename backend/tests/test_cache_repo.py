@@ -1,11 +1,15 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Lock
 
 import httpx
 import respx
-from sqlmodel import Session, SQLModel
+from sqlalchemy import event
+from sqlmodel import Session, SQLModel, select
 
 from app.config import Settings
 from app.integrations.omdb import OMDbClient
+from app.models.cache import CachedActor, CachedMovie, CachedMovieCast
 from app.services import cache_repo
 from app.services.tmdb import TMDBClient
 
@@ -113,6 +117,150 @@ async def test_obscure_regional_movie_ingested_without_filtering(config_dir):
     assert movie.original_language == "ja"
     assert movie.poster_path is None
     assert json.loads(movie.origin_country) == ["JP"]
+
+
+async def test_require_detail_hydrates_cached_movie_stub(config_dir):
+    with _session(config_dir) as session, respx.mock:
+        session.add(CachedMovie(tmdb_id=603, title="Matrix stub"))
+        session.commit()
+        movie_route = respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "poster_path": "/poster.jpg",
+                    "overview": "A hacker learns the truth.",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 136,
+                    "genres": [],
+                },
+            )
+        )
+
+        async with httpx.AsyncClient() as client:
+            movie = await cache_repo.get_movie(
+                session, TMDBClient(client), 603, require_detail=True)
+
+    assert movie.title == "The Matrix"
+    assert json.loads(movie.origin_country) == ["US"]
+    assert movie_route.call_count == 1
+
+
+async def test_require_detail_uses_cached_stub_when_tmdb_fails(config_dir):
+    with _session(config_dir) as session, respx.mock:
+        stub = CachedMovie(tmdb_id=603, title="Matrix stub")
+        session.add(stub)
+        session.commit()
+        movie_route = respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(404, json={"status_message": "Not found"})
+        )
+
+        async with httpx.AsyncClient() as client:
+            movie = await cache_repo.get_movie(
+                session, TMDBClient(client), 603, require_detail=True)
+
+    assert movie.title == "Matrix stub"
+    assert movie.origin_country is None
+    assert movie_route.call_count == 1
+
+
+def test_upsert_cast_deduplicates_actor_credits_before_limit(config_dir):
+    with _session(config_dir) as session:
+        session.add(CachedMovie(tmdb_id=603, title="The Matrix"))
+        session.add(CachedActor(tmdb_id=6384, name="Keanu Reeves"))
+        session.add(CachedActor(tmdb_id=2, name="Laurence Fishburne"))
+        session.commit()
+
+        entries = cache_repo.CacheRepo(session).upsert_cast(
+            603,
+            [
+                {
+                    "id": 6384,
+                    "name": "Keanu Reeves",
+                    "profile_path": None,
+                    "character": "Neo",
+                    "order": 0,
+                },
+                {
+                    "id": 6384,
+                    "name": "Keanu Reeves",
+                    "profile_path": None,
+                    "character": "Thomas Anderson",
+                    "order": 1,
+                },
+                {
+                    "id": 2,
+                    "name": "Laurence Fishburne",
+                    "profile_path": None,
+                    "character": "Morpheus",
+                    "order": 2,
+                },
+            ],
+            limit=2,
+        )
+        cast_rows = session.exec(
+            select(CachedMovieCast).where(CachedMovieCast.movie_id == 603)
+        ).all()
+
+    assert [entry["actor_id"] for entry in entries] == [6384, 2]
+    assert len(cast_rows) == 2
+    assert entries[0]["character_name"] == "Neo"
+
+
+def test_concurrent_upsert_cast_recovers_cast_row_race(config_dir):
+    from app.db import engine
+
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(CachedMovie(tmdb_id=603, title="The Matrix"))
+        session.add(CachedActor(tmdb_id=6384, name="Keanu Reeves"))
+        session.commit()
+
+    barrier = Barrier(2)
+    lock = Lock()
+    initial_cast_lookups = 0
+
+    def synchronize_missing_cast_lookups(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ):
+        nonlocal initial_cast_lookups
+        if "FROM cached_movie_cast" not in statement:
+            return
+        with lock:
+            if initial_cast_lookups >= 2:
+                return
+            initial_cast_lookups += 1
+        barrier.wait(timeout=10)
+
+    member = {
+        "id": 6384,
+        "name": "Keanu Reeves",
+        "profile_path": None,
+        "character": "Neo",
+        "order": 0,
+    }
+
+    def upsert():
+        with Session(engine) as session:
+            return cache_repo.CacheRepo(session).upsert_cast(603, [member], 15)
+
+    event.listen(engine, "before_cursor_execute", synchronize_missing_cast_lookups)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _index: upsert(), range(2)))
+    finally:
+        event.remove(engine, "before_cursor_execute", synchronize_missing_cast_lookups)
+
+    with Session(engine) as session:
+        cast_rows = session.exec(
+            select(CachedMovieCast).where(CachedMovieCast.movie_id == 603)
+        ).all()
+
+    assert all(result[0]["actor_id"] == 6384 for result in results)
+    assert len(cast_rows) == 1
 
 
 async def test_actor_credits_upsert_movie_stubs_without_marking_cast_fetched(config_dir):

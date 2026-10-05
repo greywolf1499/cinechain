@@ -14,19 +14,26 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.db import get_session
 from app.main import app
+from app.models.cache import CachedMovie
+from app.models.run import RunStep
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 
 
 @pytest.fixture()
-def client(config_dir):
+def db_engine(config_dir):
     engine = create_engine(
         f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
     )
     SQLModel.metadata.create_all(engine)
+    yield engine
+    engine.dispose()
 
+
+@pytest.fixture()
+def client(db_engine):
     def override_get_session():
-        with Session(engine) as session:
+        with Session(db_engine) as session:
             yield session
 
     app.dependency_overrides[get_session] = override_get_session
@@ -132,6 +139,71 @@ def test_adding_step_denormalizes_metadata_and_sets_logger(client):
     assert step["movie_release_year"] == 1999
     assert step["movie_poster_path"] == "/poster.jpg"
     assert step["logged_by_user_id"] == alice_id
+
+
+@pytest.mark.parametrize("as_seed", [False, True], ids=["logged-step", "run-seed"])
+def test_logging_stub_movie_hydrates_country(client, db_engine, as_seed):
+    _register_and_login(client, "alice")
+    with Session(db_engine) as session:
+        session.add(CachedMovie(tmdb_id=603, title="Matrix stub"))
+        session.commit()
+
+    with respx.mock:
+        movie_route = _mock_movie(603, "The Matrix")
+        if as_seed:
+            response = client.post(
+                "/api/runs",
+                json={
+                    "name": "Seed run",
+                    "game_type": "cinechain",
+                    "seed_movie_id": 603,
+                    "participant_user_ids": [],
+                },
+            )
+            steps = response.json().get("steps", [])
+        else:
+            run_id = client.post(
+                "/api/runs", json={"name": "Run", "participant_user_ids": []}
+            ).json()["id"]
+            response = client.post(
+                f"/api/runs/{run_id}/steps", json={"movie_id": 603}
+            )
+            steps = [response.json()]
+
+    assert response.status_code == 201
+    assert len(steps) == 1
+    assert steps[0]["movie_title"] == "The Matrix"
+    assert steps[0]["movie_release_year"] == 1999
+    assert steps[0]["movie_origin_country"] == '["US"]'
+    assert movie_route.call_count == 1
+
+
+def test_get_run_heals_missing_step_country_from_cache(client, db_engine):
+    _register_and_login(client, "alice")
+    run_id = client.post(
+        "/api/runs", json={"name": "Run", "participant_user_ids": []}
+    ).json()["id"]
+    with respx.mock:
+        _mock_movie(603, "The Matrix")
+        step = client.post(
+            f"/api/runs/{run_id}/steps", json={"movie_id": 603}
+        ).json()
+
+    with Session(db_engine) as session:
+        stored_step = session.get(RunStep, step["id"])
+        assert stored_step is not None
+        stored_step.movie_origin_country = None
+        session.add(stored_step)
+        session.commit()
+
+    response = client.get(f"/api/runs/{run_id}")
+    assert response.status_code == 200
+    assert response.json()["steps"][0]["movie_origin_country"] == '["US"]'
+
+    with Session(db_engine) as session:
+        healed_step = session.get(RunStep, step["id"])
+        assert healed_step is not None
+        assert healed_step.movie_origin_country == '["US"]'
 
 
 def test_deleting_run_cascades(client):

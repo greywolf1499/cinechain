@@ -7,7 +7,7 @@ import { activeModifierCount, clearModifiers, supportsModifiers } from "../lib/m
 import type { EngineMeta, RulesConfig } from "../types/api";
 
 // Cast-graph classics first, then the rule-based modes, then the trackers.
-const MODE_ORDER = [
+export const MODE_ORDER = [
   "cinechain",
   "auteur_relay",
   "crew_craft",
@@ -43,6 +43,8 @@ export default function GameModePicker({
   onChange,
   rules,
   onRulesChange,
+  showModifierDrawer = true,
+  onAdvance,
 }: {
   engines: EngineMeta[] | undefined;
   value: string;
@@ -50,6 +52,9 @@ export default function GameModePicker({
   rules: RulesConfig;
   /** A modifier was changed on `gameType`'s card (which is now the selected mode). */
   onRulesChange: (gameType: string, rules: RulesConfig) => void;
+  /** Hide the legacy inline drawer when modifiers are presented elsewhere. */
+  showModifierDrawer?: boolean;
+  onAdvance?: (gameType: string) => void;
 }) {
   const [openDrawer, setOpenDrawer] = useState<string | null>(null);
   const modes = [
@@ -65,7 +70,7 @@ export default function GameModePicker({
         const Icon = style.icon;
         const selected = mode.game_type === value;
         const capabilities = engines ? mode.capabilities : undefined;
-        const customizable = supportsModifiers(mode.game_type, capabilities);
+        const customizable = showModifierDrawer && supportsModifiers(mode.game_type, capabilities);
         const modeRules = selected ? rules : clearModifiers(rules);
         const activeCount = selected ? activeModifierCount(mode.game_type, rules) : 0;
         const drawerOpen = customizable && openDrawer === mode.game_type;
@@ -75,7 +80,9 @@ export default function GameModePicker({
             className={cn(
               "relative flex flex-col overflow-hidden rounded-xl border bg-app-bg text-left transition-all",
               drawerOpen && "sm:col-span-2 lg:col-span-3",
-              selected
+              mode.unavailable_reason
+                ? "border-amber-700/50 opacity-55"
+                : selected
                 ? cn("bg-app-surface", style.ring)
                 : "border-app-border hover:-translate-y-0.5 hover:border-zinc-600",
             )}
@@ -85,6 +92,10 @@ export default function GameModePicker({
               role="radio"
               aria-checked={selected}
               onClick={() => onChange(mode.game_type)}
+              onDoubleClick={() => onAdvance?.(mode.game_type)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onAdvance?.(mode.game_type);
+              }}
               className="group flex flex-1 flex-col gap-2 p-3.5 text-left"
             >
               <div className="flex items-start justify-between gap-2">
@@ -103,6 +114,11 @@ export default function GameModePicker({
               </div>
               {mode.description && (
                 <p className="line-clamp-4 text-[11px] leading-relaxed text-zinc-500">{mode.description}</p>
+              )}
+              {mode.unavailable_reason && (
+                <span className="w-fit rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-200">
+                  Needs {mode.requires?.join(", ") || "configuration"}
+                </span>
               )}
               {style.progression && (
                 <ol

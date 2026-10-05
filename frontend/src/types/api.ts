@@ -380,6 +380,8 @@ export interface EngineMeta {
 	display_name: string;
 	description: string;
 	capabilities: string[];
+	requires?: string[];
+	unavailable_reason?: string | null;
 }
 
 /** How two films are linked. `kind: "director"` reuses the shape: actor_id/actor_name hold the director. */
@@ -617,6 +619,8 @@ export interface EngineMeta {
 	display_name: string;
 	description: string;
 	capabilities: string[];
+	requires?: string[];
+	unavailable_reason?: string | null;
 }
 
 // --- discovery (schemas/discovery.py, Phase 13) ---

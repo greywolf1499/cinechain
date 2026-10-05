@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlmodel import col, select
 
@@ -116,6 +116,7 @@ def winning_team(scores: dict[str, int], rules: dict | None) -> str | None:
 
 class RottenTomatoesSplitEngine(TrackerEngine):
     game_type = RT_SPLIT
+    requires: ClassVar[list[str]] = ["omdb"]
     display_name = "The Rotten Tomatoes Split"
     description = (
         "Critics vs audiences: watch films the Tomatometer and the crowd disagree about, rate "

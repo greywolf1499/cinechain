@@ -25,6 +25,7 @@ import type { RulesConfig } from "../types/api";
 /** Visual identity for a game mode's card. Classes are spelled out in full so Tailwind keeps them. */
 export interface GameModeStyle {
   icon: LucideIcon;
+  category: ModeCategory;
   /** One-line hook shown under the name. */
   tagline: string;
   /** Short chips: how films link in this mode. */
@@ -37,9 +38,17 @@ export interface GameModeStyle {
   text: string;
 }
 
+export type ModeCategory =
+  | "Cast Chains"
+  | "Rule Chains"
+  | "Versus/Co-op"
+  | "Survival"
+  | "Trackers & Tournaments";
+
 export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   cinechain: {
     icon: Network,
+    category: "Cast Chains",
     tagline: "Six Degrees of Kevin Bacon",
     tags: ["Shared cast"],
     bubble: "bg-amber-500/15 text-amber-300",
@@ -48,6 +57,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   auteur_relay: {
     icon: Clapperboard,
+    category: "Cast Chains",
     tagline: "Actor, director, actor, director...",
     tags: ["Shared cast", "Shared director"],
     bubble: "bg-orange-500/15 text-orange-300",
@@ -56,6 +66,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   meet_in_the_middle: {
     icon: Combine,
+    category: "Versus/Co-op",
     tagline: "Two partners, one tunnel",
     tags: ["Shared cast", "Co-op", "Two seeds"],
     bubble: "bg-cyan-500/15 text-cyan-300",
@@ -64,6 +75,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   genre_pendulum: {
     icon: Drama,
+    category: "Rule Chains",
     tagline: "The genre swings as you go",
     tags: ["Any film", "Genre cycle", "Genre overlap"],
     bubble: "bg-red-500/15 text-red-300",
@@ -72,6 +84,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   crew_craft: {
     icon: SwatchBook,
+    category: "Cast Chains",
     tagline: "Follow the craft, not just the cast",
     tags: ["Cast or crew", "Composer", "Cinematographer", "Writer", "Director"],
     bubble: "bg-fuchsia-500/15 text-fuchsia-300",
@@ -80,6 +93,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   tug_of_war: {
     icon: Swords,
+    category: "Versus/Co-op",
     tagline: "Pull the rope your way",
     tags: ["Shared cast", "Two teams", "Era or geography"],
     bubble: "bg-lime-500/15 text-lime-300",
@@ -88,6 +102,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   canon_island: {
     icon: Landmark,
+    category: "Cast Chains",
     tagline: "Stay on the canon",
     tags: ["Shared cast", "One curated list"],
     bubble: "bg-emerald-500/15 text-emerald-300",
@@ -96,6 +111,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   decade_sieve: {
     icon: CalendarRange,
+    category: "Trackers & Tournaments",
     tagline: "One decade, no escape",
     tags: ["Any film", "One decade"],
     bubble: "bg-sky-500/15 text-sky-300",
@@ -104,6 +120,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   roulette: {
     icon: Dices,
+    category: "Trackers & Tournaments",
     tagline: "Let the wheel decide",
     tags: ["Random pick"],
     bubble: "bg-pink-500/15 text-pink-300",
@@ -112,6 +129,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   chrono_climb: {
     icon: Hourglass,
+    category: "Rule Chains",
     tagline: "Climb or descend through time",
     tags: ["Any film", "Release year"],
     bubble: "bg-violet-500/15 text-violet-300",
@@ -120,6 +138,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   historical_time_travel: {
     icon: History,
+    category: "Rule Chains",
     tagline: "Travel through the eras stories are set in",
     tags: ["Any film", "Setting year", "Forward / Backward"],
     bubble: "bg-blue-500/15 text-blue-300",
@@ -128,6 +147,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   world_passport: {
     icon: Globe2,
+    category: "Rule Chains",
     tagline: "A new country every film",
     tags: ["Any film", "Country"],
     bubble: "bg-teal-500/15 text-teal-300",
@@ -136,6 +156,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   rabbit_hole: {
     icon: Skull,
+    category: "Survival",
     tagline: "Descend. Survive. Don't blink.",
     tags: ["Shared cast", "3 lives", "Rogue-like"],
     progression: ["Freefall", "Pre-2000", "Non-English", "Under 100 min", "B-movies"],
@@ -145,6 +166,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   march_madness: {
     icon: Trophy,
+    category: "Trackers & Tournaments",
     tagline: "16 films enter, one is crowned",
     tags: ["Tournament", "Watchlist", "Partner voting"],
     progression: ["Round of 16", "Quarters", "Semis", "Finals", "Champion"],
@@ -154,6 +176,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   method_actor: {
     icon: VenetianMask,
+    category: "Trackers & Tournaments",
     tagline: "One career, in order",
     tags: ["One actor", "Chronological", "Milestones"],
     progression: ["🐣 Debut", "🚀 Breakout", "🏆 Prestige Peak", "👑 Resurgence"],
@@ -163,6 +186,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   auteur_marathon: {
     icon: Clapperboard,
+    category: "Trackers & Tournaments",
     tagline: "One director, every feature",
     tags: ["One director", "Release order", "Filmography"],
     progression: ["🎬 First Feature", "🎞️ The Middle Years", "🏁 Final Film"],
@@ -172,6 +196,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   regional_deep_dive: {
     icon: Compass,
+    category: "Trackers & Tournaments",
     tagline: "Conquer one corner of the canon",
     tags: ["Canon list", "Country", "Decade"],
     progression: ["🧭 Pick a Slice", "🗺️ Cross Off the Board", "🚩 Conquer It"],
@@ -181,6 +206,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   rt_split: {
     icon: Popcorn,
+    category: "Versus/Co-op",
     tagline: "🍅 Critics vs 🍿 Audience",
     tags: ["Tomatometer split", "Head to head", "Household rating"],
     progression: ["🍅 Critic points", "🍿 Audience points", "🏆 First to 3"],
@@ -190,6 +216,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   aesthetic_gradient: {
     icon: Palette,
+    category: "Rule Chains",
     tagline: "Fade poster to poster",
     tags: ["Any film", "Poster colour"],
     bubble: "bg-rose-500/15 text-rose-300",
@@ -198,6 +225,7 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
   },
   semantic_trope: {
     icon: Sparkles,
+    category: "Rule Chains",
     tagline: "Follow the plot, not the cast",
     tags: ["Any film", "Plot similarity"],
     bubble: "bg-indigo-500/15 text-indigo-300",
@@ -208,12 +236,21 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
 
 export const FALLBACK_MODE_STYLE: GameModeStyle = {
   icon: Compass,
+  category: "Cast Chains",
   tagline: "A custom challenge",
   tags: [],
   bubble: "bg-zinc-500/15 text-zinc-300",
   ring: "border-zinc-400 shadow-[0_0_0_1px_rgba(161,161,170,0.6)]",
   text: "text-zinc-300",
 };
+
+export const MODE_CATEGORIES: ModeCategory[] = [
+  "Cast Chains",
+  "Rule Chains",
+  "Versus/Co-op",
+  "Survival",
+  "Trackers & Tournaments",
+];
 
 export function gameModeStyle(gameType: string): GameModeStyle {
   return GAME_MODE_STYLES[gameType] ?? FALLBACK_MODE_STYLE;

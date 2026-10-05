@@ -1,0 +1,212 @@
+import { useMemo, useReducer } from "react";
+import { AUTEUR_MARATHON } from "../../lib/auteurTrack";
+import { BRACKET_SIZE, MARCH_MADNESS } from "../../lib/bracket";
+import { NO_BOUNTY_MODES } from "../../lib/bounties";
+import { METHOD_ACTOR } from "../../lib/careerTrack";
+import { REGIONAL_DEEP_DIVE } from "../../lib/expedition";
+import { usesCastLinks } from "../../lib/gameModes";
+import { DEFAULT_GENRE_CYCLE, DEFAULT_SWING_FREQUENCY, GENRE_PENDULUM } from "../../lib/pendulum";
+import { clearModifiers, modifierPayload } from "../../lib/modifiers";
+import { DEFAULT_TARGET_POINTS, RT_SPLIT } from "../../lib/splitScore";
+import { DEFAULT_TARGET_LEAD, TUG_OF_WAR } from "../../lib/tugOfWar";
+import { MEET_IN_THE_MIDDLE } from "../../lib/tunnel";
+import { RULE_PRESETS } from "../RulesetFields";
+import { parseRawRules, RAW_RULES_EXAMPLE } from "../RawRulesEditor";
+import { TRACKER_RULES } from "./shared";
+import type { CuratedListSummary, EngineMeta, MovieSummary, PersonSummary, RawRulesConfig, RulesConfig, TugDimension } from "../../types/api";
+
+export interface RunDraft {
+  name: string;
+  gameType: string;
+  participantIds: string[];
+  seedMovie: MovieSummary | null;
+  tailSeedMovie: MovieSummary | null;
+  rules: RulesConfig;
+  canonListId: string;
+  targetDecade: number;
+  tugDimension: TugDimension;
+  tugLead: number;
+  genreCycle: string[];
+  swingFrequency: number;
+  bracketFilms: MovieSummary[];
+  actor: PersonSummary | null;
+  director: PersonSummary | null;
+  diveListId: string;
+  diveCountry: string;
+  diveDecade: string;
+  bountyBoard: boolean;
+  splitTarget: number;
+  rawMode: boolean;
+  rawText: string;
+}
+
+type DraftAction = { type: "patch"; changes: Partial<RunDraft> } | { type: "reset" };
+
+export function initialDraft(): RunDraft {
+  return {
+    name: "",
+    gameType: "cinechain",
+    participantIds: [],
+    seedMovie: null,
+    tailSeedMovie: null,
+    rules: RULE_PRESETS.standard,
+    canonListId: "",
+    targetDecade: 1970,
+    tugDimension: "era",
+    tugLead: DEFAULT_TARGET_LEAD,
+    genreCycle: [...DEFAULT_GENRE_CYCLE],
+    swingFrequency: DEFAULT_SWING_FREQUENCY,
+    bracketFilms: [],
+    actor: null,
+    director: null,
+    diveListId: "",
+    diveCountry: "",
+    diveDecade: "",
+    bountyBoard: false,
+    splitTarget: DEFAULT_TARGET_POINTS,
+    rawMode: false,
+    rawText: "",
+  };
+}
+
+function reducer(state: RunDraft, action: DraftAction): RunDraft {
+  if (action.type === "reset") return initialDraft();
+  if (action.changes.gameType && action.changes.gameType !== state.gameType) {
+    return {
+      ...state,
+      ...action.changes,
+      rules: clearModifiers(state.rules),
+    };
+  }
+  return { ...state, ...action.changes };
+}
+
+export interface CreateRunPayload {
+  name: string;
+  game_type: string;
+  participant_user_ids: string[];
+  seed_movie_id: number | null;
+  tail_seed_movie_id: number | null;
+  rules_config: RulesConfig | RawRulesConfig;
+}
+
+export function useRunDraft(
+  engines: EngineMeta[] | undefined,
+  isAdmin: boolean,
+  curatedLists: CuratedListSummary[] | undefined,
+) {
+  const [draft, dispatch] = useReducer(reducer, undefined, initialDraft);
+  const engine = engines?.find((item) => item.game_type === draft.gameType);
+  const engineSupportsRaw =
+    engine?.capabilities.includes("json_rules") ?? draft.gameType === "cinechain";
+  const rawEnabled = draft.rawMode && isAdmin && engineSupportsRaw;
+  const rawParse = parseRawRules(draft.rawText);
+  const isTracker = !!engine && !engine.capabilities.includes("discover_candidates");
+  const isTunnel = draft.gameType === MEET_IN_THE_MIDDLE;
+  const needsCanonList = draft.gameType === "canon_island";
+  const needsDecade = draft.gameType === "decade_sieve";
+  const isBracket = draft.gameType === MARCH_MADNESS;
+  const isMethodActor = draft.gameType === METHOD_ACTOR;
+  const isAuteur = draft.gameType === AUTEUR_MARATHON;
+  const isDive = draft.gameType === REGIONAL_DEEP_DIVE;
+  const isSplit = draft.gameType === RT_SPLIT;
+  const canBounty = !NO_BOUNTY_MODES.has(draft.gameType);
+  const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
+  const castLinked = usesCastLinks(draft.gameType, draft.rules);
+  const formRules: RulesConfig = {
+    ...(isBracket ? { bracket_movie_ids: draft.bracketFilms.map((film) => film.tmdb_id) } : {}),
+    ...(isMethodActor && draft.actor ? { actor_id: draft.actor.person_id } : {}),
+    ...(isAuteur && draft.director ? { director_id: draft.director.person_id } : {}),
+    ...(isSplit ? { target_points: draft.splitTarget } : {}),
+    ...(draft.bountyBoard && canBounty ? { bounty_board: true } : {}),
+    ...(isDive
+      ? {
+          curated_list_id: draft.diveListId,
+          ...(draft.diveCountry ? { target_country: draft.diveCountry } : {}),
+          ...(draft.diveDecade ? { target_decade: Number(draft.diveDecade) } : {}),
+        }
+      : {}),
+    ...(isTracker ? TRACKER_RULES : clearModifiers(draft.rules)),
+    ...modifierPayload(draft.gameType, draft.rules, engine?.capabilities),
+    ...(needsCanonList ? { allowed_curated_list_id: draft.canonListId } : {}),
+    ...(needsDecade ? { target_decade: draft.targetDecade } : {}),
+    ...(draft.gameType === TUG_OF_WAR
+      ? { dimension: draft.tugDimension, target_lead: draft.tugLead }
+      : {}),
+    ...(draft.gameType === GENRE_PENDULUM
+      ? {
+          genre_cycle: draft.genreCycle.length > 0 ? draft.genreCycle : DEFAULT_GENRE_CYCLE,
+          swing_frequency: draft.swingFrequency,
+        }
+      : {}),
+  };
+  const sameSeeds = isTunnel && !!draft.seedMovie && draft.seedMovie.tmdb_id === draft.tailSeedMovie?.tmdb_id;
+  const missingMode =
+    (needsCanonList && !draft.canonListId) ||
+    (isTunnel && (!draft.seedMovie || !draft.tailSeedMovie)) ||
+    (isBracket && draft.bracketFilms.length !== BRACKET_SIZE) ||
+    (isMethodActor && !draft.actor) ||
+    (isAuteur && !draft.director) ||
+    (isDive && (!draft.diveListId || (!draft.diveCountry && !draft.diveDecade)));
+
+  const blockers = useMemo(() => {
+    const messages: string[] = [];
+    if (!draft.name.trim()) messages.push("Enter a run name.");
+    if (needsCanonList && !draft.canonListId) messages.push("Choose a canon list.");
+    if (isTunnel && !draft.seedMovie) messages.push("Choose Partner A's starting film.");
+    if (isTunnel && !draft.tailSeedMovie) messages.push("Choose Partner B's starting film.");
+    if (sameSeeds) messages.push("Partners need different starting films.");
+    if (isBracket && draft.bracketFilms.length !== BRACKET_SIZE) {
+      messages.push(`Pick ${BRACKET_SIZE} bracket films (${draft.bracketFilms.length}/${BRACKET_SIZE}).`);
+    }
+    if (isMethodActor && !draft.actor) messages.push("Choose an actor.");
+    if (isAuteur && !draft.director) messages.push("Choose a director.");
+    if (isDive && !draft.diveListId) messages.push("Choose a canon list to slice.");
+    if (isDive && !draft.diveCountry && !draft.diveDecade) {
+      messages.push("Choose a country, a decade, or both for the slice.");
+    }
+    if (rawEnabled && rawParse.error) messages.push(`Fix the raw rules JSON: ${rawParse.error}`);
+    return messages;
+  }, [draft, isAuteur, isBracket, isDive, isMethodActor, isTunnel, needsCanonList, rawEnabled, rawParse.error, sameSeeds]);
+
+  function buildPayload(): CreateRunPayload {
+    const rules = rawEnabled && rawParse.value ? rawParse.value : formRules;
+    return {
+      name: draft.name.trim(),
+      game_type: draft.gameType,
+      participant_user_ids: draft.participantIds,
+      seed_movie_id: draft.seedMovie?.tmdb_id ?? null,
+      tail_seed_movie_id: isTunnel ? (draft.tailSeedMovie?.tmdb_id ?? null) : null,
+      rules_config: rules,
+    };
+  }
+
+  function toggleRawMode() {
+    if (!draft.rawMode && !draft.rawText.trim()) {
+      dispatch({ type: "patch", changes: { rawText: JSON.stringify({ ...RAW_RULES_EXAMPLE, ...formRules }, null, 2) } });
+    }
+    dispatch({ type: "patch", changes: { rawMode: !draft.rawMode } });
+  }
+
+  return {
+    draft,
+    dispatch,
+    update: (changes: Partial<RunDraft>) => dispatch({ type: "patch", changes }),
+    reset: () => dispatch({ type: "reset" }),
+    engine,
+    engineSupportsRaw,
+    rawEnabled,
+    rawParse,
+    isTracker,
+    isTunnel,
+    canBounty,
+    islandLists,
+    castLinked,
+    formRules,
+    blockers,
+    missingMode,
+    sameSeeds,
+    buildPayload,
+    toggleRawMode,
+  };
+}

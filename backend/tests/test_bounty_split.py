@@ -9,6 +9,7 @@ from sqlmodel import Session
 
 from app.models.cache import CachedMovie, CachedMovieRating
 from app.models.run import Run
+from app.models.system import SystemSetting
 from app.services import bounties
 from app.services.bounties import BOUNTIES, MovieFacts
 from tests.test_graph_mutators import TMDB_BASE, client, db_engine
@@ -287,6 +288,17 @@ def rate(client, run_id, movie_id, household, **extra):
 def test_the_engine_is_registered(client):
     engines = {e["game_type"]: e for e in client.get("/api/engines").json()}
     assert engines["rt_split"]["display_name"] == "The Rotten Tomatoes Split"
+    assert engines["rt_split"]["requires"] == ["omdb"]
+    assert "OMDb" in engines["rt_split"]["unavailable_reason"]
+
+
+def test_omdb_configuration_makes_rt_split_available(client, db_engine):
+    with Session(db_engine) as session:
+        session.add(SystemSetting(key="omdb_api_key", value="configured"))
+        session.commit()
+
+    engines = {engine["game_type"]: engine for engine in client.get("/api/engines").json()}
+    assert engines["rt_split"]["unavailable_reason"] is None
 
 
 def test_a_new_split_run_targets_three_points(client):

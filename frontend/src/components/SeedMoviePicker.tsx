@@ -12,10 +12,13 @@ export default function SeedMoviePicker({
   value,
   onChange,
   gameType,
+  recommendFirst = false,
 }: {
   value: MovieSummary | null;
   onChange: (movie: MovieSummary | null) => void;
   gameType: string;
+  /** Give the recommendation action primary placement in large seed previews. */
+  recommendFirst?: boolean;
 }) {
   const [reason, setReason] = useState<string | null>(null);
   const [emptyCache, setEmptyCache] = useState(false);
@@ -83,28 +86,44 @@ export default function SeedMoviePicker({
     );
   }
 
+  const search = (
+    <MovieSearchAutocomplete
+      onSelect={(movie) => {
+        setReason(null);
+        onChange(movie);
+      }}
+      placeholder="Search for a starting film..."
+    />
+  );
+  const recommend = (
+    <button
+      type="button"
+      onClick={() => roll.mutate()}
+      disabled={roll.isPending}
+      className={`flex min-h-[38px] items-center justify-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors disabled:opacity-60 ${
+        recommendFirst
+          ? "border border-accent bg-accent text-zinc-950 hover:bg-accent-strong"
+          : "shrink-0 border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20"
+      }`}
+    >
+      {roll.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+      🎲 Recommend Seed Movie
+    </button>
+  );
+
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <MovieSearchAutocomplete
-            onSelect={(movie) => {
-              setReason(null);
-              onChange(movie);
-            }}
-            placeholder="Search for a starting film..."
-          />
+      {recommendFirst ? (
+        <>
+          {recommend}
+          <div className="min-w-0">{search}</div>
+        </>
+      ) : (
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">{search}</div>
+          {recommend}
         </div>
-        <button
-          type="button"
-          onClick={() => roll.mutate()}
-          disabled={roll.isPending}
-          className="flex h-[38px] shrink-0 items-center gap-1.5 rounded-md border border-accent/40 bg-accent/10 px-3 text-xs font-semibold text-accent transition-colors hover:bg-accent/20 disabled:opacity-60"
-        >
-          {roll.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          🎲 Recommend Seed Movie
-        </button>
-      </div>
+      )}
       {(emptyCache || roll.isError) && (
         <p role="alert" className="text-[11px] text-amber-400">
           {roll.isError

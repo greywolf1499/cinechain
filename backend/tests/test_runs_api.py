@@ -106,6 +106,40 @@ def test_create_run_with_participants(client):
     assert body["steps"] == []
 
 
+def test_tug_team_b_uses_participant_submission_order(client):
+    _register_and_login(client, "alice")
+    client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "display_name": "Bob"},
+    )
+    client.post(
+        "/api/auth/register",
+        json={"username": "carol", "password": "password123", "display_name": "Carol"},
+    )
+    users = {user["username"]: user["id"] for user in client.get("/api/users").json()}
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "name": "Ordered Tug",
+            "game_type": "tug_of_war",
+            "participant_user_ids": [users["carol"], users["bob"]],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["rules_config"]["tug_players"] == {
+        "team_a": users["alice"],
+        "team_b": users["carol"],
+    }
+    assert [participant["user_id"] for participant in body["participants"]] == [
+        users["alice"],
+        users["carol"],
+        users["bob"],
+    ]
+
+
 def test_non_participant_gets_404(client):
     _register_and_login(client, "alice")
     client.post(

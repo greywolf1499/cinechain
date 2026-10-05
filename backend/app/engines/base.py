@@ -51,6 +51,7 @@ class BaseChallengeEngine(ABC):
     display_name: str
     description: str
     capabilities: ClassVar[list[str]]
+    requires: ClassVar[list[str]] = []
     # Graph-style engines honour opt-in win/fail conditions in `rules_config`;
     # rigid trackers leave this False and ignore them.
     supports_json_rules: ClassVar[bool] = False

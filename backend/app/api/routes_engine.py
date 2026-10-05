@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_tmdb_client
+from app.config import get_settings
 from app.db import get_session
 from app.engines.registry import ENGINE_REGISTRY, get_engine
 from app.engines.trackers import RouletteEngine, SpinFilters
@@ -50,6 +51,8 @@ class EngineMeta(BaseModel):
     display_name: str
     description: str
     capabilities: list[str]
+    requires: list[str]
+    unavailable_reason: str | None = None
 
 
 class ValidateRequest(BaseModel):
@@ -65,13 +68,30 @@ class BridgeRequest(BaseModel):
 
 
 @router.get("/engines", response_model=list[EngineMeta])
-def list_engines(_current_user: User = Depends(get_current_user)) -> list[EngineMeta]:
+def list_engines(
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
+) -> list[EngineMeta]:
+    base = get_settings()
+    overrides = settings_repo.get_overrides(session)
     return [
         EngineMeta(
             game_type=cls.game_type,
             display_name=cls.display_name,
             description=cls.description,
             capabilities=cls.capabilities,
+            requires=cls.requires,
+            unavailable_reason=(
+                "Requires OMDb integration. Ask an admin to configure it in Settings → Integrations."
+                if "omdb" in cls.requires
+                and not (overrides.get("omdb_api_key") or base.omdb_api_key)
+                else (
+                    "Requires an enabled LLM integration. Ask an admin to configure it in Settings → Integrations."
+                    if "llm" in cls.requires
+                    and (overrides.get("llm_provider") or base.llm_provider) == "off"
+                    else None
+                )
+            ),
         )
         for cls in ENGINE_REGISTRY.values()
     ]

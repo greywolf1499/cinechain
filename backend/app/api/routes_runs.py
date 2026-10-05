@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 
@@ -525,9 +527,17 @@ async def create_run(
     session.commit()
     session.refresh(run)
 
-    for user_id in participant_ids:
+    participant_joined_at = utcnow()
+    for index, user_id in enumerate(participant_ids):
         role = "owner" if user_id == current_user.id else "member"
-        session.add(RunParticipant(run_id=run.id, user_id=user_id, role=role))
+        session.add(
+            RunParticipant(
+                run_id=run.id,
+                user_id=user_id,
+                role=role,
+                joined_at=participant_joined_at + timedelta(microseconds=index),
+            )
+        )
     session.commit()
 
     seeds = [(payload.seed_movie_id, SIDE_HEAD), (payload.tail_seed_movie_id, SIDE_TAIL)]

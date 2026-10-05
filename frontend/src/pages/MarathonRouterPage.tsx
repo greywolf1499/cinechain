@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Compass, Loader2, Search, X, Zap } from "lucide-react";
 import PageHeading from "../components/PageHeading";
 import MoviePoster from "../components/MoviePoster";
+import ClampedLabel from "../components/ui/ClampedLabel";
+import ExpandableText from "../components/ui/ExpandableText";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
 import {
@@ -413,8 +415,8 @@ function OptimizedSequence({
                 </span>
                 <MoviePoster path={film.poster_path} title={film.title} className="w-16 shrink-0" />
                 <div className="min-w-0">
-                  <h3 className="truncate text-sm font-semibold text-zinc-100">
-                    {film.title}
+                  <h3 className="min-w-0 text-sm font-semibold text-zinc-100">
+                    <ClampedLabel text={film.title} lines={1} as="span" />
                     {film.year ? <span className="font-normal text-zinc-500"> ({film.year})</span> : null}
                   </h3>
                   <p className="mt-0.5 text-xs text-zinc-400">
@@ -426,7 +428,13 @@ function OptimizedSequence({
                       .filter(Boolean)
                       .join("  \u00B7  ")}
                   </p>
-                  {film.overview && <p className="mt-1 line-clamp-2 text-xs text-zinc-500">{film.overview}</p>}
+                  {film.overview && (
+                    <ExpandableText
+                      text={film.overview}
+                      lines={2}
+                      className="mt-1 text-xs text-zinc-500"
+                    />
+                  )}
                 </div>
               </article>
               {transition && (

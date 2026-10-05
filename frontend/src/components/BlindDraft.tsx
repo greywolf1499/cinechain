@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Clock, Dices, EyeOff, Loader2, Minus, Plus, Sparkles, ThumbsUp, Ticket } from "lucide-react";
 import MoviePoster from "./MoviePoster";
+import ExpandableText from "./ui/ExpandableText";
 import { cn } from "../lib/cn";
 import type { RouletteMovie } from "../types/api";
 
@@ -182,15 +183,17 @@ export default function BlindDraft({
                   </p>
                 )}
                 {logline && (
-                  <p
+                  <ExpandableText
+                    text={logline}
+                    lines={4}
+                    expandMode="dialog"
+                    dialogTitle="Film teaser"
+                    lead={aiTeaser ? <span aria-hidden>✨</span> : undefined}
                     className={cn(
-                      "mt-1 line-clamp-4 text-[11px] leading-relaxed",
+                      "mt-1 text-[11px] leading-relaxed",
                       aiTeaser ? "italic text-fuchsia-200/90" : "text-zinc-500",
                     )}
-                  >
-                    {aiTeaser && <span aria-hidden>✨ </span>}
-                    {logline}
-                  </p>
+                  />
                 )}
               </div>
 

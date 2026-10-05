@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, Loader2, Swords, Trash2 } from "lucide-react";
 import MoviePoster from "./MoviePoster";
+import ClampedLabel from "./ui/ClampedLabel";
 import PitchButton from "./PitchButton";
 import { cn } from "../lib/cn";
 import { useTunnelState } from "../lib/queries";
@@ -125,7 +126,12 @@ function TunnelCard({
     >
       <MoviePoster path={step.movie_poster_path} title={step.movie_title} className="w-full" />
       <div className="min-w-0">
-        <p className="line-clamp-2 text-[11px] font-medium leading-tight text-zinc-100">{step.movie_title}</p>
+        <ClampedLabel
+          text={step.movie_title}
+          lines={2}
+          as="p"
+          className="text-[11px] font-medium leading-tight text-zinc-100"
+        />
         <p className="text-[10px] text-zinc-500">{step.movie_release_year ?? "—"}</p>
       </div>
       <div className="flex flex-wrap items-center gap-1">

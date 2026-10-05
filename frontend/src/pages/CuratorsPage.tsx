@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { BadgeCheck, Compass, Loader2, Users } from "lucide-react";
 import Breadcrumbs from "../components/Breadcrumbs";
 import CuratorAvatar from "../components/CuratorAvatar";
+import ExpandableText from "../components/ui/ExpandableText";
 import EmptyState from "../components/EmptyState";
 import { SearchBox, SelectField } from "../components/ListControls";
 import PageHeading from "../components/PageHeading";
@@ -101,25 +102,37 @@ export default function CuratorsPage() {
           <>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {data.items.map((account) => (
-                <Link
+                <div
                   key={account.username}
-                  to={`/curators/${account.username}`}
                   className="flex items-start gap-3 rounded-xl border border-app-border bg-app-surface p-4 transition-colors hover:bg-app-surface-hover"
                 >
-                  <CuratorAvatar avatarUrl={account.avatar_url} />
+                  <Link
+                    to={`/curators/${account.username}`}
+                    aria-label={`View ${account.display_name?.trim() || account.username}'s curator profile`}
+                  >
+                    <CuratorAvatar avatarUrl={account.avatar_url} />
+                  </Link>
                   <div className="min-w-0 flex-1">
-                    <p className="flex items-center gap-1.5 text-sm font-semibold text-zinc-100">
-                      <span className="break-words">{account.display_name?.trim() || account.username}</span>
-                      {account.is_hq && <BadgeCheck className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="HQ" />}
-                    </p>
-                    <p className="text-[11px] text-zinc-500">
-                      {account.discovered_lists > 0
-                        ? `${account.discovered_lists} lists · ${account.enabled_lists} enabled`
-                        : "Lists not browsed yet"}
-                    </p>
-                    {account.bio && <p className="mt-1.5 line-clamp-2 break-words text-xs text-zinc-400">{account.bio}</p>}
+                    <Link to={`/curators/${account.username}`} className="block">
+                      <p className="flex items-center gap-1.5 text-sm font-semibold text-zinc-100">
+                        <span className="break-words">{account.display_name?.trim() || account.username}</span>
+                        {account.is_hq && <BadgeCheck className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="HQ" />}
+                      </p>
+                      <p className="text-[11px] text-zinc-500">
+                        {account.discovered_lists > 0
+                          ? `${account.discovered_lists} lists · ${account.enabled_lists} enabled`
+                          : "Lists not browsed yet"}
+                      </p>
+                    </Link>
+                    {account.bio && (
+                      <ExpandableText
+                        text={account.bio}
+                        lines={2}
+                        className="mt-1.5 text-xs text-zinc-400"
+                      />
+                    )}
                   </div>
-                </Link>
+                </div>
               ))}
             </div>
             <Pagination page={data.page} pages={data.pages} total={data.total} noun="curators" onPageChange={setPage} />

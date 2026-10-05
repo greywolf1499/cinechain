@@ -1,6 +1,7 @@
 import { ArrowRight, Clapperboard, Shuffle, User } from "lucide-react";
 import AcquisitionControl from "./AcquisitionControl";
 import MoviePoster from "./MoviePoster";
+import ClampedLabel from "./ui/ClampedLabel";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { cn } from "../lib/cn";
 import { profileUrl } from "../lib/tmdbImage";
@@ -78,9 +79,12 @@ export default function BridgePathView({
                 className="flex w-full min-w-0 flex-col items-center transition-opacity hover:opacity-80 disabled:cursor-default disabled:hover:opacity-100"
               >
                 <MoviePoster path={node.poster_path} title={node.title} className="w-28" />
-                <span className="mt-1.5 line-clamp-2 min-h-[2lh] w-full break-words text-xs font-medium leading-tight text-zinc-200">
-                  {node.title}
-                </span>
+                <ClampedLabel
+                  text={node.title}
+                  lines={2}
+                  as="span"
+                  className="mt-1.5 min-h-[2lh] w-full text-xs font-medium leading-tight text-zinc-200"
+                />
               </button>
               <p className="mt-0.5 h-4 text-[11px] text-zinc-500">{node.release_year ?? ""}</p>
               <div className="mt-1 flex min-h-5 flex-col items-center gap-1">
@@ -133,13 +137,17 @@ export default function BridgePathView({
                     <ArrowRight className="-ml-1 h-4 w-4 shrink-0" />
                   </div>
                   {connection && (
-                    <p
-                      title={connection.actor_name}
-                      className="line-clamp-2 w-full break-words text-center text-[11px] font-medium leading-tight text-zinc-400"
-                    >
-                      {connection.actor_name}
-                      {connection.kind === "director" && <span className="block text-[10px] text-accent">Director</span>}
-                    </p>
+                    <div className="w-full text-center">
+                      <ClampedLabel
+                        text={connection.actor_name}
+                        lines={2}
+                        as="p"
+                        className="text-[11px] font-medium leading-tight text-zinc-400"
+                      />
+                      {connection.kind === "director" && (
+                        <span className="block text-[10px] text-accent">Director</span>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

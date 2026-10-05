@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -45,6 +45,8 @@ import RoleBadge from "./RoleBadge";
 import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
 import { SIDE_LABELS } from "../lib/tunnel";
 import { tugEffectLabel, tugNextTeam } from "../lib/tugOfWar";
+import ExpandableText from "./ui/ExpandableText";
+import ClampedLabel from "./ui/ClampedLabel";
 import {
   useCanonBadgesBulk,
   useCreateStep,
@@ -73,6 +75,7 @@ import type {
 
 const CREW_CRAFT = "crew_craft";
 const SEMANTIC_TROPE = "semantic_trope";
+const DISCOVERY_PAGE_SIZE = 48;
 
 type CoStarMode = "or" | "and";
 type SortBy = "match" | "year" | "popularity" | "imdb" | "rt" | "tug";
@@ -185,6 +188,11 @@ export default function PickNextHub({
             : "Pick Next Movie"
       }
       widthClassName="max-w-5xl"
+      onEscape={() => {
+        if (stack.length <= 1) return false;
+        popScreen();
+        return true;
+      }}
     >
       <div className="flex flex-col gap-4">
         <div className="flex items-center gap-2 border-b border-app-border pb-3 text-xs">
@@ -301,7 +309,7 @@ function DiscoveryGrid({
   const [decadeKey, setDecadeKey] = useState(
     tugMode && rulesConfig.dimension === "era" ? (nextTeam === "team_a" ? "1970" : "2000") : "all",
   );
-  const defaultSort: SortBy = tugMode ? "tug" : castLinked ? "year" : "match";
+  const defaultSort: SortBy = tugMode ? "tug" : "match";
   const [sortBy, setSortBy] = useState<SortBy>(defaultSort);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
@@ -311,7 +319,23 @@ function DiscoveryGrid({
   const [underdog, setUnderdog] = useState(false);
   // Tagline Roulette masks every poster and title behind its tagline; only a page is shown at a time.
   const [roulette, setRoulette] = useState(false);
-  const [rouletteShown, setRouletteShown] = useState(ROULETTE_PAGE);
+  const [visibleCount, setVisibleCount] = useState(DISCOVERY_PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setVisibleCount(DISCOVERY_PAGE_SIZE);
+  }, [
+    chaser,
+    decadeKey,
+    genreId,
+    mode,
+    search,
+    selectedActorIds,
+    sortBy,
+    sortDir,
+    tropeFilter,
+    underdog,
+  ]);
 
   function clearFilters() {
     setChaser(false);
@@ -443,6 +467,22 @@ function DiscoveryGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidates, selectedActorIds, mode, genreId, decadeKey, tropeFilter, search, sortBy, sortDir, ratingsMap, underdog]);
 
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || visibleCount >= filtered.length || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((current) => Math.min(current + DISCOVERY_PAGE_SIZE, filtered.length));
+        }
+      },
+      { rootMargin: "240px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [filtered.length, visibleCount]);
+
   function toggleActor(actorId: number) {
     setSelectedActorIds((prev) => {
       const next = new Set(prev);
@@ -573,6 +613,8 @@ function DiscoveryGrid({
                 <img
                   src={profileUrl(person.profile_path) ?? undefined}
                   alt={person.name}
+                  loading="lazy"
+                  decoding="async"
                   className="h-10 w-10 rounded-full object-cover"
                 />
               ) : (
@@ -591,7 +633,12 @@ function DiscoveryGrid({
                   )}
                 </div>
               )}
-              <span className="line-clamp-2 text-[10px] leading-tight text-zinc-300">{person.name}</span>
+              <ClampedLabel
+                text={person.name}
+                lines={2}
+                as="span"
+                className="text-[10px] leading-tight text-zinc-300"
+              />
               {craftMode && (
                 <span className="text-[11px] leading-none" aria-hidden>
                   {person.roles.map((role) => ROLE_STYLES[role].emoji).join("")}
@@ -658,7 +705,7 @@ function DiscoveryGrid({
           onChange={(e) => setSortBy(e.target.value as SortBy)}
           className="rounded-md border border-app-border bg-app-bg px-2.5 py-2 text-sm text-zinc-200 focus:border-accent focus:outline-none"
         >
-          {!castLinked && <option value="match">Sort: Best match</option>}
+          <option value="match">Sort: Best match</option>
           <option value="year">Sort: Year</option>
           {tugMode && <option value="tug">Sort: Tug points</option>}
           <option value="popularity">Sort: Popularity</option>
@@ -703,7 +750,7 @@ function DiscoveryGrid({
           aria-pressed={roulette}
           onClick={() => {
             setRoulette((v) => !v);
-            setRouletteShown(ROULETTE_PAGE);
+            setVisibleCount(DISCOVERY_PAGE_SIZE);
           }}
           title="Hide the posters and titles: pick on the tagline alone"
           className={cn(
@@ -788,7 +835,7 @@ function DiscoveryGrid({
 
       {!isLoading && filtered.length > 0 && (
         <div className="grid grid-cols-2 items-stretch gap-3 sm:grid-cols-3 md:grid-cols-4">
-          {(roulette ? filtered.slice(0, rouletteShown) : filtered).map((candidate) => (
+          {filtered.slice(0, visibleCount).map((candidate) => (
             <CandidateCard
               key={candidate.movie_id}
               roulette={roulette}
@@ -835,13 +882,23 @@ function DiscoveryGrid({
         </div>
       )}
 
-      {roulette && !isLoading && filtered.length > rouletteShown && (
+      {!isLoading && visibleCount < filtered.length && (
+        <div ref={sentinelRef} className="h-1" aria-hidden />
+      )}
+
+      {!isLoading && visibleCount < filtered.length && (
         <button
           type="button"
-          onClick={() => setRouletteShown((n) => n + ROULETTE_PAGE)}
-          className="self-center rounded-md border border-fuchsia-400/50 px-3 py-1.5 text-xs font-semibold text-fuchsia-200 hover:bg-fuchsia-500/10"
+          onClick={() => setVisibleCount((count) => Math.min(count + DISCOVERY_PAGE_SIZE, filtered.length))}
+          className={cn(
+            "self-center rounded-md border px-3 py-1.5 text-xs font-semibold",
+            roulette
+              ? "border-fuchsia-400/50 text-fuchsia-200 hover:bg-fuchsia-500/10"
+              : "border-app-border text-zinc-300 hover:bg-app-surface-hover",
+          )}
         >
-          Spin {Math.min(ROULETTE_PAGE, filtered.length - rouletteShown)} more
+          {roulette ? "Spin" : "Show"} {Math.min(DISCOVERY_PAGE_SIZE, filtered.length - visibleCount)} more
+          {" "}({filtered.length - visibleCount} remaining)
         </button>
       )}
 
@@ -876,8 +933,6 @@ function DiscoveryGrid({
 }
 
 const FORK_OFFER_SIZE = 3;
-const ROULETTE_PAGE = 12;
-
 function CandidateCard({
   roulette = false,
   candidate,
@@ -982,7 +1037,12 @@ function CandidateCard({
           {masked ? (
             <p className="text-xs font-medium tracking-widest text-zinc-600">? ? ?</p>
           ) : (
-            <p className="line-clamp-2 text-xs font-medium text-zinc-100">{candidate.title}</p>
+            <ClampedLabel
+              text={candidate.title}
+              lines={2}
+              as="p"
+              className="text-xs font-medium text-zinc-100"
+            />
           )}
           <p className="text-[10px] text-zinc-500">{candidate.release_year ?? "—"}</p>
           <RatingBadges ratings={ratings} />
@@ -1274,6 +1334,8 @@ function ConnectionBadge({ connections }: { connections: DiscoveryConnection[] }
           <img
             src={profileUrl(connection.profile_path) ?? undefined}
             alt={connection.actor_name}
+            loading="lazy"
+            decoding="async"
             className="h-5 w-5 shrink-0 rounded-full object-cover"
           />
         ) : (
@@ -1445,9 +1507,12 @@ function MovieScreenView({
           {movie && (
             <>
               <MovieTagline tagline={movie.tagline} />
-              <p className="mt-2 line-clamp-3 text-xs text-zinc-500">
-                {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
-              </p>
+              <ExpandableText
+                text={movie.overview}
+                fallback={isHydrating ? "Fetching description..." : "No overview available."}
+                lines={4}
+                className="mt-2 text-xs text-zinc-500"
+              />
             </>
           )}
         </div>
@@ -1534,6 +1599,8 @@ function MovieScreenView({
                 <img
                   src={profileUrl(member.profile_path) ?? undefined}
                   alt={member.name}
+                  loading="lazy"
+                  decoding="async"
                   className="h-9 w-9 rounded-full object-cover"
                 />
               ) : (
@@ -1541,7 +1608,12 @@ function MovieScreenView({
                   <User className="h-4 w-4" />
                 </div>
               )}
-              <span className="line-clamp-2 text-[9px] leading-tight text-zinc-400">{member.name}</span>
+              <ClampedLabel
+                text={member.name}
+                lines={2}
+                as="span"
+                className="text-[9px] leading-tight text-zinc-400"
+              />
             </button>
           ))}
         </div>
@@ -1653,6 +1725,8 @@ function ActorScreenView({
           <img
             src={profileUrl(screen.profilePath) ?? undefined}
             alt={screen.actorName}
+            loading="lazy"
+            decoding="async"
             className="h-12 w-12 rounded-full object-cover"
           />
         ) : (
@@ -1707,7 +1781,12 @@ function ActorScreenView({
                   <OnServerBadge onServer={jellyfinStatus?.[String(movie.tmdb_id)]?.on_server} />
                 </div>
               </div>
-              <p className="line-clamp-2 text-[10px] font-medium text-zinc-200">{movie.title}</p>
+              <ClampedLabel
+                text={movie.title}
+                lines={2}
+                as="p"
+                className="text-[10px] font-medium text-zinc-200"
+              />
               <p className="text-[9px] text-zinc-500">{movie.release_year ?? "—"}</p>
             </button>
           ))}

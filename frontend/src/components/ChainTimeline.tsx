@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Check, Loader2, Pencil } from "lucide-react";
 import MoviePoster from "./MoviePoster";
+import ExpandableText from "./ui/ExpandableText";
+import ClampedLabel from "./ui/ClampedLabel";
 import LinkBonusBadges from "./LinkBonusBadges";
 import ChainLink from "./ChainLink";
 import ColorSwatch from "./ColorSwatch";
@@ -250,7 +252,12 @@ function StationRow({
           </div>
 
           <div className="min-w-0 flex-1">
-            <p className="line-clamp-2 text-sm font-medium text-zinc-100">{step.movie_title}</p>
+            <ClampedLabel
+              text={step.movie_title}
+              lines={2}
+              as="p"
+              className="text-sm font-medium text-zinc-100"
+            />
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
               <span>{step.movie_release_year ?? "—"}</span>
               {decade !== null && (
@@ -276,10 +283,6 @@ function StationRow({
               )}
             </div>
 
-            {step.user_notes && (
-              <p className="mt-1 line-clamp-2 text-[10px] italic text-zinc-500">“{step.user_notes}”</p>
-            )}
-
             <div className="mt-1">
               <CanonBadgeList badges={badges} />
             </div>
@@ -288,6 +291,14 @@ function StationRow({
             <LinkBonusBadges meta={step.transition_metadata} className="mt-1.5" />
           </div>
         </button>
+
+        {step.user_notes && (
+          <ExpandableText
+            text={`“${step.user_notes}”`}
+            lines={2}
+            className="mt-1 text-[10px] italic text-zinc-500"
+          />
+        )}
 
         {showEra && (
           <div className="flex items-center gap-2 rounded-md bg-violet-950/40 px-2.5 py-1.5">
@@ -354,4 +365,3 @@ function RuleFlags({ meta }: { meta: Record<string, unknown> | null }) {
     </div>
   );
 }
-

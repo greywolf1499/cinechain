@@ -31,6 +31,7 @@ export default function MoviePoster({
       src={url}
       alt={title}
       loading="lazy"
+      decoding="async"
       className={cn("aspect-[2/3] rounded-md object-cover", className)}
     />
   );

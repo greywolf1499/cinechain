@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Clock, Dices, EyeOff, Loader2, Sparkles, Star, Ticket } from "lucide-react";
 import BlindDraft, { type TeaserState } from "./BlindDraft";
+import ExpandableText from "./ui/ExpandableText";
 import MoviePoster from "./MoviePoster";
 import RouletteFilters, { EMPTY_FILTERS, filtersToParams, type RouletteFilterState } from "./RouletteFilters";
 import { ApiError, api } from "../lib/api";
@@ -258,9 +259,12 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
                 )}
               </div>
               {(pick.tagline || pick.overview) && (
-                <p className="mt-1.5 line-clamp-3 text-xs italic text-zinc-400">
-                  {pick.tagline || pick.overview}
-                </p>
+                <ExpandableText
+                  text={pick.overview}
+                  fallback={pick.tagline}
+                  lines={3}
+                  className="mt-1.5 text-xs italic text-zinc-400"
+                />
               )}
             </div>
           </div>

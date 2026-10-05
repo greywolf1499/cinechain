@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Loader2, Trophy, Vote } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
+import ExpandableText from "./ui/ExpandableText";
 import { cn } from "../lib/cn";
 import { ApiError } from "../lib/api";
 import { BRACKET_ROUNDS, isActiveMatchup } from "../lib/bracket";
@@ -251,10 +252,15 @@ function MatchupCard({
                     {film.runtime ? ` · ${film.runtime} min` : ""}
                   </p>
                 </div>
-                <p className="line-clamp-5 text-xs leading-relaxed text-zinc-400">
-                  {film.tagline ? <em className="mb-1 block text-zinc-300">{film.tagline}</em> : null}
-                  {film.overview || "No logline available."}
-                </p>
+                <ExpandableText
+                  text={film.overview}
+                  fallback="No logline available."
+                  lines={4}
+                  expandMode="dialog"
+                  dialogTitle={`${film.title} overview`}
+                  lead={film.tagline ? <em className="text-zinc-300">&ldquo;{film.tagline}&rdquo;</em> : undefined}
+                  className="text-xs leading-relaxed text-zinc-400"
+                />
                 {partners && (
                   <p className="text-center text-[11px] text-zinc-500" aria-label="Votes">
                     🗳️ {votes.length} vote{votes.length === 1 ? "" : "s"}

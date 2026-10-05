@@ -1,5 +1,6 @@
 import { Check, Loader2, Shuffle, X } from "lucide-react";
 import MoviePoster from "./MoviePoster";
+import ClampedLabel from "./ui/ClampedLabel";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { cn } from "../lib/cn";
 import type { JellyfinItemSummary, SwapCandidate, SwapMode } from "../types/api";
@@ -58,7 +59,13 @@ export default function BridgeSwapPanel({
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-sm font-medium text-zinc-200">
             <Shuffle className="h-4 w-4 text-accent" />
-            Swap <span className="truncate text-accent">{movieTitle}</span>
+            Swap{" "}
+            <ClampedLabel
+              text={movieTitle}
+              lines={1}
+              as="span"
+              className="max-w-40 text-accent"
+            />
           </p>
           <p className="mt-0.5 text-xs text-zinc-500">
             {state.tab === "same"
@@ -134,9 +141,12 @@ export default function BridgeSwapPanel({
                       className="w-12 shrink-0"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="line-clamp-2 text-sm font-medium leading-tight text-zinc-100">
-                        {candidate.node.title}
-                      </p>
+                      <ClampedLabel
+                        text={candidate.node.title}
+                        lines={2}
+                        as="p"
+                        className="text-sm font-medium leading-tight text-zinc-100"
+                      />
                       <p className="text-xs text-zinc-500">{candidate.node.release_year ?? "—"}</p>
                       {state.tab === "broad" && (
                         <p

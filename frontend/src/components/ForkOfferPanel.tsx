@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Loader2, Star, Undo2 } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
+import ExpandableText from "./ui/ExpandableText";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
 import {
@@ -254,9 +255,12 @@ function OfferCard({
           {actorName && <> &middot; via {actorName}</>}
         </p>
       </div>
-      <p className={cn("line-clamp-4 text-xs leading-relaxed text-zinc-400", isHydrating && "animate-pulse")}>
-        {movie?.overview || (isHydrating ? "Fetching the plot..." : "No overview available.")}
-      </p>
+      <ExpandableText
+        text={movie?.overview}
+        fallback={isHydrating ? "Fetching the plot..." : "No overview available."}
+        lines={4}
+        className={cn("text-xs leading-relaxed text-zinc-400", isHydrating && "animate-pulse")}
+      />
       {advice && (
         <p className="rounded-md border border-fuchsia-400/30 bg-fuchsia-500/10 px-2.5 py-2 text-xs italic text-fuchsia-200">
           &ldquo;{advice}&rdquo;

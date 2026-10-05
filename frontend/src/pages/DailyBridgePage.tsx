@@ -7,6 +7,7 @@ import PageHeading from "../components/PageHeading";
 import EmptyState from "../components/EmptyState";
 import Modal from "../components/Modal";
 import MoviePoster from "../components/MoviePoster";
+import ClampedLabel from "../components/ui/ClampedLabel";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
@@ -233,7 +234,12 @@ function FilmCard({ movie, label, target = false }: { movie: MovieSummary; label
           {target ? <Target className="h-3 w-3 text-accent" /> : <Clapperboard className="h-3 w-3 text-emerald-400" />}
           {label}
         </p>
-        <p className="line-clamp-2 text-sm font-medium text-zinc-100">{movie.title}</p>
+        <ClampedLabel
+          text={movie.title}
+          lines={2}
+          as="p"
+          className="text-sm font-medium text-zinc-100"
+        />
         <p className="text-[11px] text-zinc-500">{movie.release_year ?? "—"}</p>
       </div>
     </div>

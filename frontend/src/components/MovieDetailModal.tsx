@@ -7,6 +7,7 @@ import MovieCastStrip from "./MovieCastStrip";
 import RatingBadges from "./RatingBadges";
 import AcquisitionControl from "./AcquisitionControl";
 import MovieTagline from "./MovieTagline";
+import ExpandableText from "./ui/ExpandableText";
 import LinkBonusBadges from "./LinkBonusBadges";
 import RoleBadge from "./RoleBadge";
 import { TropeChips, TropeLinkBadge } from "./TropeChips";
@@ -148,9 +149,12 @@ export default function MovieDetailModal({
             {movie ? (
               <>
               <MovieTagline tagline={movie.tagline} />
-              <p className="mt-2 line-clamp-4 text-xs text-zinc-500">
-                {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
-              </p>
+              <ExpandableText
+                text={movie.overview}
+                fallback={isHydrating ? "Fetching description..." : "No overview available."}
+                lines={6}
+                className="mt-2 text-xs text-zinc-500"
+              />
               </>
             ) : (
               <div className="mt-2 flex items-center gap-1.5 text-xs text-zinc-600">

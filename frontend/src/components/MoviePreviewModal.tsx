@@ -5,6 +5,7 @@ import MoviePoster from "./MoviePoster";
 import RatingBadges from "./RatingBadges";
 import AcquisitionControl from "./AcquisitionControl";
 import MovieTagline from "./MovieTagline";
+import ExpandableText from "./ui/ExpandableText";
 import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
@@ -82,9 +83,12 @@ export default function MoviePreviewModal({
                 ))}
               </div>
               <MovieTagline tagline={movie.tagline} />
-              <p className="mt-2 line-clamp-6 text-xs text-zinc-500">
-                {movie.overview || (isHydrating ? "Fetching description..." : "No overview available.")}
-              </p>
+              <ExpandableText
+                text={movie.overview}
+                fallback={isHydrating ? "Fetching description..." : "No overview available."}
+                lines={6}
+                className="mt-2 text-xs text-zinc-500"
+              />
             </>
           )}
         </div>

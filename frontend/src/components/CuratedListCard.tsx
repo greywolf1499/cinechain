@@ -5,6 +5,7 @@ import { Eye, Loader2, Pencil } from "lucide-react";
 import EditListModal from "./EditListModal";
 import ListCover from "./ListCover";
 import SyncBadge from "./SyncBadge";
+import ExpandableText from "./ui/ExpandableText";
 import type { ToastState } from "./Toast";
 import { ApiError, api } from "../lib/api";
 import { runTask } from "../lib/tasks";
@@ -12,29 +13,16 @@ import type { CuratedListSummary } from "../types/api";
 
 const buttonClass =
   "flex shrink-0 items-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60";
-const LONG_DESCRIPTION = 240;
-
 function Description({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const long = text.length > LONG_DESCRIPTION;
   return (
     <div className="mt-1.5">
-      <p
-        className={`whitespace-pre-line break-words text-xs leading-relaxed text-zinc-400 ${
-          long && !expanded ? "line-clamp-4" : ""
-        }`}
-      >
-        {text}
-      </p>
-      {long && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="mt-1 text-[11px] font-medium text-accent hover:underline"
-        >
-          {expanded ? "Show less" : "Read more"}
-        </button>
-      )}
+      <ExpandableText
+        text={text}
+        lines={4}
+        moreLabel="Read more"
+        lessLabel="Show less"
+        className="whitespace-pre-line text-xs leading-relaxed text-zinc-400"
+      />
     </div>
   );
 }

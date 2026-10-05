@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 type PopoverProps = {
@@ -9,6 +9,8 @@ type PopoverProps = {
   placement?: "bottom" | "top";
   label?: string;
   className?: string;
+  matchAnchorWidth?: boolean;
+  panelId?: string;
 };
 
 type Position = {
@@ -25,8 +27,9 @@ export default function Popover({
   placement = "bottom",
   label,
   className = "",
+  matchAnchorWidth = true,
+  panelId,
 }: PopoverProps) {
-  const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   const [position, setPosition] = useState<Position | null>(null);
@@ -49,7 +52,9 @@ export default function Popover({
       const anchorRect = anchor.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
       const maxWidth = Math.min(window.innerWidth * 0.9, 384);
-      const width = Math.min(anchorRect.width, maxWidth);
+      const width = matchAnchorWidth
+        ? Math.min(anchorRect.width, maxWidth)
+        : Math.min(panelRect.width, maxWidth);
       const left = Math.min(
         Math.max(anchorRect.left, 8),
         Math.max(8, window.innerWidth - width - 8),
@@ -122,14 +127,14 @@ export default function Popover({
       document.removeEventListener("focusout", onFocusOut, true);
       document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [anchorRef, open, placement]);
+  }, [anchorRef, matchAnchorWidth, open, placement]);
 
   if (!open) return null;
 
   return createPortal(
     <div
       ref={panelRef}
-      id={id}
+      id={panelId}
       role="dialog"
       aria-label={label}
       tabIndex={-1}
@@ -137,7 +142,7 @@ export default function Popover({
         position: "fixed",
         left: position?.left ?? 8,
         top: position?.top ?? 8,
-        width: position?.width,
+        width: matchAnchorWidth ? position?.width : undefined,
         visibility: position ? "visible" : "hidden",
       }}
       className={`z-[60] max-h-[50vh] max-w-[min(90vw,24rem)] overflow-y-auto rounded-md border border-app-border bg-app-surface shadow-xl ${className}`}

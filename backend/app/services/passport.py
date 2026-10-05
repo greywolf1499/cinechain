@@ -64,7 +64,11 @@ def decade_label(year: int) -> str:
 
 
 def build_passport(session: Session, user_id: str) -> PassportOut:
-    watched = (RunStep.logged_by_user_id == user_id) & (RunStep.status == "watched")
+    watched = (
+        (RunStep.logged_by_user_id == user_id)
+        & (RunStep.status == "watched")
+        & func.json_extract(RunStep.transition_metadata, "$.seed").is_not(1)
+    )
 
     total_watches = session.exec(select(func.count()).select_from(RunStep).where(watched)).one()
     # One row per distinct film; the metadata is identical across a film's steps.
@@ -124,7 +128,11 @@ def build_passport(session: Session, user_id: str) -> PassportOut:
 
 def movie_ids_missing_directors(session: Session, user_id: str) -> list[int]:
     """Watched films whose directors were never looked up (or are not cached at all)."""
-    watched = (RunStep.logged_by_user_id == user_id) & (RunStep.status == "watched")
+    watched = (
+        (RunStep.logged_by_user_id == user_id)
+        & (RunStep.status == "watched")
+        & func.json_extract(RunStep.transition_metadata, "$.seed").is_not(1)
+    )
     done = select(CachedMovie.tmdb_id).where(col(CachedMovie.directors_fetched_at).is_not(None))
     return list(session.exec(
         select(RunStep.movie_id).where(watched, col(RunStep.movie_id).not_in(done))

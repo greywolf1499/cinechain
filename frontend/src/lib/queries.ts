@@ -444,6 +444,8 @@ export function useCreateStep(runId: string) {
 			watched_at?: string | null;
 			/** Meet in the Middle: which end of the tunnel this film extends. */
 			tunnel_side?: TunnelSide;
+			/** Tug of War: team whose turn is being logged (shared-device support). */
+			tug_team?: "team_a" | "team_b";
 			/** Rotten Tomatoes Split: the household's joint rating (1-100). */
 			household_score?: number;
 		}) => api.post<RunStep>(`/runs/${runId}/steps`, payload),

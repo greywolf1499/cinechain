@@ -12,11 +12,8 @@ from app.utils.ids import utcnow
 BLIND_FORK_KEY = "blind_fork"
 PENDING_FORK_KEY = "pending_fork"
 OFFER_SIZE = 3
-
-# `rules_config` keys the server derives; a client-supplied value would be a forged state
-# (a pre-seeded offer, or tug scores that start a run one point from victory).
 SERVER_OWNED_RULES = (
-    PENDING_FORK_KEY, "tug_scores", "tug_players",
+    PENDING_FORK_KEY, "tug_scores", "tug_players", "tug_momentum", "tug_rules_version",
     # Built by the March Madness / Method Actor / Auteur Marathon / Regional Deep Dive engines
     # when the run is created.
     "bracket", "bracket_films", "actor", "filmography", "director", "expedition",
@@ -27,6 +24,9 @@ SERVER_OWNED_RULES = (
     # AI March Madness commentary and the Bounty Board's AI-generated bounty definitions.
     "bracket_commentary", "custom_bounties",
 )
+
+# `rules_config` keys the server derives; a client-supplied value would be a forged state
+# (a pre-seeded offer, Tug scores, or momentum that starts a run close to victory).
 
 
 def strip_server_rules(rules: dict[str, Any]) -> dict[str, Any]:

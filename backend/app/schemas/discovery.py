@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -48,3 +50,6 @@ class DiscoveryCandidate(BaseModel):
     narrative_year: int | None = None
     narrative_era_label: str | None = None
     narrative_delta: int | None = None
+    # Tug of War: the next pull's effect and projected net rope movement.
+    tug_effect: Literal["home", "invasion", "neutral", "sudden_neutral"] | None = None
+    tug_points: int | None = None

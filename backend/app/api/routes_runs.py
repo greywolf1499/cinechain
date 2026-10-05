@@ -18,10 +18,20 @@ from app.engines.rt_split import VICTORY_PREFIX as SPLIT_VICTORY_PREFIX
 from app.engines.rt_split import compute_scores as compute_split_scores
 from app.engines.rt_split import winning_team as split_winner
 from app.engines.tug_of_war import (
+    PLAYERS_KEY,
+    SEED_KEY,
+    TEAM_A,
+    TEAM_B,
     TUG_OF_WAR,
+    TUG_RULES_VERSION_KEY,
     VICTORY_PREFIX,
+    TugOfWarEngine,
     compute_scores,
     leading_team,
+    step_turn_team,
+    tally,
+    team_of,
+    winner,
 )
 from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie
@@ -108,6 +118,7 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
 # Metadata keys only the server may set: a client-supplied `collision` would be a free win.
 SERVER_OWNED_METADATA = (
     "tunnel_side", "collision", "collision_with", "golden_reunion", "character_hop",
+    "tug_team", "seed", "life_lost",
     # Bounty Board awards and Rotten Tomatoes Split settlements: a client could mint wildcards/points.
     "completed_bounty", "bounty_replacement",
     "household_score", "critic_score", "audience_score", "divergence", "point_to")
@@ -174,7 +185,12 @@ def _apply_run_outcome(session: Session, tmdb: TMDBClient, run: Run) -> None:
 
 
 async def _enforce_run_rules(
-    session: Session, tmdb: TMDBClient, run: Run, movie: CachedMovie, payload: RunStepCreate
+    session: Session,
+    tmdb: TMDBClient,
+    run: Run,
+    movie: CachedMovie,
+    payload: RunStepCreate,
+    user: User,
 ) -> dict:
     """Validates a candidate step against the run's rules_config.
 
@@ -188,6 +204,25 @@ async def _enforce_run_rules(
     extra_metadata: dict = {}
     linked_metadata: dict | None = None
     broke_a_rule = False
+    if run.game_type == TUG_OF_WAR:
+        tug_engine = TugOfWarEngine(session, tmdb)
+        players = tug_engine.team_players(run)
+        team = payload.tug_team or team_of(players, user.id)
+        if team not in (TEAM_A, TEAM_B) or players.get(team) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Choose a Tug team assigned to a run participant",
+            )
+        extra_metadata["tug_team"] = team
+        rules_version = rules.get(TUG_RULES_VERSION_KEY)
+        if payload.status == "watched" and rules_version == 2 and all(players.values()):
+            next_team = tally(_run_history(session, run.id), rules, players).next_team
+            if team != next_team:
+                expected_name = tug_engine.team_name(run, next_team)
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"It's {expected_name}'s pull",
+                )
 
     tunnel = run.game_type == MEET_IN_THE_MIDDLE
     side_steps: list[RunStep] | None = None
@@ -433,7 +468,7 @@ async def create_run(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="'import' is reserved for imported history")
-    participant_ids = {current_user.id, *payload.participant_user_ids}
+    participant_ids = list(dict.fromkeys([current_user.id, *payload.participant_user_ids]))
     for user_id in participant_ids:
         if session.get(User, user_id) is None:
             raise HTTPException(
@@ -506,7 +541,10 @@ async def create_run(
             logged_by_user_id=current_user.id,
             status="watched",
             watched_at=utcnow(),
-            transition_metadata={"tunnel_side": side} if payload.game_type == MEET_IN_THE_MIDDLE else None,
+            transition_metadata={
+                **({"tunnel_side": side} if payload.game_type == MEET_IN_THE_MIDDLE else {}),
+                SEED_KEY: True,
+            },
             **_step_fields_from_movie(movie),
         )
         session.add(step)
@@ -669,7 +707,7 @@ async def _log_step(
         if omdb is not None:  # the scores the split is judged on come from OMDb
             await cache_repo.get_movie_ratings(session, tmdb, omdb, movie.tmdb_id)
     extra_metadata, linked_metadata = await _enforce_run_rules(
-        session, tmdb, run, movie, payload)
+        session, tmdb, run, movie, payload, user)
     if split:
         extra_metadata.update(RottenTomatoesSplitEngine(session, tmdb).settle(
             movie.tmdb_id, payload.household_score))
@@ -743,6 +781,17 @@ def mark_step_watched(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Step is already marked as watched"
         )
+    if run.game_type == TUG_OF_WAR and (
+        run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 2:
+        players = TugOfWarEngine(session, tmdb).team_players(run)
+        team = step_turn_team(step, players)
+        if team is not None and all(players.values()):
+            next_team = tally(_run_history(session, run.id), run.rules_config, players).next_team
+            if team != next_team:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"It's {TugOfWarEngine(session, tmdb).team_name(run, next_team)}'s pull",
+                )
     step.status = "watched"
     step.watched_at = payload.watched_at or utcnow()
     if payload.user_notes is not None:
@@ -769,6 +818,18 @@ def update_step(
             status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
     if payload.watched_at is not None and step.status == "planned":
         _ensure_run_open(run)
+        if run.game_type == TUG_OF_WAR and (
+            run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 2:
+            players = TugOfWarEngine(session, tmdb).team_players(run)
+            team = step_turn_team(step, players)
+            if team is not None and all(players.values()):
+                next_team = tally(_run_history(session, run.id), run.rules_config, players).next_team
+                if team != next_team:
+                    name = TugOfWarEngine(session, tmdb).team_name(run, next_team)
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"It's {name}'s pull",
+                    )
     if payload.user_notes is not None:
         step.user_notes = payload.user_notes
     if payload.transition_metadata is not None:
@@ -782,6 +843,10 @@ def update_step(
         # watched_at, not status) from leaving stale "planned" state behind.
         if step.status == "planned":
             step.status = "watched"
+        if (step.transition_metadata or {}).get(SEED_KEY):
+            metadata = dict(step.transition_metadata or {})
+            metadata.pop(SEED_KEY, None)
+            step.transition_metadata = metadata or None
     session.add(step)
     session.flush()
     _apply_run_outcome(session, tmdb, run)
@@ -811,7 +876,15 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
         run.game_type == TUG_OF_WAR
         and run.status == RUN_STATUS_COMPLETED
         and (run.status_reason or "").startswith(VICTORY_PREFIX)
-        and leading_team(compute_scores(remaining, run.rules_config), run.rules_config) is None
+        and (
+            winner(tally(
+                remaining,
+                run.rules_config,
+                (run.rules_config or {}).get(PLAYERS_KEY),
+            )) is None
+            if (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 2
+            else leading_team(compute_scores(remaining, run.rules_config), run.rules_config) is None
+        )
     ):
         reopen = True
     if (
@@ -920,7 +993,8 @@ async def offer_fork(
     for movie_id in payload.movie_ids:
         movie = await cache_repo.get_movie(session, tmdb, movie_id)
         try:
-            await _enforce_run_rules(session, tmdb, run, movie, RunStepCreate(movie_id=movie_id))
+            await _enforce_run_rules(
+                session, tmdb, run, movie, RunStepCreate(movie_id=movie_id), current_user)
         except HTTPException as exc:
             reason = exc.detail.get("reason") if isinstance(exc.detail, dict) else exc.detail
             raise HTTPException(
@@ -1002,9 +1076,13 @@ async def accept_fork_movie(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="That film isn't left in the offer")
     link = (fork.get("links") or {}).get(str(payload.movie_id))
+    tug_team = None
+    if run.game_type == TUG_OF_WAR:
+        players = TugOfWarEngine(session, tmdb).team_players(run)
+        tug_team = team_of(players, fork["offered_by_id"])
     step = await _log_step(session, tmdb, run, current_user, RunStepCreate(
         movie_id=payload.movie_id, transition_metadata=link, user_notes=payload.user_notes,
-        status=payload.status))
+        status=payload.status, tug_team=tug_team))
     run.rules_config = blind_fork.with_fork(run.rules_config, None)
     session.add(run)
     session.commit()
@@ -1033,7 +1111,15 @@ def golden_veto(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail="There is no contested step to veto")
         target_step = steps[-1]
-        if target_step.logged_by_user_id in (None, current_user.id):
+        if run.game_type == TUG_OF_WAR:
+            players = TugOfWarEngine(session, tmdb).team_players(run)
+            target_team = step_turn_team(target_step, players)
+            current_team = team_of(players, current_user.id)
+            is_own_team = (
+                target_team is None or current_team is None or target_team == current_team)
+        else:
+            is_own_team = target_step.logged_by_user_id in (None, current_user.id)
+        if is_own_team:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="You can only veto a step your partner logged - delete your own instead")

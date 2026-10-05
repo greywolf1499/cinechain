@@ -66,6 +66,11 @@ export interface RulesConfig {
 	/** Tug of War: which metadata scores (era or geography) and the lead that wins. */
 	dimension?: TugDimension;
 	target_lead?: number;
+	tug_rules_version?: number;
+	steal_enabled?: boolean;
+	momentum_cap?: number;
+	sudden_death_after?: number;
+	sudden_death_every?: number;
 	/** Era dimension cut-offs: Team A = before `era_a_before`, Team B = after `era_b_after`. */
 	era_a_before?: number;
 	era_b_after?: number;
@@ -75,6 +80,24 @@ export interface RulesConfig {
 	/** Server-owned Tug of War state: points per team and who plays each side. */
 	tug_scores?: { team_a: number; team_b: number };
 	tug_players?: { team_a: string | null; team_b: string | null };
+	/** Server-owned v2 Tug state, recomputed from watched steps. */
+	tug_momentum?: {
+		streak_team: "team_a" | "team_b" | null;
+		streak: number;
+		anchor: "team_a" | "team_b" | null;
+		effective_target: number;
+		sudden_death: boolean;
+		next_team: "team_a" | "team_b";
+		pulls: {
+			step_id: string;
+			puller: "team_a" | "team_b";
+			territory: "team_a" | "team_b" | null;
+			kind: "home" | "invasion" | "neutral" | "sudden_neutral";
+			points: number;
+			streak: number;
+			multiplier: number;
+		}[];
+	};
 	win_condition?: RunCondition | RunCondition[];
 	fail_condition?: RunCondition | RunCondition[];
 	/** Watchlist March Madness: the 16 seeds (or `seed_from_watchlist`) when creating; the server
@@ -639,6 +662,9 @@ export interface DiscoveryCandidate {
 	narrative_year?: number | null;
 	narrative_era_label?: string | null;
 	narrative_delta?: number | null;
+	/** Tug of War v2: effect and projected net rope movement for the next pull. */
+	tug_effect?: "home" | "invasion" | "neutral" | "sudden_neutral" | null;
+	tug_points?: number | null;
 }
 
 /** POST /movies/{id}/narrative-era: a film's setting year. */

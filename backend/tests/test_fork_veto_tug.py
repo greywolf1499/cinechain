@@ -344,49 +344,139 @@ def test_tug_rules_are_validated_and_defaulted(client):
             "name": "x", "game_type": "tug_of_war", "rules_config": {"dimension": "mood"}})
         low = client.post("/api/runs", json={
             "name": "x", "game_type": "tug_of_war", "rules_config": {"target_lead": 1}})
-        bare = client.post("/api/runs", json={"name": "x", "game_type": "tug_of_war"})
+        bare = client.post("/api/runs", json={
+            "name": "x", "game_type": "tug_of_war",
+            "rules_config": {
+                "tug_rules_version": 1,
+                "tug_momentum": {"effective_target": 1, "next_team": "team_b"},
+            },
+        })
     assert bad.status_code == 422 and "dimension" in bad.json()["detail"]
     assert low.status_code == 422 and "target_lead" in low.json()["detail"]
     rules = bare.json()["rules_config"]
     assert rules["dimension"] == "era" and rules["target_lead"] == 4
+    assert rules["tug_rules_version"] == 2
+    assert rules["tug_momentum"]["effective_target"] == 4
+    assert rules["tug_momentum"]["next_team"] == "team_a"
+    assert rules["steal_enabled"] is True
+    assert rules["momentum_cap"] == 3
+    assert rules["sudden_death_after"] == 12
+    assert rules["sudden_death_every"] == 2
+
+
+def test_tug_turn_order_and_shared_device_team_attribution(client, bob):
+    with respx.mock:
+        mock_films()
+        run_id = tug(
+            client,
+            partner=bob,
+            tug_rules_version=1,
+            tug_momentum={"effective_target": 1, "next_team": "team_b"},
+        )["id"]
+        run = detail(client, run_id)
+        assert run["rules_config"]["tug_scores"] == {"team_a": 0, "team_b": 0}
+        assert run["rules_config"]["tug_momentum"]["next_team"] == "team_a"
+
+        first = log(
+            client, run_id, 2,
+            transition_metadata={"tug_team": "team_b"},
+        )
+        assert first.status_code == 201, first.text
+        assert first.json()["transition_metadata"]["tug_team"] == "team_a"
+        assert first.json()["logged_by_user_id"] == user_id(client)
+
+        wrong_turn = log(client, run_id, 3)
+        assert wrong_turn.status_code == 409
+        assert "Bob's pull" in wrong_turn.json()["detail"]
+
+        shared_device = log(
+            client,
+            run_id,
+            7,
+            tug_team="team_b",
+            transition_metadata={"tug_team": "team_a"},
+        )
+        assert shared_device.status_code == 201, shared_device.text
+        assert shared_device.json()["transition_metadata"]["tug_team"] == "team_b"
+        assert shared_device.json()["logged_by_user_id"] == user_id(client)
+        assert scores(client, run_id) == {"team_a": 1, "team_b": 1}
+
+
+def test_tug_blind_fork_acceptance_is_attributed_to_offerer(client, bob):
+    with respx.mock:
+        mock_films()
+        run_id = tug(client, partner=bob)["id"]
+        enable_fork(client, run_id)
+        offered = offer(client, run_id)
+        assert offered.status_code == 201, offered.text
+        assert bob.post(f"/api/runs/{run_id}/fork/veto", json={"movie_id": 2}).status_code == 200
+        accepted = bob.post(f"/api/runs/{run_id}/fork/accept", json={"movie_id": 3})
+        assert accepted.status_code == 201, accepted.text
+
+    step = accepted.json()
+    assert step["movie_id"] == 3
+    assert step["logged_by_user_id"] == user_id(bob)
+    assert step["transition_metadata"]["tug_team"] == "team_a"
+
+
+def test_tug_veto_uses_team_attribution_on_shared_device(client, bob):
+    with respx.mock:
+        mock_films()
+        run_id = tug(client, partner=bob)["id"]
+        assert log(client, run_id, 12).status_code == 201
+        contested = log(client, run_id, 7, tug_team="team_b")
+        assert contested.status_code == 201, contested.text
+        assert contested.json()["logged_by_user_id"] == user_id(client)
+        assert contested.json()["transition_metadata"]["tug_team"] == "team_b"
+
+        veto = client.post(f"/api/runs/{run_id}/veto", json={"target": "step"})
+        assert veto.status_code == 200, veto.text
+
+    assert all(step["id"] != contested.json()["id"] for step in detail(client, run_id)["steps"])
 
 
 def test_era_dimension_scores_each_film_for_a_team(client, bob):
     with respx.mock:
         mock_films()
         run_id = tug(client, partner=bob, dimension="era")["id"]
-        assert scores(client, run_id) == {"team_a": 0, "team_b": 0}  # 1990 seed: neutral
+        assert scores(client, run_id) == {"team_a": 0, "team_b": 0}  # Seed steps never score.
         log(client, run_id, 2)  # 1950 -> A
-        log(client, run_id, 7)  # 2010 -> B
-        log(client, run_id, 12)  # 2000: neither
-        log(client, run_id, 3)  # 1960 -> A
+        log(bob, run_id, 7)  # 2010 -> B
+        log(client, run_id, 12)  # 2000: neutral anchor
+        log(bob, run_id, 3)  # B invades A territory.
         got = detail(client, run_id)
-    assert got["rules_config"]["tug_scores"] == {"team_a": 2, "team_b": 1}
+    assert got["rules_config"]["tug_scores"] == {"team_a": 0, "team_b": 2}
     assert got["status"] == "active"
     players = got["rules_config"]["tug_players"]
     assert players == {"team_a": user_id(client), "team_b": user_id(bob)}
 
 
-def test_geography_dimension_uses_the_first_production_country(client):
+def test_geography_dimension_uses_first_country_and_skips_the_seed(client):
     with respx.mock:
         mock_films()
         run_id = tug(client, dimension="geography", target_lead=10)["id"]
-        assert scores(client, run_id) == {"team_a": 1, "team_b": 0}  # Seed film: US
-        log(client, run_id, 3)  # JP -> B
+        assert scores(client, run_id) == {"team_a": 0, "team_b": 0}  # Seed film: US, skipped
+        log(client, run_id, 3)  # JP: invasion for solo Team A.
         log(client, run_id, 4)  # FR -> A
         log(client, run_id, 12)  # DE -> A
-        log(client, run_id, 13)  # no country -> nobody
+        log(client, run_id, 13)  # no country -> neutral anchor.
         got = scores(client, run_id)
-    assert got == {"team_a": 3, "team_b": 1}
+    assert got == {"team_a": 6, "team_b": 0}
 
 
 def test_a_lead_of_the_target_wins_for_the_leading_partner(client, bob):
     with respx.mock:
         mock_films()
         run_id = tug(client, partner=bob, dimension="era", target_lead=3)["id"]
-        for movie_id in (2, 3, 4):
+        for picker, movie_id in (
+            (client, 2),
+            (bob, 12),
+            (client, 3),
+            (bob, 13),
+            (client, 4),
+        ):
             assert detail(client, run_id)["status"] == "active"
-            assert log(client, run_id, movie_id).status_code == 201
+            assert log(picker, run_id, movie_id).status_code == 201
         done = detail(client, run_id)
         late = log(client, run_id, 5)
     assert done["status"] == "completed"
@@ -399,27 +489,28 @@ def test_team_b_can_win_and_the_lead_is_relative(client, bob):
     with respx.mock:
         mock_films()
         run_id = tug(client, partner=bob, dimension="era", target_lead=2)["id"]
-        log(client, run_id, 2)  # A +1
-        log(client, run_id, 7)  # B +1 -> level
-        log(client, run_id, 8)  # B 2-1
-        assert detail(client, run_id)["status"] == "active"
-        log(client, run_id, 9)  # B 3-1 -> lead of 2
+        log(client, run_id, 12)  # A neutral.
+        log(bob, run_id, 7)  # B +1.
+        log(client, run_id, 13)  # A neutral.
+        log(bob, run_id, 9)  # B +1 -> lead of 2.
         done = detail(client, run_id)
     assert done["status"] == "completed"
-    assert done["status_reason"] == "Tug of War won by Bob, 3-1!"
+    assert done["status_reason"] == "Tug of War won by Bob, 2-0!"
 
 
 def test_deleting_the_deciding_step_reopens_the_rope(client, bob):
     with respx.mock:
         mock_films()
         run_id = tug(client, partner=bob, dimension="era", target_lead=2)["id"]
-        log(client, run_id, 2)
-        last = log(client, run_id, 3).json()
+        log(client, run_id, 12)
+        log(bob, run_id, 7)
+        log(client, run_id, 13)
+        last = log(bob, run_id, 9).json()
         assert detail(client, run_id)["status"] == "completed"
         assert client.delete(f"/api/runs/{run_id}/steps/{last['id']}").status_code == 204
         got = detail(client, run_id)
     assert got["status"] == "active" and got["status_reason"] is None
-    assert got["rules_config"]["tug_scores"] == {"team_a": 1, "team_b": 0}
+    assert got["rules_config"]["tug_scores"] == {"team_a": 0, "team_b": 1}
 
 
 def test_planned_films_do_not_pull_the_rope(client):
@@ -437,8 +528,10 @@ def test_golden_veto_cannot_rewrite_a_finished_tug_run(client, bob):
     with respx.mock:
         mock_films()
         run_id = tug(client, partner=bob, dimension="era", target_lead=2)["id"]
-        log(client, run_id, 2)
-        log(bob, run_id, 3)  # Alice's rope wins here
+        log(client, run_id, 12)
+        log(bob, run_id, 7)
+        log(client, run_id, 13)
+        log(bob, run_id, 9)  # Bob wins here.
         assert detail(client, run_id)["status"] == "completed"
         # a finished run is locked: the veto can't rewrite the result
         assert client.post(f"/api/runs/{run_id}/veto", json={"target": "step"}).status_code == 409

@@ -1,25 +1,12 @@
-"""Tug of War: a two-player rope pulled by the films you log.
-
-The chain is the classic shared-cast CineChain, so this engine extends `CineChainEngine` (itself
-a `BaseChallengeEngine`). On top of it every watched film scores one point for a team, decided
-by one *dimension* of the film's metadata:
-
-- `era`: Team A = released before `era_a_before` (default 1975), Team B = after `era_b_after`
-  (default 2005); films in between score for nobody.
-- `geography`: Team A = Western (US + Europe), Team B = the rest of the world, judged on the
-  film's first production country; films with no country on record score for nobody.
-
-Team A is the run's owner, Team B the next partner. Scores are always recomputed from the steps
-(and cached in `rules_config["tug_scores"]` for the UI), so deleting a step can never leave them
-stale. The run is won as soon as one team leads by `target_lead` points. Run modifiers (chrono,
-runtime, cooldown) would let one player lock the other out, so they are off.
-"""
+"""Tug of War: two teams use film choices to pull a shared rope."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from dataclasses import asdict, dataclass
+from datetime import UTC
+from typing import Any, ClassVar, Literal
 
 from sqlmodel import select
 
@@ -34,6 +21,7 @@ from app.models.run import (
     RunStep,
 )
 from app.models.user import User
+from app.schemas.discovery import DiscoveryCandidate
 
 TUG_OF_WAR = "tug_of_war"
 DIMENSION_ERA = "era"
@@ -41,16 +29,47 @@ DIMENSION_GEOGRAPHY = "geography"
 DIMENSIONS = (DIMENSION_ERA, DIMENSION_GEOGRAPHY)
 TEAM_A = "team_a"
 TEAM_B = "team_b"
+TugTeam = Literal["team_a", "team_b"]
+TugEffect = Literal["home", "invasion", "neutral", "sudden_neutral"]
 
 DEFAULT_DIMENSION = DIMENSION_ERA
 DEFAULT_TARGET_LEAD = 4
 MAX_TARGET_LEAD = 50
 DEFAULT_ERA_A_BEFORE = 1975
 DEFAULT_ERA_B_AFTER = 2005
+DEFAULT_MOMENTUM_CAP = 3
+DEFAULT_SUDDEN_DEATH_AFTER = 12
+DEFAULT_SUDDEN_DEATH_EVERY = 2
 
 SCORES_KEY = "tug_scores"
 PLAYERS_KEY = "tug_players"
+MOMENTUM_KEY = "tug_momentum"
+TUG_RULES_VERSION_KEY = "tug_rules_version"
+SEED_KEY = "seed"
 VICTORY_PREFIX = "Tug of War won by"
+
+
+@dataclass(frozen=True)
+class Pull:
+    step_id: str
+    puller: TugTeam
+    territory: TugTeam | None
+    kind: TugEffect
+    points: int
+    streak: int
+    multiplier: int
+
+
+@dataclass(frozen=True)
+class TugTally:
+    scores: dict[str, int]
+    streak: tuple[TugTeam | None, int]
+    anchor: TugTeam | None
+    effective_target: int
+    sudden_death: bool
+    pulls: list[Pull]
+    next_team: TugTeam
+
 
 # US plus Europe, including the countries TMDB still files older films under.
 WESTERN_COUNTRIES = frozenset({
@@ -69,42 +88,74 @@ def tug_config(rules: dict | None) -> dict[str, Any]:
         "target_lead": rules.get("target_lead") or DEFAULT_TARGET_LEAD,
         "era_a_before": rules.get("era_a_before") or DEFAULT_ERA_A_BEFORE,
         "era_b_after": rules.get("era_b_after") or DEFAULT_ERA_B_AFTER,
+        "steal_enabled": rules.get("steal_enabled", True),
+        "momentum_cap": rules.get("momentum_cap", DEFAULT_MOMENTUM_CAP),
+        "sudden_death_after": rules.get(
+            "sudden_death_after", DEFAULT_SUDDEN_DEATH_AFTER),
+        "sudden_death_every": rules.get(
+            "sudden_death_every", DEFAULT_SUDDEN_DEATH_EVERY),
     }
 
 
-def _first_country(step: RunStep) -> str | None:
-    raw = step.movie_origin_country
-    if not raw:
+def team_of(players: dict[str, str | None], user_id: str | None) -> TugTeam | None:
+    if user_id is None:
         return None
-    try:
-        countries = json.loads(raw)
-    except ValueError:
-        countries = [raw]
-    if isinstance(countries, str):
-        countries = [countries]
-    return str(countries[0]).upper() if countries else None
-
-
-def step_team(step: RunStep, rules: dict | None) -> str | None:
-    """Which team a film scores for under the run's dimension (None = nobody)."""
-    config = tug_config(rules)
-    if config["dimension"] == DIMENSION_GEOGRAPHY:
-        country = _first_country(step)
-        if country is None:
-            return None
-        return TEAM_A if country in WESTERN_COUNTRIES else TEAM_B
-    year = step.movie_release_year
-    if year is None:
-        return None
-    if year < config["era_a_before"]:
+    if players.get(TEAM_A) == user_id:
         return TEAM_A
-    if year > config["era_b_after"]:
+    if players.get(TEAM_B) == user_id:
         return TEAM_B
     return None
 
 
-def compute_scores(steps: Sequence[RunStep], rules: dict | None) -> dict[str, int]:
-    """Points per team from the steps actually watched (a planned film hasn't pulled yet)."""
+def step_turn_team(
+    step: RunStep, players: dict[str, str | None]
+) -> TugTeam | None:
+    explicit_team = (step.transition_metadata or {}).get("tug_team")
+    if explicit_team in (TEAM_A, TEAM_B):
+        return explicit_team
+    return team_of(players, step.logged_by_user_id)
+
+
+def _first_country(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    try:
+        countries = json.loads(raw)
+    except (TypeError, ValueError):
+        countries = [raw]
+    if isinstance(countries, str):
+        countries = [countries]
+    if not isinstance(countries, list) or not countries:
+        return None
+    return str(countries[0]).upper()
+
+
+def _territory(
+    release_year: int | None, origin_country: str | None, rules: dict | None
+) -> TugTeam | None:
+    config = tug_config(rules)
+    if config["dimension"] == DIMENSION_GEOGRAPHY:
+        country = _first_country(origin_country)
+        if country is None:
+            return None
+        return TEAM_A if country in WESTERN_COUNTRIES else TEAM_B
+    if release_year is None:
+        return None
+    if release_year < config["era_a_before"]:
+        return TEAM_A
+    if release_year > config["era_b_after"]:
+        return TEAM_B
+    return None
+
+
+def step_team(step: RunStep, rules: dict | None) -> TugTeam | None:
+    """Which territory a film belongs to (None = neutral)."""
+    return _territory(step.movie_release_year, step.movie_origin_country, rules)
+
+
+def _v1_compute_scores(
+    steps: Sequence[RunStep], rules: dict | None
+) -> dict[str, int]:
     scores = {TEAM_A: 0, TEAM_B: 0}
     for step in steps:
         if step.status != "watched":
@@ -115,21 +166,184 @@ def compute_scores(steps: Sequence[RunStep], rules: dict | None) -> dict[str, in
     return scores
 
 
+def _ordered_pull_steps(steps: Sequence[RunStep]) -> list[RunStep]:
+    """Order ties deterministically while retaining the two seed steps' chronology."""
+    return sorted(
+        steps,
+        key=lambda step: (
+            step.logged_at.replace(tzinfo=UTC)
+            if step.logged_at.tzinfo is None
+            else step.logged_at.astimezone(UTC),
+            0 if (step.transition_metadata or {}).get(SEED_KEY) else 1,
+            step.id,
+        ),
+    )
+
+
+def tally(
+    steps: Sequence[RunStep],
+    rules: dict | None,
+    players: dict[str, str | None] | None = None,
+) -> TugTally:
+    """Fold watched, non-seed steps into a deterministic Tug of War state."""
+    rules = rules or {}
+    config = tug_config(rules)
+    players = players or rules.get(PLAYERS_KEY) or {}
+    scores = {TEAM_A: 0, TEAM_B: 0}
+    streak_team: TugTeam | None = None
+    streak = 0
+    anchor: TugTeam | None = None
+    turns = 0
+    next_team: TugTeam = TEAM_A
+    pulls: list[Pull] = []
+    target = config["target_lead"]
+
+    ordered_steps = _ordered_pull_steps(steps)
+    for step in ordered_steps:
+        if step.status != "watched" or (step.transition_metadata or {}).get(SEED_KEY):
+            continue
+        puller = step_turn_team(step, players)
+        if puller is None:
+            continue
+
+        territory = step_team(step, rules)
+        turns += 1
+        next_team = (
+            TEAM_B
+            if puller == TEAM_A and players.get(TEAM_B) is not None
+            else TEAM_A
+        )
+        multiplier = 2 if anchor == puller else 1
+        if territory is None:
+            kind: TugEffect = "sudden_neutral" if turns >= config[
+                "sudden_death_after"] else "neutral"
+            streak_team, streak = None, 0
+            if kind == "sudden_neutral":
+                opponent = TEAM_B if puller == TEAM_A else TEAM_A
+                scores[opponent] += 1
+                points = -1
+            else:
+                points = 0
+            anchor = puller
+            multiplier = 1
+        elif territory == puller:
+            kind = "home"
+            streak = min(
+                streak + 1 if streak_team == puller else 1,
+                config["momentum_cap"],
+            )
+            streak_team = puller
+            points = streak * multiplier
+            scores[puller] += points
+            anchor = None if anchor == puller else anchor
+        elif config["steal_enabled"]:
+            kind = "invasion"
+            streak = min(
+                streak + 1 if streak_team == puller else 1,
+                config["momentum_cap"],
+            )
+            streak_team = puller
+            points = multiplier * 2
+            scores[puller] += multiplier
+            opponent = TEAM_B if puller == TEAM_A else TEAM_A
+            scores[opponent] = max(0, scores[opponent] - multiplier)
+            anchor = None if anchor == puller else anchor
+        else:
+            kind = "sudden_neutral" if turns >= config[
+                "sudden_death_after"] else "neutral"
+            streak_team, streak = None, 0
+            if kind == "sudden_neutral":
+                opponent = TEAM_B if puller == TEAM_A else TEAM_A
+                scores[opponent] += 1
+                points = -1
+            else:
+                points = 0
+            anchor = puller
+            multiplier = 1
+
+        pulls.append(Pull(
+            step_id=step.id,
+            puller=puller,
+            territory=territory,
+            kind=kind,
+            points=points,
+            streak=streak,
+            multiplier=multiplier,
+        ))
+        target = max(
+            1,
+            config["target_lead"] - max(
+                (turns - config["sudden_death_after"])
+                // config["sudden_death_every"],
+                0,
+            ),
+        )
+
+    sudden_death = turns >= config["sudden_death_after"]
+    return TugTally(
+        scores=scores,
+        streak=(streak_team, streak),
+        anchor=anchor,
+        effective_target=target,
+        sudden_death=sudden_death,
+        pulls=pulls,
+        next_team=next_team,
+    )
+
+
+def compute_scores(steps: Sequence[RunStep], rules: dict | None) -> dict[str, int]:
+    """Scores for the configured rules version, preserving the v1 scoring path."""
+    rules = rules or {}
+    if rules.get(TUG_RULES_VERSION_KEY) != 2:
+        return _v1_compute_scores(steps, rules)
+    players = rules.get(PLAYERS_KEY) or {}
+    return tally(steps, rules, players).scores
+
+
 def leading_team(scores: dict[str, int], rules: dict | None) -> str | None:
-    """The team that has won the tug (lead >= target_lead), else None."""
+    """The team that has won the legacy tug, else None."""
     lead = scores[TEAM_A] - scores[TEAM_B]
     if abs(lead) >= tug_config(rules)["target_lead"]:
         return TEAM_A if lead > 0 else TEAM_B
     return None
 
 
+def winner(result: TugTally) -> TugTeam | None:
+    lead = result.scores[TEAM_A] - result.scores[TEAM_B]
+    if abs(lead) >= result.effective_target:
+        return TEAM_A if lead > 0 else TEAM_B
+    return None
+
+
+def preview_pull(
+    puller: TugTeam,
+    territory: TugTeam | None,
+    result: TugTally,
+    rules: dict | None,
+) -> tuple[TugEffect, int]:
+    """Candidate effect and net rope movement from the current puller's perspective."""
+    config = tug_config(rules)
+    if territory is None or (territory != puller and not config["steal_enabled"]):
+        if result.sudden_death:
+            return "sudden_neutral", -1
+        return "neutral", 0
+    multiplier = 2 if result.anchor == puller else 1
+    if territory == puller:
+        streak_team, streak = result.streak
+        streak = min(
+            streak + 1 if streak_team == puller else 1,
+            config["momentum_cap"],
+        )
+        return "home", streak * multiplier
+    return "invasion", 2 * multiplier
+
+
 class TugOfWarEngine(CineChainEngine):
     game_type = TUG_OF_WAR
     display_name = "Tug of War"
     description = (
-        "Two partners pull a rope with the films they pick: every film scores for one side of "
-        "a dimension (old vs new, or West vs the rest of the world). First to lead by the "
-        "target wins."
+        "Two teams pull a shared rope: home films build momentum, invasions steal ground, "
+        "neutral films set an anchor, and Sudden Death ensures an end."
     )
     capabilities: ClassVar[list[str]] = [
         *(cap for cap in CineChainEngine.capabilities if cap != "modifiers"),
@@ -152,47 +366,125 @@ class TugOfWarEngine(CineChainEngine):
                 problems.append(f"{key} must be a year")
         before = config["era_a_before"] or DEFAULT_ERA_A_BEFORE
         after = config["era_b_after"] or DEFAULT_ERA_B_AFTER
-        if all(isinstance(v, int) for v in (before, after)) and before > after + 1:
+        if all(isinstance(value, int) for value in (before, after)) and before > after + 1:
             problems.append("era_a_before can't be later than era_b_after")
+
+        for key, default in (
+            ("steal_enabled", True),
+            ("momentum_cap", DEFAULT_MOMENTUM_CAP),
+            ("sudden_death_after", DEFAULT_SUDDEN_DEATH_AFTER),
+            ("sudden_death_every", DEFAULT_SUDDEN_DEATH_EVERY),
+        ):
+            value = rules.get(key, default)
+            if key == "steal_enabled":
+                if not isinstance(value, bool):
+                    problems.append("steal_enabled must be a boolean")
+            else:
+                limits = {
+                    "momentum_cap": (1, 5),
+                    "sudden_death_after": (4, 50),
+                    "sudden_death_every": (1, 10),
+                }
+                low, high = limits[key]
+                if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                    problems.append(f"{key} must be a whole number from {low} to {high}")
         return problems
 
     def prepare_rules_config(self, rules: dict) -> dict:
         config = tug_config(rules)
         return {
-            **rules, "dimension": config["dimension"], "target_lead": config["target_lead"]}
+            **rules,
+            "dimension": config["dimension"],
+            "target_lead": config["target_lead"],
+            TUG_RULES_VERSION_KEY: 2,
+            "steal_enabled": config["steal_enabled"],
+            "momentum_cap": config["momentum_cap"],
+            "sudden_death_after": config["sudden_death_after"],
+            "sudden_death_every": config["sudden_death_every"],
+        }
 
     def team_players(self, run: Run) -> dict[str, str | None]:
-        """Team A = the run's owner, Team B = the next partner who joined."""
+        """Team A = owner; Team B = the first other participant to join."""
         participants = self.session.exec(
             select(RunParticipant).where(RunParticipant.run_id == run.id)
             .order_by(RunParticipant.joined_at)).all()
         ordered = sorted(participants, key=lambda p: p.role != "owner")
-        ids = [p.user_id for p in ordered]
+        ids = [participant.user_id for participant in ordered]
         return {TEAM_A: ids[0] if ids else None, TEAM_B: ids[1] if len(ids) > 1 else None}
 
     def sync_run_state(self, run: Run, steps: Sequence[RunStep]) -> None:
         rules = run.rules_config or {}
-        scores = compute_scores(steps, rules)
         players = self.team_players(run)
-        if rules.get(SCORES_KEY) != scores or rules.get(PLAYERS_KEY) != players:
-            run.rules_config = {**rules, SCORES_KEY: scores, PLAYERS_KEY: players}
+        scores = compute_scores(steps, {**rules, PLAYERS_KEY: players})
+        state = {**rules, SCORES_KEY: scores, PLAYERS_KEY: players}
+        if rules.get(TUG_RULES_VERSION_KEY) == 2:
+            result = tally(steps, rules, players)
+            state[MOMENTUM_KEY] = {
+                "streak_team": result.streak[0],
+                "streak": result.streak[1],
+                "anchor": result.anchor,
+                "effective_target": result.effective_target,
+                "sudden_death": result.sudden_death,
+                "next_team": result.next_team,
+                "pulls": [asdict(pull) for pull in result.pulls],
+            }
+        if any(rules.get(key) != value for key, value in state.items()):
+            run.rules_config = state
             self.session.add(run)
 
-    def _team_name(self, run: Run, team: str) -> str:
+    def team_name(self, run: Run, team: str) -> str:
         user_id = self.team_players(run)[team]
         user = self.session.get(User, user_id) if user_id else None
         return user.display_name if user else ("Team A" if team == TEAM_A else "Team B")
 
     def evaluate_run_outcome(self, run: Run, steps: list[RunStep]) -> RunOutcome | None:
-        """Victory: complete the run once one team leads by `target_lead` points."""
         if run.engine_version <= LEGACY_ENGINE_VERSION or run.status != RUN_STATUS_ACTIVE:
             return None
-        scores = compute_scores(steps, run.rules_config)
-        winner = leading_team(scores, run.rules_config)
-        if winner is not None:
-            loser = TEAM_B if winner == TEAM_A else TEAM_A
+        rules = run.rules_config or {}
+        if rules.get(TUG_RULES_VERSION_KEY) == 2:
+            result = tally(steps, rules, self.team_players(run))
+            winning_team = winner(result)
+        else:
+            scores = _v1_compute_scores(steps, rules)
+            result = None
+            winning_team = leading_team(scores, rules)
+        if winning_team is not None:
+            scores = result.scores if result is not None else _v1_compute_scores(steps, rules)
+            loser = TEAM_B if winning_team == TEAM_A else TEAM_A
+            suffix = " (Sudden Death)" if result is not None and result.sudden_death else ""
             return RunOutcome(
                 RUN_STATUS_COMPLETED,
-                f"{VICTORY_PREFIX} {self._team_name(run, winner)}, "
-                f"{scores[winner]}-{scores[loser]}!")
+                f"{VICTORY_PREFIX} {self.team_name(run, winning_team)}, "
+                f"{scores[winning_team]}-{scores[loser]}{suffix}!",
+            )
         return super().evaluate_run_outcome(run, steps)
+
+    async def discover_candidates(
+        self,
+        frontier_movie_id: int,
+        mode: str = "or",
+        cast_limit: int | None = None,
+        rules: dict | None = None,
+        previous_transition: dict | None = None,
+        history: Sequence[RunStep] | None = None,
+    ) -> list[DiscoveryCandidate]:
+        candidates = await super().discover_candidates(
+            frontier_movie_id,
+            mode,
+            cast_limit,
+            rules,
+            previous_transition,
+            history,
+        )
+        rules = rules or {}
+        if rules.get(TUG_RULES_VERSION_KEY) != 2:
+            return candidates
+        players = rules.get(PLAYERS_KEY) or {}
+        result = tally(history or [], rules, players)
+        for candidate in candidates:
+            territory = _territory(
+                candidate.release_year, candidate.origin_country, rules)
+            effect, points = preview_pull(result.next_team, territory, result, rules)
+            candidate.tug_effect = effect
+            candidate.tug_points = points
+        return candidates

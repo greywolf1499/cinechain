@@ -60,6 +60,8 @@ MODIFIER_UPDATE_KEYS = ("chrono_direction", "runtime_staircase", "country_cooldo
 class RunStepCreate(BaseModel):
     movie_id: int
     transition_metadata: dict[str, Any] | None = None
+    # Tug of War: team whose turn is being logged (shared-device support).
+    tug_team: Literal["team_a", "team_b"] | None = None
     user_notes: str | None = None
     force: bool = False
     status: str = "watched"  # watched | planned

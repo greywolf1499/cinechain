@@ -8,6 +8,7 @@ import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
 import { connectionMetadata } from "../lib/connections";
 import { roleBadgeText } from "../lib/crewRoles";
+import { tugNextTeam } from "../lib/tugOfWar";
 import LinkBonusBadges from "./LinkBonusBadges";
 import { useCreateStep } from "../lib/queries";
 import MoviePoster from "./MoviePoster";
@@ -92,6 +93,7 @@ export default function MovieSearchAutocomplete({
       force,
       status: watchStatus,
       watched_at: watchStatus === "watched" ? new Date(watchedDate).toISOString() : null,
+      ...(rulesConfig?.tug_rules_version === 2 ? { tug_team: tugNextTeam(rulesConfig) } : {}),
       transition_metadata: connection
         ? connectionMetadata(connection, {
             from: connection.character_in_from,

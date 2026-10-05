@@ -34,6 +34,11 @@ export default function TugOfWarMeter({
   };
   const nameA = nameOf(players.team_a, "Team A");
   const nameB = nameOf(players.team_b, "Team B");
+  const tugState = rules.tug_momentum;
+  const nextTeam = tugState?.next_team ?? "team_a";
+  const nextName = nextTeam === "team_a" ? nameA : nameB;
+  const nextLabel =
+    nextTeam === "team_a" ? dimension.teamA(rules) : dimension.teamB(rules);
   const ticks = Array.from({ length: 2 * target + 1 }, (_, i) => i - target);
   const leader = momentum === 0 ? null : momentum > 0 ? "a" : "b";
 
@@ -115,8 +120,53 @@ export default function TugOfWarMeter({
           leading={leader === "a"}
         />
       </div>
+      {!finished && (
+        <p className="mt-2 text-center text-xs font-semibold text-lime-200">
+          🪢 {nextName}&apos;s pull ({nextTeam === "team_a" ? "Team A" : "Team B"} · {nextLabel})
+        </p>
+      )}
+      <div className="mt-1.5 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+        <span>First to lead by {target} wins.</span>
+        {tugState?.streak_team && tugState.streak > 0 && (
+          <span className="text-orange-300">
+            🔥 {tugState.streak_team === "team_a" ? nameA : nameB} streak ×{tugState.streak}
+          </span>
+        )}
+        {tugState?.anchor && (
+          <span className="text-amber-300">
+            ⚓ {tugState.anchor === "team_a" ? nameA : nameB} has the next-pull anchor
+          </span>
+        )}
+        {tugState?.sudden_death && (
+          <span className="font-semibold text-red-300">Sudden Death · target shrinks every pull</span>
+        )}
+      </div>
+      {tugState?.pulls.length ? (
+        <div aria-label="Recent Tug pulls" className="mt-2 flex flex-wrap justify-center gap-1">
+          {tugState.pulls.slice(-8).map((pull, index) => (
+            <span
+              key={pull.step_id}
+              title={`${pull.puller === "team_a" ? nameA : nameB}: ${pull.kind.replace("_", " ")} (${pull.points > 0 ? "+" : ""}${pull.points})`}
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px]",
+                pull.kind === "invasion"
+                  ? "bg-orange-950/70 text-orange-200"
+                  : pull.kind === "neutral" || pull.kind === "sudden_neutral"
+                    ? "bg-amber-950/70 text-amber-200"
+                    : "bg-lime-950/70 text-lime-200",
+              )}
+            >
+              {pull.kind === "invasion" ? "⚔️" : pull.kind.includes("neutral") ? "⚓" : "🔥"}
+              {pull.points > 0 ? `+${pull.points}` : pull.points}
+              {index === tugState.pulls.slice(-8).length - 1 ? " · now" : ""}
+            </span>
+          ))}
+        </div>
+      ) : null}
       <p className="mt-1.5 text-center text-[11px] text-zinc-500">
-        First to lead by {target} wins. {dimension.label}: every film scores for one side.
+        {rules.dimension === "era"
+          ? `Films from ${rules.era_a_before ?? 1975}–${rules.era_b_after ?? 2005} are neutral anchors; invasions steal ground.`
+          : "Films without a country on record are neutral anchors; invasions steal ground."}
       </p>
     </section>
   );

@@ -506,8 +506,8 @@ function NewRunModal({
               />
             </Field>
             <p className="text-[11px] text-zinc-500">
-              You are Team A; the next participant you add is Team B. Every watched film scores one point
-              for a team, and the first to lead by {tugLead} wins.
+              You are Team A; the next participant you add is Team B. Home films build momentum,
+              invasions steal ground, and neutral films set an anchor. First to lead by {tugLead} wins.
             </p>
           </div>
         )}

@@ -271,10 +271,13 @@ def test_persistent_rate_limit_aborts_but_keeps_progress(client, monkeypatch):
 # ---------------------------------------------------------------- aggregation
 
 
-def _seed_watch(session, run, user_id, movie_id, *, year, origin, status="watched"):
+def _seed_watch(
+    session, run, user_id, movie_id, *, year, origin, status="watched", transition_metadata=None
+):
     session.add(RunStep(
         run_id=run.id, movie_id=movie_id, movie_title=f"M{movie_id}", movie_release_year=year,
-        movie_origin_country=origin, status=status, watched_at=datetime(2026, 1, 1, tzinfo=UTC),
+        movie_origin_country=origin, status=status, transition_metadata=transition_metadata,
+        watched_at=datetime(2026, 1, 1, tzinfo=UTC),
         logged_by_user_id=user_id))
 
 
@@ -309,6 +312,33 @@ def test_passport_aggregates_across_runs_and_only_counts_my_watched_steps(client
     assert body["countries"][0]["code"] == "US"
     assert [(d["name"], d["count"]) for d in body["top_directors"]] == [("Dir Eight", 2), ("Dir Seven", 2)]
     assert body["directors_coverage"] == {"movies_with_directors": 3, "movies_total": 3}
+
+
+def test_seed_steps_are_excluded_until_their_watched_date_is_explicitly_edited(client):
+    me = client.get("/api/auth/me").json()["id"]
+    with Session(client.db_engine) as session:
+        run = Run(name="Tug")
+        session.add(run)
+        session.commit()
+        session.refresh(run)
+        session.add(RunParticipant(run_id=run.id, user_id=me, role="owner"))
+        _seed_watch(
+            session, run, me, 9001, year=1950, origin='["US"]',
+            transition_metadata={"seed": True},
+        )
+        session.commit()
+        seed_step = session.exec(
+            select(RunStep).where(RunStep.run_id == run.id)
+        ).one()
+
+    assert client.get("/api/passport/me").json()["total_movies_watched"] == 0
+    updated = client.patch(
+        f"/api/runs/{run.id}/steps/{seed_step.id}",
+        json={"watched_at": "2026-01-02T00:00:00Z"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["transition_metadata"] is None
+    assert client.get("/api/passport/me").json()["total_movies_watched"] == 1
 
 
 def test_empty_passport_and_top_directors_capped_at_five(client):

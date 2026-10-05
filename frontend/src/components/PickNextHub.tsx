@@ -44,6 +44,7 @@ import { RABBIT_HOLE } from "../lib/rabbitHole";
 import RoleBadge from "./RoleBadge";
 import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
 import { SIDE_LABELS } from "../lib/tunnel";
+import { tugEffectLabel, tugNextTeam } from "../lib/tugOfWar";
 import {
   useCanonBadgesBulk,
   useCreateStep,
@@ -74,7 +75,7 @@ const CREW_CRAFT = "crew_craft";
 const SEMANTIC_TROPE = "semantic_trope";
 
 type CoStarMode = "or" | "and";
-type SortBy = "match" | "year" | "popularity" | "imdb" | "rt";
+type SortBy = "match" | "year" | "popularity" | "imdb" | "rt" | "tug";
 type SortDir = "asc" | "desc";
 
 /** Navigation stack for the in-dialog drill-down (grid -> movie -> actor ->
@@ -295,8 +296,12 @@ function DiscoveryGrid({
   const [selectedActorIds, setSelectedActorIds] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
   const [genreId, setGenreId] = useState<number | null>(null);
-  const [decadeKey, setDecadeKey] = useState("all");
-  const defaultSort: SortBy = castLinked ? "year" : "match";
+  const tugMode = gameType === "tug_of_war" && rulesConfig.tug_rules_version === 2;
+  const nextTeam = tugNextTeam(rulesConfig);
+  const [decadeKey, setDecadeKey] = useState(
+    tugMode && rulesConfig.dimension === "era" ? (nextTeam === "team_a" ? "1970" : "2000") : "all",
+  );
+  const defaultSort: SortBy = tugMode ? "tug" : castLinked ? "year" : "match";
   const [sortBy, setSortBy] = useState<SortBy>(defaultSort);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
@@ -430,6 +435,7 @@ function DiscoveryGrid({
     const direction = sortDir === "asc" ? -1 : 1;
     return [...list].sort((a, b) => {
       if (sortBy === "year") return direction * ((b.release_year ?? 0) - (a.release_year ?? 0));
+      if (sortBy === "tug") return direction * ((b.tug_points ?? 0) - (a.tug_points ?? 0));
       if (sortBy === "popularity") return direction * ((b.popularity ?? 0) - (a.popularity ?? 0));
       const key = sortBy === "imdb" ? "imdb" : "rt";
       return direction * (ratingSortValue(b, key) - ratingSortValue(a, key));
@@ -478,6 +484,7 @@ function DiscoveryGrid({
       await createStep.mutateAsync({
         movie_id: candidate.movie_id,
         force: true,
+        ...(tugMode ? { tug_team: nextTeam } : {}),
         tunnel_side: tunnelSide,
         status: watched ? "watched" : "planned",
         watched_at: watched ? new Date().toISOString() : null,
@@ -653,6 +660,7 @@ function DiscoveryGrid({
         >
           {!castLinked && <option value="match">Sort: Best match</option>}
           <option value="year">Sort: Year</option>
+          {tugMode && <option value="tug">Sort: Tug points</option>}
           <option value="popularity">Sort: Popularity</option>
           <option value="imdb">Sort: IMDb Rating</option>
           <option value="rt">Sort: Rotten Tomatoes</option>
@@ -997,6 +1005,20 @@ function CandidateCard({
 
         {castLinked && <ConnectionBadge connections={candidate.connections} />}
         <MechanicBadge candidate={candidate} gameType={gameType} />
+        {gameType === "tug_of_war" && candidate.tug_effect && candidate.tug_points != null && (
+          <span
+            className={cn(
+              "w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold",
+              candidate.tug_effect === "invasion"
+                ? "bg-orange-950 text-orange-200"
+                : candidate.tug_effect === "neutral" || candidate.tug_effect === "sudden_neutral"
+                  ? "bg-amber-950 text-amber-200"
+                  : "bg-lime-950 text-lime-200",
+            )}
+          >
+            {tugEffectLabel(candidate.tug_effect, candidate.tug_points)}
+          </span>
+        )}
         {tierLabel && candidate.tier_compliant !== undefined && candidate.tier_compliant !== null && (
           <span
             title={candidate.tier_compliant ? "Satisfies the active tier's rule" : "Breaks the active tier's rule"}
@@ -1338,6 +1360,9 @@ function MovieScreenView({
     await createStep.mutateAsync({
       movie_id: screen.movieId,
       force: true,
+      ...(rulesConfig.tug_rules_version === 2
+        ? { tug_team: tugNextTeam(rulesConfig) }
+        : {}),
       tunnel_side: tunnelSide,
       status: watched ? "watched" : "planned",
       watched_at: watched ? new Date().toISOString() : null,

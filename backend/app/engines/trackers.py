@@ -65,7 +65,9 @@ class DecadeSieveEngine(TrackerEngine):
 
     game_type = "decade_sieve"
     display_name = "Decade Sieve"
-    description = "Work through one decade of cinema: only films released in the target decade count."
+    description = (
+        "Work through one decade of cinema: only films released in the target decade count."
+    )
 
     def validate_rules_config(self, rules: dict | None) -> list[str]:
         problems = super().validate_rules_config(rules)
@@ -75,14 +77,16 @@ class DecadeSieveEngine(TrackerEngine):
             problems.append(f"{TARGET_DECADE_KEY} is required (e.g. 1970)")
         elif decade % 10 != 0 or not MIN_DECADE <= decade <= latest:
             problems.append(
-                f"{TARGET_DECADE_KEY} must be a decade start between {MIN_DECADE} and {latest}")
+                f"{TARGET_DECADE_KEY} must be a decade start between {MIN_DECADE} and {latest}"
+            )
         return problems
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
         decade = (rules or {}).get(TARGET_DECADE_KEY)
         if isinstance(decade, bool) or not isinstance(decade, int):
             return ValidationResult(
-                valid=False, blocked=True, reason="This run has no target decade configured")
+                valid=False, blocked=True, reason="This run has no target decade configured"
+            )
         movie = self.session.get(CachedMovie, movie_id)
         if movie is None:
             movie = await cache_repo.get_movie(self.session, self.tmdb, movie_id)
@@ -91,8 +95,10 @@ class DecadeSieveEngine(TrackerEngine):
             return ValidationResult(valid=True)
         released = str(year) if year is not None else "no release year"
         return ValidationResult(
-            valid=False, blocked=True,
-            reason=f"Outside the sieve: {movie.title} ({released}) isn't from the {decade}s")
+            valid=False,
+            blocked=True,
+            reason=f"Outside the sieve: {movie.title} ({released}) isn't from the {decade}s",
+        )
 
 
 @dataclass
@@ -122,15 +128,19 @@ class RouletteEngine(TrackerEngine):
             CachedMovie.release_date.is_not(None),  # type: ignore[union-attr]
             CachedMovie.release_date != "",
             CachedMovie.release_date <= today,
-            or_(CachedMovie.status.is_(None),  # type: ignore[union-attr]
-                CachedMovie.status.not_in(UNRELEASED_STATUSES)),  # type: ignore[union-attr]
+            or_(
+                CachedMovie.status.is_(None),  # type: ignore[union-attr]
+                CachedMovie.status.not_in(UNRELEASED_STATUSES),
+            ),  # type: ignore[union-attr]
         )
         if filters.max_runtime is not None:
             statement = statement.where(
-                CachedMovie.runtime.is_not(None), CachedMovie.runtime <= filters.max_runtime)  # type: ignore[union-attr]
+                CachedMovie.runtime.is_not(None), CachedMovie.runtime <= filters.max_runtime
+            )  # type: ignore[union-attr]
         if filters.min_runtime is not None:
             statement = statement.where(
-                CachedMovie.runtime.is_not(None), CachedMovie.runtime >= filters.min_runtime)  # type: ignore[union-attr]
+                CachedMovie.runtime.is_not(None), CachedMovie.runtime >= filters.min_runtime
+            )  # type: ignore[union-attr]
         if filters.min_rating is not None or filters.max_rating is not None:
             rating = cast(CachedMovieRating.imdb_rating, Float)
             statement = statement.join(
@@ -143,25 +153,32 @@ class RouletteEngine(TrackerEngine):
                 statement = statement.where(rating >= filters.min_rating)
             if filters.max_rating is not None:
                 statement = statement.where(rating <= filters.max_rating)
-        genre_ids = list(dict.fromkeys(
-            [*filters.genre_ids, *([filters.genre_id] if filters.genre_id is not None else [])]))
+        genre_ids = list(
+            dict.fromkeys(
+                [*filters.genre_ids, *([filters.genre_id] if filters.genre_id is not None else [])]
+            )
+        )
         if genre_ids:
             params = {f"genre_{i}": genre for i, genre in enumerate(genre_ids)}
             if filters.genre_operator.upper() == "AND":
                 clauses = [
-                    text(f"EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g "
-                         f"WHERE g.value = :{name})").bindparams(**{name: value})
+                    text(
+                        f"EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g "
+                        f"WHERE g.value = :{name})"
+                    ).bindparams(**{name: value})
                     for name, value in params.items()
                 ]
                 statement = statement.where(*clauses)
             else:
                 placeholders = ", ".join(f":{name}" for name in params)
-                statement = statement.where(text(
-                    "EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g "
-                    f"WHERE g.value IN ({placeholders}))").bindparams(**params))
+                statement = statement.where(
+                    text(
+                        "EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g "
+                        f"WHERE g.value IN ({placeholders}))"
+                    ).bindparams(**params)
+                )
         if filters.exclude_movie_ids:
-            statement = statement.where(
-                CachedMovie.tmdb_id.not_in(list(filters.exclude_movie_ids)))  # type: ignore[union-attr]
+            statement = statement.where(CachedMovie.tmdb_id.not_in(list(filters.exclude_movie_ids)))  # type: ignore[union-attr]
         return statement
 
     def draw(
@@ -170,8 +187,7 @@ class RouletteEngine(TrackerEngine):
         """Up to `count` distinct random films as (movie, imdb rating), plus the matching
         pool size; None if nothing matches. `count > 1` powers the Blind Draft."""
         pool = self._pool(filters)
-        size = self.session.exec(
-            select(func.count()).select_from(pool.subquery())).one()
+        size = self.session.exec(select(func.count()).select_from(pool.subquery())).one()
         if size == 0:
             return None
         movies = self.session.exec(pool.order_by(func.random()).limit(count)).all()

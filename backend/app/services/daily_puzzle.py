@@ -101,7 +101,7 @@ class _Reached:
 
 def _batches(items: Sequence[int]) -> Iterable[Sequence[int]]:
     for start in range(0, len(items), _CHUNK):
-        yield items[start: start + _CHUNK]
+        yield items[start : start + _CHUNK]
 
 
 def _people_of(session: Session, movie_ids: Sequence[int], cast_limit: int):
@@ -109,13 +109,17 @@ def _people_of(session: Session, movie_ids: Sequence[int], cast_limit: int):
         for movie_id, actor_id in session.exec(
             select(CachedMovieCast.movie_id, CachedMovieCast.actor_id).where(
                 CachedMovieCast.movie_id.in_(batch),  # type: ignore[attr-defined]
-                or_(CachedMovieCast.cast_order.is_(None),  # type: ignore[union-attr]
-                    CachedMovieCast.cast_order < cast_limit))
+                or_(
+                    CachedMovieCast.cast_order.is_(None),  # type: ignore[union-attr]
+                    CachedMovieCast.cast_order < cast_limit,
+                ),
+            )
         ):
             yield movie_id, ("actor", actor_id)
         for movie_id, person_id in session.exec(
             select(CachedMovieDirector.movie_id, CachedMovieDirector.person_id).where(
-                CachedMovieDirector.movie_id.in_(batch))  # type: ignore[attr-defined]
+                CachedMovieDirector.movie_id.in_(batch)
+            )  # type: ignore[attr-defined]
         ):
             yield movie_id, ("director", person_id)
 
@@ -127,14 +131,18 @@ def _movies_of(session: Session, people: Sequence[tuple[str, int]], cast_limit: 
         for actor_id, movie_id in session.exec(
             select(CachedMovieCast.actor_id, CachedMovieCast.movie_id).where(
                 CachedMovieCast.actor_id.in_(batch),  # type: ignore[attr-defined]
-                or_(CachedMovieCast.cast_order.is_(None),  # type: ignore[union-attr]
-                    CachedMovieCast.cast_order < cast_limit))
+                or_(
+                    CachedMovieCast.cast_order.is_(None),  # type: ignore[union-attr]
+                    CachedMovieCast.cast_order < cast_limit,
+                ),
+            )
         ):
             yield ("actor", actor_id), movie_id
     for batch in _batches(directors):
         for person_id, movie_id in session.exec(
             select(CachedMovieDirector.person_id, CachedMovieDirector.movie_id).where(
-                CachedMovieDirector.person_id.in_(batch))  # type: ignore[attr-defined]
+                CachedMovieDirector.person_id.in_(batch)
+            )  # type: ignore[attr-defined]
         ):
             yield ("director", person_id), movie_id
 
@@ -142,13 +150,14 @@ def _movies_of(session: Session, people: Sequence[tuple[str, int]], cast_limit: 
 def _eligible(session: Session, movie_ids: Sequence[int]) -> set[int]:
     keep: set[int] = set()
     for batch in _batches(movie_ids):
-        rows = session.exec(
-            select(CachedMovie).where(CachedMovie.tmdb_id.in_(batch))).all()  # type: ignore[attr-defined]
+        rows = session.exec(select(CachedMovie).where(CachedMovie.tmdb_id.in_(batch))).all()  # type: ignore[attr-defined]
         keep.update(row.tmdb_id for row in rows if is_reality_eligible(row))
     return keep
 
 
-def explore(session: Session, source_id: int, max_hops: int, cast_limit: int) -> dict[int, _Reached]:
+def explore(
+    session: Session, source_id: int, max_hops: int, cast_limit: int
+) -> dict[int, _Reached]:
     """Breadth-first over the cached movie <-> actor/director graph. Ties always resolve to the
     smallest ids, so the same cache yields the same shortest routes."""
     reached = {source_id: _Reached(0, None, None)}
@@ -206,15 +215,21 @@ async def find_links(
     to_by_actor = {member["actor_id"]: member for member in cast_to}
     links = [
         SharedActorConnection(
-            actor_id=member["actor_id"], actor_name=member["name"],
-            profile_path=member["profile_path"], character_in_from=member["character_name"],
-            character_in_to=to_by_actor[member["actor_id"]]["character_name"])
-        for member in cast_from if member["actor_id"] in to_by_actor
+            actor_id=member["actor_id"],
+            actor_name=member["name"],
+            profile_path=member["profile_path"],
+            character_in_from=member["character_name"],
+            character_in_to=to_by_actor[member["actor_id"]]["character_name"],
+        )
+        for member in cast_from
+        if member["actor_id"] in to_by_actor
     ]
     directing_to = {d.person_id for d in directors_to}
     links.extend(
         SharedActorConnection(kind="director", actor_id=d.person_id, actor_name=d.name)
-        for d in directors_from if d.person_id in directing_to)
+        for d in directors_from
+        if d.person_id in directing_to
+    )
     return links
 
 
@@ -239,20 +254,27 @@ async def _build_pair(session: Session, tmdb: TMDBClient, day: date) -> DailyPuz
     rng = random.Random(puzzle_seed(day, security._get_secret_key(settings)))
     cast_limit = settings.pathfinder_cast_limit
     pool = sorted(
-        row.tmdb_id for row in session.exec(
+        row.tmdb_id
+        for row in session.exec(
             select(CachedMovie).where(
                 CachedMovie.popularity > DAILY_MIN_POPULARITY,  # type: ignore[operator]
                 CachedMovie.tmdb_id.in_(  # type: ignore[attr-defined]
-                    select(CachedMovieCast.movie_id))),
-        ).all() if is_reality_eligible(row))
+                    select(CachedMovieCast.movie_id)
+                ),
+            ),
+        ).all()
+        if is_reality_eligible(row)
+    )
     if len(pool) < 2:
         raise PuzzleUnavailable("Not enough popular films are cached yet to build a puzzle")
     pool_set = set(pool)
     for start_id in rng.sample(pool, min(MAX_START_ATTEMPTS, len(pool))):
         reached = explore(session, start_id, MAX_PAR_HOPS, cast_limit)
         targets = sorted(
-            movie_id for movie_id, info in reached.items()
-            if movie_id in pool_set and MIN_PAR_HOPS <= info.hops <= MAX_PAR_HOPS)
+            movie_id
+            for movie_id, info in reached.items()
+            if movie_id in pool_set and MIN_PAR_HOPS <= info.hops <= MAX_PAR_HOPS
+        )
         rng.shuffle(targets)
         for target_id in targets[:MAX_TARGETS_PER_START]:
             route = route_to(reached, target_id)
@@ -261,14 +283,20 @@ async def _build_pair(session: Session, tmdb: TMDBClient, day: date) -> DailyPuz
                 continue
             optimal = [{"movie_id": route[0], "link": None}] + [
                 {"movie_id": movie_id, "link": _connection_to_dict(link)}
-                for movie_id, link in zip(route[1:], links, strict=True)]
+                for movie_id, link in zip(route[1:], links, strict=True)
+            ]
             return DailyPuzzle(
-                puzzle_date=day.isoformat(), puzzle_number=puzzle_number(day),
-                start_movie_id=start_id, target_movie_id=target_id,
-                par_hops=len(route) - 1, optimal_path=optimal)
+                puzzle_date=day.isoformat(),
+                puzzle_number=puzzle_number(day),
+                start_movie_id=start_id,
+                target_movie_id=target_id,
+                par_hops=len(route) - 1,
+                optimal_path=optimal,
+            )
     raise PuzzleUnavailable(
         f"No {MIN_PAR_HOPS}-{MAX_PAR_HOPS} hop pair of popular films could be verified from the "
-        "cached graph yet - browse a few films (or run a Bridge search) and try again")
+        "cached graph yet - browse a few films (or run a Bridge search) and try again"
+    )
 
 
 async def get_or_create_puzzle(
@@ -313,16 +341,22 @@ def movie_summary(session: Session, movie_id: int) -> MovieSummary:
     if row is None:
         return MovieSummary(tmdb_id=movie_id, title=str(movie_id))
     return MovieSummary(
-        tmdb_id=row.tmdb_id, title=row.title, poster_path=row.poster_path,
-        release_year=parse_release_year(row.release_date), origin_country=row.origin_country)
+        tmdb_id=row.tmdb_id,
+        title=row.title,
+        poster_path=row.poster_path,
+        release_year=parse_release_year(row.release_date),
+        origin_country=row.origin_country,
+    )
 
 
 def _hops_out(session: Session, entries: Iterable[dict]) -> list[PuzzleHop]:
     return [
         PuzzleHop(
             movie=movie_summary(session, entry["movie_id"]),
-            link=SharedActorConnection(**entry["link"]) if entry.get("link") else None)
-        for entry in entries]
+            link=SharedActorConnection(**entry["link"]) if entry.get("link") else None,
+        )
+        for entry in entries
+    ]
 
 
 def optimal_hops(session: Session, puzzle: DailyPuzzle) -> list[PuzzleHop]:
@@ -342,7 +376,8 @@ def share_text(session: Session, puzzle: DailyPuzzle, attempt: DailyPuzzleAttemp
     hops = len(attempt.chain)
     return (
         f"CineChain Daily #{puzzle.puzzle_number} 🎬\n{start} ──► {target}\n"
-        f"{grid} ({hops} Hop{'' if hops == 1 else 's'})\n{SHARE_FOOTER}")
+        f"{grid} ({hops} Hop{'' if hops == 1 else 's'})\n{SHARE_FOOTER}"
+    )
 
 
 def attempt_state(
@@ -351,9 +386,13 @@ def attempt_state(
     if attempt is None:
         return AttemptState()
     return AttemptState(
-        status=attempt.status, chain=_hops_out(session, attempt.chain), hops=len(attempt.chain),
-        grades=attempt.grades, share_text=share_text(session, puzzle, attempt),
-        run_id=attempt.run_id)
+        status=attempt.status,
+        chain=_hops_out(session, attempt.chain),
+        hops=len(attempt.chain),
+        grades=attempt.grades,
+        share_text=share_text(session, puzzle, attempt),
+        run_id=attempt.run_id,
+    )
 
 
 def is_locked(session: Session, user_id: str, from_id: int, to_id: int) -> bool:
@@ -380,9 +419,7 @@ def start_attempt(session: Session, puzzle: DailyPuzzle, user_id: str) -> DailyP
     return attempt
 
 
-def _grade_chain(
-    session: Session, puzzle: DailyPuzzle, chain: Sequence[dict]
-) -> list[str]:
+def _grade_chain(session: Session, puzzle: DailyPuzzle, chain: Sequence[dict]) -> list[str]:
     """Green when a hop got closer to the target (by the cached graph), yellow when it didn't."""
     cast_limit = get_settings().pathfinder_cast_limit
     reach = explore(session, puzzle.target_movie_id, len(chain) + puzzle.par_hops, cast_limit)
@@ -399,13 +436,20 @@ def _grade_chain(
 
 
 async def attempt_hop(
-    session: Session, tmdb: TMDBClient, puzzle: DailyPuzzle, user_id: str,
-    current_id: int, next_id: int,
+    session: Session,
+    tmdb: TMDBClient,
+    puzzle: DailyPuzzle,
+    user_id: str,
+    current_id: int,
+    next_id: int,
 ) -> tuple[list[SharedActorConnection], str | None, bool, DailyPuzzleAttempt | None]:
     """(links, rejection reason, recorded, attempt). A hop is *recorded* only when it continues
     the user's chain from its tip while the attempt is still open."""
     attempt = get_attempt(session, puzzle.puzzle_date, user_id)
-    taken = {puzzle.start_movie_id, *(entry["movie_id"] for entry in (attempt.chain if attempt else []))}
+    taken = {
+        puzzle.start_movie_id,
+        *(entry["movie_id"] for entry in (attempt.chain if attempt else [])),
+    }
     if current_id == next_id:
         return [], "A film can't link to itself", False, attempt
     links = await find_links(session, tmdb, current_id, next_id)
@@ -456,13 +500,18 @@ def _link_metadata(link: dict | None) -> dict | None:
         return None
     if link.get("kind") == "director":
         return {
-            "connection_type": "director", "director_id": link["actor_id"],
-            "director_name": link["actor_name"]}
+            "connection_type": "director",
+            "director_id": link["actor_id"],
+            "director_name": link["actor_name"],
+        }
     return {
-        "connection_type": "actor", "actor_id": link["actor_id"], "actor_name": link["actor_name"],
+        "connection_type": "actor",
+        "actor_id": link["actor_id"],
+        "actor_name": link["actor_name"],
         "profile_path": link.get("profile_path"),
         "character_in_from": link.get("character_in_from"),
-        "character_in_to": link.get("character_in_to")}
+        "character_in_to": link.get("character_in_to"),
+    }
 
 
 def convert_to_run(
@@ -480,8 +529,10 @@ def convert_to_run(
     else:
         entries = list(puzzle.optimal_path)
     run = Run(
-        name=f"Daily Bridge #{puzzle.puzzle_number}", game_type="cinechain",
-        rules_config=dict(DEFAULT_RULES_CONFIG))
+        name=f"Daily Bridge #{puzzle.puzzle_number}",
+        game_type="cinechain",
+        rules_config=dict(DEFAULT_RULES_CONFIG),
+    )
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -491,17 +542,23 @@ def convert_to_run(
         movie = session.get(CachedMovie, entry["movie_id"])
         if movie is None:
             continue
-        session.add(RunStep(
-            run_id=run.id, movie_id=movie.tmdb_id, movie_title=movie.title,
-            movie_poster_path=movie.poster_path,
-            movie_release_year=parse_release_year(movie.release_date),
-            movie_origin_country=movie.origin_country,
-            transition_metadata=_link_metadata(entry.get("link")),
-            status="planned", watched_at=None, logged_by_user_id=user_id,
-            # Distinct, ordered timestamps: runs read their steps back by `logged_at`.
-            logged_at=base + timedelta(milliseconds=index)))
+        session.add(
+            RunStep(
+                run_id=run.id,
+                movie_id=movie.tmdb_id,
+                movie_title=movie.title,
+                movie_poster_path=movie.poster_path,
+                movie_release_year=parse_release_year(movie.release_date),
+                movie_origin_country=movie.origin_country,
+                transition_metadata=_link_metadata(entry.get("link")),
+                status="planned",
+                watched_at=None,
+                logged_by_user_id=user_id,
+                # Distinct, ordered timestamps: runs read their steps back by `logged_at`.
+                logged_at=base + timedelta(milliseconds=index),
+            )
+        )
     attempt.run_id = run.id
     session.add(attempt)
     session.commit()
     return run, len(entries)
-

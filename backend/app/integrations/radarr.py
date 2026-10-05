@@ -45,8 +45,7 @@ class RadarrClient:
 
     @property
     def _url(self) -> str:
-        url = self._overrides.get(
-            "radarr_url") or self._settings.radarr_url or DEFAULT_URL
+        url = self._overrides.get("radarr_url") or self._settings.radarr_url or DEFAULT_URL
         return url.rstrip("/")
 
     @property
@@ -69,7 +68,9 @@ class RadarrClient:
         return self._overrides.get("radarr_default_root_folder_path") or None
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        return await request_json(self._client, method, f"{self._url}{path}", self._api_key, **kwargs)
+        return await request_json(
+            self._client, method, f"{self._url}{path}", self._api_key, **kwargs
+        )
 
     async def check_health(self) -> dict:
         if not self.enabled:
@@ -84,14 +85,14 @@ class RadarrClient:
     async def get_root_folders(self) -> list[RootFolder]:
         data = await self._request("GET", "/api/v3/rootfolder")
         return [
-            RootFolder(id=f.get("id"),
-                       path=f["path"], free_space=f.get("freeSpace"))
+            RootFolder(id=f.get("id"), path=f["path"], free_space=f.get("freeSpace"))
             for f in data or []
         ]
 
     async def _queued_movie_ids(self) -> set[int]:
         data = await self._request(
-            "GET", "/api/v3/queue", params={"page": 1, "pageSize": 500, "includeMovie": "false"})
+            "GET", "/api/v3/queue", params={"page": 1, "pageSize": 500, "includeMovie": "false"}
+        )
         return {r["movieId"] for r in (data or {}).get("records", []) if r.get("movieId")}
 
     async def lookup_movies(self, tmdb_ids: list[int]) -> dict[int, RadarrMovieState | None]:
@@ -116,8 +117,7 @@ class RadarrClient:
             return tmdb_id, (data[0] if data else None)
 
         fetched = await asyncio.gather(*(fetch(t) for t in to_query))
-        needs_queue = any(item and not item.get("hasFile")
-                          for _, item in fetched)
+        needs_queue = any(item and not item.get("hasFile") for _, item in fetched)
         queued = await self._queued_movie_ids() if needs_queue else set()
 
         for tmdb_id, item in fetched:
@@ -145,8 +145,7 @@ class RadarrClient:
                 raise
             body = {"title": title}
         if body.get("id"):
-            raise IntegrationError(
-                "This movie has already been added to Radarr", 409)
+            raise IntegrationError("This movie has already been added to Radarr", 409)
 
         body.update(
             tmdbId=tmdb_id,
@@ -164,8 +163,7 @@ async def check_radarr_connectivity(client: httpx.AsyncClient, url: str, api_key
     if not url:
         return {"reachable": False, "version": None, "detail": "Radarr URL is required"}
     try:
-        data = await request_json(
-            client, "GET", f"{url.rstrip('/')}/api/v3/system/status", api_key)
+        data = await request_json(client, "GET", f"{url.rstrip('/')}/api/v3/system/status", api_key)
     except IntegrationError as exc:
         return {"reachable": False, "version": None, "detail": exc.detail}
     return {"reachable": True, "version": (data or {}).get("version"), "detail": None}

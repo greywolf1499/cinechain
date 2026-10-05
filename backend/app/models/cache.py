@@ -44,7 +44,8 @@ class CachedMovie(SQLModel, table=True):
     overview_embedding_model: str | None = None
     # LLM-extracted kebab-case tropes/themes ("heist", "time-loop"); NULL = not extracted yet.
     extracted_tropes: list[str] | None = Field(
-        default=None, sa_column=Column(JSON(none_as_null=True)))
+        default=None, sa_column=Column(JSON(none_as_null=True))
+    )
     # Historical Time-Travel: the year the story is *set* in (negative = BCE) and a short era label
     # ("Ancient Rome", "World War II"); NULL = not resolved yet. A film with no period indicator
     # resolves to its release year / "Contemporary". A manual edit is stored the same way.
@@ -65,10 +66,8 @@ class CachedActor(SQLModel, table=True):
 class CachedMovieCast(SQLModel, table=True):
     __tablename__ = "cached_movie_cast"
 
-    movie_id: int = Field(
-        foreign_key="cached_movies.tmdb_id", primary_key=True)
-    actor_id: int = Field(foreign_key="cached_actors.tmdb_id",
-                          primary_key=True, index=True)
+    movie_id: int = Field(foreign_key="cached_movies.tmdb_id", primary_key=True)
+    actor_id: int = Field(foreign_key="cached_actors.tmdb_id", primary_key=True, index=True)
     cast_order: int | None = None  # billing position (top 15)
     character_name: str | None = None
 
@@ -87,8 +86,7 @@ class CachedMovieRating(SQLModel, table=True):
 
     __tablename__ = "cached_movie_ratings"
 
-    movie_id: int = Field(
-        foreign_key="cached_movies.tmdb_id", primary_key=True)
+    movie_id: int = Field(foreign_key="cached_movies.tmdb_id", primary_key=True)
     imdb_rating: str | None = None
     rotten_tomatoes: str | None = None
     metacritic: str | None = None

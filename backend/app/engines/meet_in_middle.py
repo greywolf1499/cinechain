@@ -96,8 +96,7 @@ class MeetInTheMiddleEngine(CineChainEngine):
             return None
         for step in steps:
             if (step.transition_metadata or {}).get("collision"):
-                return RunOutcome(
-                    RUN_STATUS_COMPLETED, f"Chains collided at {step.movie_title}!")
+                return RunOutcome(RUN_STATUS_COMPLETED, f"Chains collided at {step.movie_title}!")
         return super().evaluate_run_outcome(run, steps)
 
     async def collides(
@@ -114,9 +113,13 @@ class MeetInTheMiddleEngine(CineChainEngine):
         if movie_id == frontier.movie_id:
             return True
         result = await self.validate_next_step(
-            frontier.movie_id, movie_id, cast_limit=(rules or {}).get("max_cast_order"),
-            rules=rules, previous_transition=frontier.transition_metadata,
-            history=list(opposing_steps))
+            frontier.movie_id,
+            movie_id,
+            cast_limit=(rules or {}).get("max_cast_order"),
+            rules=rules,
+            previous_transition=frontier.transition_metadata,
+            history=list(opposing_steps),
+        )
         return result.valid
 
     async def near_miss(
@@ -134,20 +137,26 @@ class MeetInTheMiddleEngine(CineChainEngine):
             return None
         cast_limit = (rules or {}).get("max_cast_order")
         candidate_cast = await cache_repo.get_movie_cast(
-            self.session, self.tmdb, movie_id, cast_limit)
+            self.session, self.tmdb, movie_id, cast_limit
+        )
         candidate_ids = {member["actor_id"] for member in candidate_cast}
         if not candidate_ids:
             return None
         for step in reversed(opposing_steps[:-1]):
             previous_cast = await cache_repo.get_movie_cast(
-                self.session, self.tmdb, step.movie_id, cast_limit)
+                self.session, self.tmdb, step.movie_id, cast_limit
+            )
             if candidate_ids.intersection(member["actor_id"] for member in previous_cast):
                 return step
         return None
 
     async def distance(
-        self, head_movie_id: int, tail_movie_id: int, excluded_movie_ids: set[int],
-        cast_limit: int | None = None, max_depth: int = DISTANCE_MAX_DEPTH,
+        self,
+        head_movie_id: int,
+        tail_movie_id: int,
+        excluded_movie_ids: set[int],
+        cast_limit: int | None = None,
+        max_depth: int = DISTANCE_MAX_DEPTH,
         max_seconds: int = DISTANCE_MAX_SECONDS,
     ) -> TunnelDistance:
         """Movie-hops between the two frontiers (1 = they already share cast), via a quick
@@ -160,9 +169,14 @@ class MeetInTheMiddleEngine(CineChainEngine):
         searched_depth = 0
         message: str | None = None
         async for event in pathfinder.solve_bridge_bipartite(
-            self.session, self.tmdb, head_movie_id, tail_movie_id,
-            max_depth=max_depth, cast_limit=cast_limit,
-            excluded_movie_ids=excluded_movie_ids, max_duration_seconds=max_seconds,
+            self.session,
+            self.tmdb,
+            head_movie_id,
+            tail_movie_id,
+            max_depth=max_depth,
+            cast_limit=cast_limit,
+            excluded_movie_ids=excluded_movie_ids,
+            max_duration_seconds=max_seconds,
         ):
             if event["type"] == "result":
                 hops = event["hops"]
@@ -171,19 +185,26 @@ class MeetInTheMiddleEngine(CineChainEngine):
                     for node in event["path"]
                 ]
                 connections = [
-                    connection if isinstance(connection, SharedActorConnection)
+                    connection
+                    if isinstance(connection, SharedActorConnection)
                     else SharedActorConnection.model_validate(connection)
                     for connection in event["connections"]
                 ]
                 searched_depth = hops
             elif event["type"] == "timeout":
                 searched_depth = event.get("depth_reached", searched_depth)
-                message = event.get("message") or "The search timed out - the ends may still be close."
+                message = (
+                    event.get("message") or "The search timed out - the ends may still be close."
+                )
             elif event["type"] == "exhausted":
                 searched_depth = event.get("depth_reached", max_depth)
                 message = f"No route within {searched_depth} hops yet."
             elif event["type"] == "error":
                 message = event.get("message", "The search failed.")
         return TunnelDistance(
-            hops=hops, searched_depth=searched_depth, message=message,
-            path_movie_ids=path_movie_ids, connections=connections)
+            hops=hops,
+            searched_depth=searched_depth,
+            message=message,
+            path_movie_ids=path_movie_ids,
+            connections=connections,
+        )

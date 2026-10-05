@@ -37,7 +37,8 @@ FILMS = {
 @pytest.fixture()
 def db_engine(config_dir):
     engine = create_engine(
-        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False})
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     return engine
 
@@ -50,8 +51,10 @@ def client(db_engine):
 
     app.dependency_overrides[get_session] = override_get_session
     with TestClient(app) as alice:
-        alice.post("/api/auth/register", json={
-            "username": "alice", "password": "password123", "display_name": "Alice"})
+        alice.post(
+            "/api/auth/register",
+            json={"username": "alice", "password": "password123", "display_name": "Alice"},
+        )
         alice.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield alice
     app.dependency_overrides.clear()
@@ -59,8 +62,10 @@ def client(db_engine):
 
 @pytest.fixture()
 def bob(client):
-    client.post("/api/auth/register", json={
-        "username": "bob", "password": "password123", "display_name": "Bob"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "display_name": "Bob"},
+    )
     other = TestClient(app)
     other.post("/api/auth/login", json={"username": "bob", "password": "password123"})
     return other
@@ -68,15 +73,49 @@ def bob(client):
 
 def mock_films():
     for movie_id, (title, year, countries) in FILMS.items():
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "title": title, "release_date": f"{year}-06-01", "poster_path": None,
-            "overview": "", "origin_country": countries, "original_language": "en",
-            "runtime": 100, "genres": [], "popularity": 5.0, "status": "Released"}))
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "crew": [],
-            "cast": [{"id": 1, "name": "Everyone", "profile_path": None, "character": "r",
-                      "order": 0}, {"id": 100 + movie_id, "name": "Solo", "profile_path": None,
-                                    "character": "r", "order": 1}]}))
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "title": title,
+                    "release_date": f"{year}-06-01",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": countries,
+                    "original_language": "en",
+                    "runtime": 100,
+                    "genres": [],
+                    "popularity": 5.0,
+                    "status": "Released",
+                },
+            )
+        )
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "crew": [],
+                    "cast": [
+                        {
+                            "id": 1,
+                            "name": "Everyone",
+                            "profile_path": None,
+                            "character": "r",
+                            "order": 0,
+                        },
+                        {
+                            "id": 100 + movie_id,
+                            "name": "Solo",
+                            "profile_path": None,
+                            "character": "r",
+                            "order": 1,
+                        },
+                    ],
+                },
+            )
+        )
 
 
 def user_id(session_client):
@@ -84,11 +123,21 @@ def user_id(session_client):
 
 
 def make_run(client, partner=None, game_type="cinechain", seed=1, **rules):
-    payload = {"name": "Run", "game_type": game_type, "seed_movie_id": seed,
-               "participant_user_ids": [user_id(partner)] if partner else [],
-               "rules_config": {"preset": "standard", "allow_repeats": "strict",
-                                "no_consecutive_actor": False, "max_cast_order": 15,
-                                "min_runtime": 40, "wildcards_budget": 2, **rules}}
+    payload = {
+        "name": "Run",
+        "game_type": game_type,
+        "seed_movie_id": seed,
+        "participant_user_ids": [user_id(partner)] if partner else [],
+        "rules_config": {
+            "preset": "standard",
+            "allow_repeats": "strict",
+            "no_consecutive_actor": False,
+            "max_cast_order": 15,
+            "min_runtime": 40,
+            "wildcards_budget": 2,
+            **rules,
+        },
+    }
     resp = client.post("/api/runs", json=payload)
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -174,9 +223,16 @@ def test_fork_needs_the_toggle_a_partner_and_a_valid_offer(client, bob):
 def test_fork_toggle_is_refused_for_tunnel_runs(client):
     with respx.mock:
         mock_films()
-        resp = client.post("/api/runs", json={
-            "name": "T", "game_type": "meet_in_the_middle", "seed_movie_id": 1,
-            "tail_seed_movie_id": 2, "rules_config": {"blind_fork": True}})
+        resp = client.post(
+            "/api/runs",
+            json={
+                "name": "T",
+                "game_type": "meet_in_the_middle",
+                "seed_movie_id": 1,
+                "tail_seed_movie_id": 2,
+                "rules_config": {"blind_fork": True},
+            },
+        )
     assert resp.status_code == 422 and "Blind Fork" in resp.json()["detail"]
 
 
@@ -193,13 +249,17 @@ def test_offer_veto_and_accept_flow(client, bob):
         assert fork["movie_ids"] == [2, 3, 7] and fork["offered_at"]
 
         # the partner sees the offer, and nobody can sidestep it by logging directly
-        assert bob.get(f"/api/runs/{run_id}").json()["rules_config"]["pending_fork"]["movie_ids"] == [2, 3, 7]
+        assert bob.get(f"/api/runs/{run_id}").json()["rules_config"]["pending_fork"][
+            "movie_ids"
+        ] == [2, 3, 7]
         assert log(client, run_id, 4).status_code == 409
         assert offer(client, run_id, ids=(4, 5, 6)).status_code == 409
 
         # the offerer can neither veto nor pick from their own offer
         assert client.post(f"/api/runs/{run_id}/fork/veto", json={"movie_id": 2}).status_code == 403
-        assert client.post(f"/api/runs/{run_id}/fork/accept", json={"movie_id": 2}).status_code == 403
+        assert (
+            client.post(f"/api/runs/{run_id}/fork/accept", json={"movie_id": 2}).status_code == 403
+        )
 
         # a pick before the veto is refused
         assert bob.post(f"/api/runs/{run_id}/fork/accept", json={"movie_id": 2}).status_code == 409
@@ -248,10 +308,18 @@ def test_turning_the_toggle_off_drops_a_pending_offer(client, bob):
 def test_clients_cannot_forge_a_pending_fork_or_scores(client, bob):
     with respx.mock:
         mock_films()
-        run = client.post("/api/runs", json={
-            "name": "Forged", "seed_movie_id": 1, "participant_user_ids": [user_id(bob)],
-            "rules_config": {"pending_fork": {"offered_by_id": user_id(bob), "movie_ids": [2, 3]},
-                             "tug_scores": {"team_a": 9, "team_b": 0}}}).json()
+        run = client.post(
+            "/api/runs",
+            json={
+                "name": "Forged",
+                "seed_movie_id": 1,
+                "participant_user_ids": [user_id(bob)],
+                "rules_config": {
+                    "pending_fork": {"offered_by_id": user_id(bob), "movie_ids": [2, 3]},
+                    "tug_scores": {"team_a": 9, "team_b": 0},
+                },
+            },
+        ).json()
     assert "pending_fork" not in run["rules_config"] and "tug_scores" not in run["rules_config"]
 
 
@@ -340,17 +408,25 @@ def test_tug_of_war_is_registered_without_modifiers(client):
 def test_tug_rules_are_validated_and_defaulted(client):
     with respx.mock:
         mock_films()
-        bad = client.post("/api/runs", json={
-            "name": "x", "game_type": "tug_of_war", "rules_config": {"dimension": "mood"}})
-        low = client.post("/api/runs", json={
-            "name": "x", "game_type": "tug_of_war", "rules_config": {"target_lead": 1}})
-        bare = client.post("/api/runs", json={
-            "name": "x", "game_type": "tug_of_war",
-            "rules_config": {
-                "tug_rules_version": 1,
-                "tug_momentum": {"effective_target": 1, "next_team": "team_b"},
+        bad = client.post(
+            "/api/runs",
+            json={"name": "x", "game_type": "tug_of_war", "rules_config": {"dimension": "mood"}},
+        )
+        low = client.post(
+            "/api/runs",
+            json={"name": "x", "game_type": "tug_of_war", "rules_config": {"target_lead": 1}},
+        )
+        bare = client.post(
+            "/api/runs",
+            json={
+                "name": "x",
+                "game_type": "tug_of_war",
+                "rules_config": {
+                    "tug_rules_version": 1,
+                    "tug_momentum": {"effective_target": 1, "next_team": "team_b"},
+                },
             },
-        })
+        )
     assert bad.status_code == 422 and "dimension" in bad.json()["detail"]
     assert low.status_code == 422 and "target_lead" in low.json()["detail"]
     rules = bare.json()["rules_config"]
@@ -378,7 +454,9 @@ def test_tug_turn_order_and_shared_device_team_attribution(client, bob):
         assert run["rules_config"]["tug_momentum"]["next_team"] == "team_a"
 
         first = log(
-            client, run_id, 2,
+            client,
+            run_id,
+            2,
             transition_metadata={"tug_team": "team_b"},
         )
         assert first.status_code == 201, first.text

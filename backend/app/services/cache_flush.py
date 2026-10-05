@@ -52,8 +52,11 @@ def flush_stale_cache(session: Session, max_age_days: int = 7) -> dict[str, int]
     # Their edges are about to disappear, so these actors' credit lists are incomplete.
     session.execute(
         update(CachedActor)
-        .where(CachedActor.tmdb_id.in_(
-            select(CachedMovieCast.actor_id).where(CachedMovieCast.movie_id.in_(stale_movies))))
+        .where(
+            CachedActor.tmdb_id.in_(
+                select(CachedMovieCast.actor_id).where(CachedMovieCast.movie_id.in_(stale_movies))
+            )
+        )
         .values(credits_fetched_at=None)
     )
     edges_removed = session.execute(

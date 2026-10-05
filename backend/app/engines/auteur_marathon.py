@@ -85,12 +85,20 @@ def build_filmography(
         runtime, genres = runtimes.get(entry["id"], (None, entry.get("genre_ids") or []))
         if not _is_feature(runtime, genres, int(entry.get("vote_count") or 0)):
             continue
-        films.append({
-            "movie_id": entry["id"], "title": entry.get("title") or "",
-            "release_date": entry["release_date"], "year": int(entry["release_date"][:4]),
-            "poster_path": entry.get("poster_path"), "runtime": runtime or None})
+        films.append(
+            {
+                "movie_id": entry["id"],
+                "title": entry.get("title") or "",
+                "release_date": entry["release_date"],
+                "year": int(entry["release_date"][:4]),
+                "poster_path": entry.get("poster_path"),
+                "runtime": runtime or None,
+            }
+        )
     if not films:
-        raise RunSetupError("This person has no feature films as a director to build a marathon from")
+        raise RunSetupError(
+            "This person has no feature films as a director to build a marathon from"
+        )
     return sorted(films, key=lambda f: (f["release_date"], f["movie_id"]))
 
 
@@ -107,9 +115,8 @@ class AuteurMarathonEngine(TrackerEngine):
         rules = rules or {}
         director_id = rules.get(DIRECTOR_ID_KEY)
         if (
-            (isinstance(director_id, bool) or not isinstance(director_id, int) or director_id < 1)
-            and not isinstance((rules.get("director") or {}).get("id"), int)
-        ):
+            isinstance(director_id, bool) or not isinstance(director_id, int) or director_id < 1
+        ) and not isinstance((rules.get("director") or {}).get("id"), int):
             problems.append(f"{DIRECTOR_ID_KEY} is required (search for a director)")
         skip = rules.get(MAX_SKIP_KEY)
         if skip is not None and (
@@ -132,7 +139,8 @@ class AuteurMarathonEngine(TrackerEngine):
         filmography = build_filmography(candidates, details)
         rest = {k: v for k, v in rules.items() if k != DIRECTOR_ID_KEY}
         return {
-            **rest, MAX_SKIP_KEY: rules.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP),
+            **rest,
+            MAX_SKIP_KEY: rules.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP),
             "director": {"id": director_id, "name": person.get("name") or str(director_id)},
             "filmography": filmography,
         }
@@ -151,12 +159,19 @@ class AuteurMarathonEngine(TrackerEngine):
             row = self.session.get(CachedMovie, movie_id)
             if row is None or row.runtime is None:
                 try:
-                    row = await fetch_with_backoff(
-                        lambda movie_id=movie_id: cache_repo.get_movie(
-                            self.session, self.tmdb, movie_id, refresh=True), deadline) or row
+                    row = (
+                        await fetch_with_backoff(
+                            lambda movie_id=movie_id: cache_repo.get_movie(
+                                self.session, self.tmdb, movie_id, refresh=True
+                            ),
+                            deadline,
+                        )
+                        or row
+                    )
                 except DeadlineReached:
                     raise RunSetupError(
-                        "TMDB is rate-limiting us - wait a minute and try again", 503) from None
+                        "TMDB is rate-limiting us - wait a minute and try again", 503
+                    ) from None
             if row is not None and row.runtime is not None:
                 details[movie_id] = (row.runtime, row.genre_ids or entry.get("genre_ids") or [])
         return details
@@ -170,32 +185,44 @@ class AuteurMarathonEngine(TrackerEngine):
     @staticmethod
     def _max_skip(rules: dict | None) -> int:
         skip = (rules or {}).get(MAX_SKIP_KEY)
-        return skip if isinstance(skip, int) and not isinstance(skip, bool) and skip >= 0 else DEFAULT_MAX_SKIP
+        return (
+            skip
+            if isinstance(skip, int) and not isinstance(skip, bool) and skip >= 0
+            else DEFAULT_MAX_SKIP
+        )
 
     def _title(self, movie_id: int) -> str:
         row = self.session.get(CachedMovie, movie_id)
         return row.title if row is not None else f"Film {movie_id}"
 
-    def _check(self, rules: dict | None, previous_id: int | None, movie_id: int) -> ValidationResult:
+    def _check(
+        self, rules: dict | None, previous_id: int | None, movie_id: int
+    ) -> ValidationResult:
         positions = self._positions(rules)
         filmography = (rules or {}).get("filmography") or []
         director = ((rules or {}).get("director") or {}).get("name", "this director")
         if movie_id not in positions:
             return ValidationResult(
-                valid=False, blocked=True,
-                reason=f"Off the filmography: {self._title(movie_id)} isn't a feature by {director}")
+                valid=False,
+                blocked=True,
+                reason=f"Off the filmography: {self._title(movie_id)} isn't a feature by {director}",
+            )
         position = positions[movie_id]
         before = positions.get(previous_id, -1) if previous_id is not None else -1
         title = filmography[position]["title"]
         if position <= before:
             return ValidationResult(
-                valid=False, reason=f"Release order: {title} came before the film you just watched")
+                valid=False, reason=f"Release order: {title} came before the film you just watched"
+            )
         skipped = position - before - 1
         if skipped > self._max_skip(rules):
             return ValidationResult(
                 valid=False,
-                reason=(f"Release order: {title} skips {skipped} films - at most "
-                        f"{self._max_skip(rules)} may be skipped"))
+                reason=(
+                    f"Release order: {title} skips {skipped} films - at most "
+                    f"{self._max_skip(rules)} may be skipped"
+                ),
+            )
         return ValidationResult(valid=True)
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:

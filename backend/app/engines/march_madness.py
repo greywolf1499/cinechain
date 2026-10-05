@@ -52,7 +52,8 @@ def build_bracket(movie_ids: list[int]) -> dict[str, Any]:
 
     bracket: dict[str, Any] = {
         "round_of_16": [
-            matchup("round_of_16", i, movie_ids[2 * i], movie_ids[2 * i + 1]) for i in range(8)],
+            matchup("round_of_16", i, movie_ids[2 * i], movie_ids[2 * i + 1]) for i in range(8)
+        ],
         "quarterfinals": [matchup("quarterfinals", i) for i in range(4)],
         "semifinals": [matchup("semifinals", i) for i in range(2)],
         "finals": [matchup("finals", 0)],
@@ -69,7 +70,9 @@ def find_matchup(bracket: dict, matchup_id: str) -> tuple[str, int, dict]:
     raise BracketError(f"No matchup {matchup_id!r} in this bracket", 404)
 
 
-def advance_matchup(bracket: dict, matchup_id: str, winning_movie_id: int) -> tuple[dict, str, bool]:
+def advance_matchup(
+    bracket: dict, matchup_id: str, winning_movie_id: int
+) -> tuple[dict, str, bool]:
     """(the new bracket, the round that was decided, whether this crowned the champion).
     The input is never mutated."""
     if bracket.get("champion") is not None:
@@ -116,15 +119,23 @@ def majority_winner(matchup: dict, participant_ids: list[str]) -> int | None:
     return None
 
 
-def seed_from_watchlist(session: Session, user_id: str, rng: random.Random | None = None) -> list[int]:
+def seed_from_watchlist(
+    session: Session, user_id: str, rng: random.Random | None = None
+) -> list[int]:
     """16 distinct random films from the user's synced Letterboxd watchlist."""
-    ids = sorted({
-        row.movie_id for row in session.exec(
-            select(LetterboxdWatchlist).where(LetterboxdWatchlist.user_id == user_id)).all()})
+    ids = sorted(
+        {
+            row.movie_id
+            for row in session.exec(
+                select(LetterboxdWatchlist).where(LetterboxdWatchlist.user_id == user_id)
+            ).all()
+        }
+    )
     if len(ids) < BRACKET_SIZE:
         raise RunSetupError(
             f"Your Letterboxd watchlist has {len(ids)} films - sync at least {BRACKET_SIZE} "
-            "(or pick the films by hand) to seed a bracket")
+            "(or pick the films by hand) to seed a bracket"
+        )
     return (rng or random).sample(ids, BRACKET_SIZE)
 
 
@@ -144,11 +155,13 @@ class MarchMadnessEngine(TrackerEngine):
         if rules.get(SEED_FLAG):
             return problems
         if (
-            not isinstance(ids, list) or len(ids) != BRACKET_SIZE
+            not isinstance(ids, list)
+            or len(ids) != BRACKET_SIZE
             or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)
         ):
             problems.append(
-                f"{IDS_KEY} must list exactly {BRACKET_SIZE} film ids (or set {SEED_FLAG}: true)")
+                f"{IDS_KEY} must list exactly {BRACKET_SIZE} film ids (or set {SEED_FLAG}: true)"
+            )
         elif len(set(ids)) != BRACKET_SIZE:
             problems.append(f"{IDS_KEY} must not repeat a film")
         return problems
@@ -163,7 +176,8 @@ class MarchMadnessEngine(TrackerEngine):
                 movie = await cache_repo.get_movie(self.session, self.tmdb, movie_id)
                 if movie.overview is None:
                     movie = await cache_repo.get_movie(
-                        self.session, self.tmdb, movie_id, refresh=True)
+                        self.session, self.tmdb, movie_id, refresh=True
+                    )
             except Exception as exc:
                 raise RunSetupError(f"Film {movie_id} couldn't be looked up: {exc}") from exc
             films[str(movie_id)] = film_card(movie)
@@ -172,13 +186,18 @@ class MarchMadnessEngine(TrackerEngine):
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
         return ValidationResult(
-            valid=False, blocked=True,
-            reason="March Madness films are logged by deciding matchups in the bracket")
+            valid=False,
+            blocked=True,
+            reason="March Madness films are logged by deciding matchups in the bracket",
+        )
 
 
 def film_card(movie: CachedMovie) -> dict[str, Any]:
     return {
-        "title": movie.title, "release_year": parse_release_year(movie.release_date),
-        "poster_path": movie.poster_path, "runtime": movie.runtime,
-        "overview": movie.overview or "", "tagline": movie.tagline or "",
+        "title": movie.title,
+        "release_year": parse_release_year(movie.release_date),
+        "poster_path": movie.poster_path,
+        "runtime": movie.runtime,
+        "overview": movie.overview or "",
+        "tagline": movie.tagline or "",
     }

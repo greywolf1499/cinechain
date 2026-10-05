@@ -22,9 +22,15 @@ def film(movie_id, genres=(18,), year=2000, runtime=100, rating=7.0):
 def random_films(n, seed):
     rng = random.Random(seed)
     return [
-        film(i + 1, rng.sample(range(1, 15), rng.randint(1, 3)), rng.randint(1930, 2024),
-             rng.randint(70, 190), rng.uniform(3, 9))
-        for i in range(n)]
+        film(
+            i + 1,
+            rng.sample(range(1, 15), rng.randint(1, 3)),
+            rng.randint(1930, 2024),
+            rng.randint(70, 190),
+            rng.uniform(3, 9),
+        )
+        for i in range(n)
+    ]
 
 
 def held_karp(matrix):
@@ -134,12 +140,14 @@ def test_result_is_a_permutation_with_consistent_scores():
     assert result.optimized_whiplash_score <= result.initial_whiplash_score
     assert len(result.transitions) == 14
     assert sum(t.cost for t in result.transitions) == pytest.approx(
-        result.optimized_whiplash_score, abs=0.01)
-    expected = (result.initial_whiplash_score - result.optimized_whiplash_score)
+        result.optimized_whiplash_score, abs=0.01
+    )
+    expected = result.initial_whiplash_score - result.optimized_whiplash_score
     expected = expected / result.initial_whiplash_score * 100
     assert result.improvement_percentage == pytest.approx(expected, abs=0.1)
     assert [(t.from_movie_id, t.to_movie_id) for t in result.transitions] == list(
-        itertools.pairwise(result.ordered_movie_ids))
+        itertools.pairwise(result.ordered_movie_ids)
+    )
 
 
 def test_already_smooth_input_is_left_alone():
@@ -171,7 +179,9 @@ def test_weights_steer_the_order():
         return sum(abs(values[a] - values[b]) for a, b in itertools.pairwise(order))
 
     assert span(by_year.ordered_movie_ids, year_of) < span(by_runtime.ordered_movie_ids, year_of)
-    assert span(by_runtime.ordered_movie_ids, runtime_of) < span(by_year.ordered_movie_ids, runtime_of)
+    assert span(by_runtime.ordered_movie_ids, runtime_of) < span(
+        by_year.ordered_movie_ids, runtime_of
+    )
 
 
 def test_worst_case_runs_inside_the_budget():
@@ -209,7 +219,8 @@ def test_summary_names_the_biggest_gap():
 @pytest.fixture()
 def db_engine(config_dir):
     engine = create_engine(
-        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False})
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     return engine
 
@@ -224,7 +235,8 @@ def client(db_engine):
     with TestClient(app) as test_client:
         test_client.post(
             "/api/auth/register",
-            json={"username": "alice", "password": "password123", "display_name": "Alice"})
+            json={"username": "alice", "password": "password123", "display_name": "Alice"},
+        )
         test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
@@ -236,10 +248,18 @@ def seed_movies(db_engine, n=10):
         session.add(CachedGenre(id=35, name="Comedy"))
         session.add(CachedGenre(id=878, name="Science Fiction"))
         for i in range(1, n + 1):
-            session.add(CachedMovie(
-                tmdb_id=i, title=f"Movie {i}", release_date=f"{1950 + i * 7}-01-01",
-                runtime=80 + (i * 37) % 90, genre_ids=[[18, 35, 878][i % 3]],
-                vote_average=3.0 + i % 6, poster_path=f"/p{i}.jpg", overview=f"Plot {i}"))
+            session.add(
+                CachedMovie(
+                    tmdb_id=i,
+                    title=f"Movie {i}",
+                    release_date=f"{1950 + i * 7}-01-01",
+                    runtime=80 + (i * 37) % 90,
+                    genre_ids=[[18, 35, 878][i % 3]],
+                    vote_average=3.0 + i % 6,
+                    poster_path=f"/p{i}.jpg",
+                    overview=f"Plot {i}",
+                )
+            )
         session.commit()
         session.add(CachedMovieRating(movie_id=1, imdb_rating="8.0"))
         session.commit()
@@ -269,7 +289,10 @@ def test_optimize_returns_the_sequence_and_metrics(client, db_engine):
     assert body["method"] == "exact"
     assert len(body["transitions"]) == 5
     assert {t["label"] for t in body["transitions"]} <= {
-        "Smooth Transition", "Gentle Shift", "Tonal Whiplash"}
+        "Smooth Transition",
+        "Gentle Shift",
+        "Tonal Whiplash",
+    }
     assert [f["movie_id"] for f in body["films"]] == body["ordered_movie_ids"]
     assert body["films"][0]["genres"] and body["films"][0]["poster_path"]
     assert sum(body["weights"].values()) == pytest.approx(1.0, abs=1e-3)
@@ -278,47 +301,75 @@ def test_optimize_returns_the_sequence_and_metrics(client, db_engine):
 
 def test_optimize_uses_annealing_above_eight_films(client, db_engine):
     seed_movies(db_engine, 12)
-    body = client.post(
-        "/api/tools/router/optimize", json={"movie_ids": list(range(1, 13))}).json()
+    body = client.post("/api/tools/router/optimize", json={"movie_ids": list(range(1, 13))}).json()
     assert body["method"] == "simulated_annealing" and len(body["ordered_movie_ids"]) == 12
 
 
 def test_optimize_prefers_imdb_rating_over_tmdb_score(client, db_engine):
     seed_movies(db_engine, 4)
-    films = client.post(
-        "/api/tools/router/optimize", json={"movie_ids": [1, 2, 3, 4]}).json()["films"]
+    films = client.post("/api/tools/router/optimize", json={"movie_ids": [1, 2, 3, 4]}).json()[
+        "films"
+    ]
     assert next(f for f in films if f["movie_id"] == 1)["rating"] == 8.0
     assert next(f for f in films if f["movie_id"] == 2)["rating"] == 5.0  # TMDB vote_average
 
 
 def test_weight_overrides_are_normalised(client, db_engine):
     seed_movies(db_engine, 5)
-    body = client.post("/api/tools/router/optimize", json={
-        "movie_ids": [1, 2, 3, 4, 5], "weight_genre": 1, "weight_year": 0,
-        "weight_runtime": 0, "weight_rating": 0}).json()
+    body = client.post(
+        "/api/tools/router/optimize",
+        json={
+            "movie_ids": [1, 2, 3, 4, 5],
+            "weight_genre": 1,
+            "weight_year": 0,
+            "weight_runtime": 0,
+            "weight_rating": 0,
+        },
+    ).json()
     assert body["weights"] == {
-        "weight_genre": 1.0, "weight_year": 0.0, "weight_runtime": 0.0, "weight_rating": 0.0}
+        "weight_genre": 1.0,
+        "weight_year": 0.0,
+        "weight_runtime": 0.0,
+        "weight_rating": 0.0,
+    }
 
 
 def test_optimize_validation(client, db_engine):
     seed_movies(db_engine, 6)
     post = client.post
     assert post("/api/tools/router/optimize", json={"movie_ids": [1, 2, 3]}).status_code == 422
-    assert post(
-        "/api/tools/router/optimize", json={"movie_ids": list(range(1, 27))}).status_code == 422
+    assert (
+        post("/api/tools/router/optimize", json={"movie_ids": list(range(1, 27))}).status_code
+        == 422
+    )
     assert post("/api/tools/router/optimize", json={"movie_ids": [1, 1, 2, 3]}).status_code == 422
-    assert post("/api/tools/router/optimize", json={
-        "movie_ids": [1, 2, 3, 4], "weight_genre": -1}).status_code == 422
-    assert post("/api/tools/router/optimize", json={
-        "movie_ids": [1, 2, 3, 4], "weight_genre": 0, "weight_year": 0, "weight_runtime": 0,
-        "weight_rating": 0}).status_code == 422
+    assert (
+        post(
+            "/api/tools/router/optimize", json={"movie_ids": [1, 2, 3, 4], "weight_genre": -1}
+        ).status_code
+        == 422
+    )
+    assert (
+        post(
+            "/api/tools/router/optimize",
+            json={
+                "movie_ids": [1, 2, 3, 4],
+                "weight_genre": 0,
+                "weight_year": 0,
+                "weight_runtime": 0,
+                "weight_rating": 0,
+            },
+        ).status_code
+        == 422
+    )
 
 
 def test_convert_to_run_creates_planned_steps_in_order(client, db_engine):
     seed_movies(db_engine, 6)
     order = [4, 2, 6, 1, 3]
     response = client.post(
-        "/api/tools/router/convert-to-run", json={"run_name": " Smooth Night ", "movie_ids": order})
+        "/api/tools/router/convert-to-run", json={"run_name": " Smooth Night ", "movie_ids": order}
+    )
     assert response.status_code == 201
     body = response.json()
     assert body["name"] == "Smooth Night" and body["status"] == "active"
@@ -339,7 +390,8 @@ def test_convert_to_run_creates_planned_steps_in_order(client, db_engine):
 def test_converted_steps_can_be_marked_watched(client, db_engine):
     seed_movies(db_engine, 4)
     run = client.post(
-        "/api/tools/router/convert-to-run", json={"run_name": "M", "movie_ids": [3, 1, 2]}).json()
+        "/api/tools/router/convert-to-run", json={"run_name": "M", "movie_ids": [3, 1, 2]}
+    ).json()
     step = run["steps"][1]
     response = client.patch(f"/api/runs/{run['id']}/steps/{step['id']}/mark-watched", json={})
     assert response.status_code == 200 and response.json()["status"] == "watched"
@@ -348,14 +400,30 @@ def test_converted_steps_can_be_marked_watched(client, db_engine):
 def test_convert_to_run_validation(client, db_engine):
     seed_movies(db_engine, 3)
     post = client.post
-    assert post("/api/tools/router/convert-to-run", json={
-        "run_name": "", "movie_ids": [1, 2]}).status_code == 422
-    assert post("/api/tools/router/convert-to-run", json={
-        "run_name": "   ", "movie_ids": [1, 2]}).status_code == 422
-    assert post("/api/tools/router/convert-to-run", json={
-        "run_name": "x", "movie_ids": [1]}).status_code == 422
-    assert post("/api/tools/router/convert-to-run", json={
-        "run_name": "x", "movie_ids": [1, 1]}).status_code == 422
+    assert (
+        post(
+            "/api/tools/router/convert-to-run", json={"run_name": "", "movie_ids": [1, 2]}
+        ).status_code
+        == 422
+    )
+    assert (
+        post(
+            "/api/tools/router/convert-to-run", json={"run_name": "   ", "movie_ids": [1, 2]}
+        ).status_code
+        == 422
+    )
+    assert (
+        post(
+            "/api/tools/router/convert-to-run", json={"run_name": "x", "movie_ids": [1]}
+        ).status_code
+        == 422
+    )
+    assert (
+        post(
+            "/api/tools/router/convert-to-run", json={"run_name": "x", "movie_ids": [1, 1]}
+        ).status_code
+        == 422
+    )
 
 
 def test_optimize_with_fewer_than_two_movies_is_a_friendly_400(client, db_engine):

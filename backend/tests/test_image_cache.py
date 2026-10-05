@@ -10,15 +10,18 @@ URL = "https://a.ltrbxd.com/resized/avatar.jpg"
 JPEG = b"\xff\xd8\xff\xe0" + b"x" * 64
 
 
-@pytest.mark.parametrize("url", [
-    "http://a.ltrbxd.com/x.jpg",
-    "https://evil.example.com/x.jpg",
-    "https://ltrbxd.com.evil.example.com/x.jpg",
-    "https://user:pw@a.ltrbxd.com/x.jpg",
-    "https://a.ltrbxd.com:8443/x.jpg",
-    "file:///etc/passwd",
-    "https://127.0.0.1/x.jpg",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://a.ltrbxd.com/x.jpg",
+        "https://evil.example.com/x.jpg",
+        "https://ltrbxd.com.evil.example.com/x.jpg",
+        "https://user:pw@a.ltrbxd.com/x.jpg",
+        "https://a.ltrbxd.com:8443/x.jpg",
+        "file:///etc/passwd",
+        "https://127.0.0.1/x.jpg",
+    ],
+)
 def test_validate_rejects_non_letterboxd_urls(url):
     with pytest.raises(image_cache.ImageProxyError):
         image_cache.validate_image_url(url)
@@ -31,8 +34,13 @@ def test_validate_accepts_letterboxd_cdn_hosts():
 
 async def test_first_request_fetches_then_serves_from_disk(config_dir):
     with respx.mock:
-        route = respx.get(URL).mock(return_value=httpx.Response(
-            200, content=JPEG, headers={"content-type": "image/jpeg", "cache-control": "max-age=86400"}))
+        route = respx.get(URL).mock(
+            return_value=httpx.Response(
+                200,
+                content=JPEG,
+                headers={"content-type": "image/jpeg", "cache-control": "max-age=86400"},
+            )
+        )
         async with httpx.AsyncClient() as client:
             first = await image_cache.get_image(client, URL)
             second = await image_cache.get_image(client, URL)
@@ -46,11 +54,20 @@ async def test_first_request_fetches_then_serves_from_disk(config_dir):
 
 async def test_stale_entry_revalidates_with_etag_and_keeps_body_on_304(config_dir):
     with respx.mock:
-        route = respx.get(URL).mock(side_effect=[
-            httpx.Response(200, content=JPEG, headers={
-                "content-type": "image/jpeg", "etag": '"abc"', "cache-control": "no-cache"}),
-            httpx.Response(304, headers={"cache-control": "max-age=3600"}),
-        ])
+        route = respx.get(URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    content=JPEG,
+                    headers={
+                        "content-type": "image/jpeg",
+                        "etag": '"abc"',
+                        "cache-control": "no-cache",
+                    },
+                ),
+                httpx.Response(304, headers={"cache-control": "max-age=3600"}),
+            ]
+        )
         async with httpx.AsyncClient() as client:
             await image_cache.get_image(client, URL)
             _, meta_path = image_cache._paths(URL)
@@ -66,10 +83,12 @@ async def test_stale_entry_revalidates_with_etag_and_keeps_body_on_304(config_di
 
 async def test_serves_stale_copy_when_upstream_fails(config_dir):
     with respx.mock:
-        respx.get(URL).mock(side_effect=[
-            httpx.Response(200, content=JPEG, headers={"content-type": "image/jpeg"}),
-            httpx.Response(500),
-        ])
+        respx.get(URL).mock(
+            side_effect=[
+                httpx.Response(200, content=JPEG, headers={"content-type": "image/jpeg"}),
+                httpx.Response(500),
+            ]
+        )
         async with httpx.AsyncClient() as client:
             await image_cache.get_image(client, URL)
             _, meta_path = image_cache._paths(URL)
@@ -84,22 +103,33 @@ async def test_serves_stale_copy_when_upstream_fails(config_dir):
 async def test_rejects_non_image_oversized_and_offsite_redirects(config_dir):
     async with httpx.AsyncClient() as client:
         with respx.mock:
-            respx.get(URL).mock(return_value=httpx.Response(
-                200, content=b"<html>", headers={"content-type": "text/html"}))
+            respx.get(URL).mock(
+                return_value=httpx.Response(
+                    200, content=b"<html>", headers={"content-type": "text/html"}
+                )
+            )
             with pytest.raises(image_cache.ImageProxyError):
                 await image_cache.get_image(client, URL)
 
         with respx.mock:
             big = "https://a.ltrbxd.com/big.jpg"
-            respx.get(big).mock(return_value=httpx.Response(
-                200, content=b"x" * (image_cache.MAX_IMAGE_BYTES + 1), headers={"content-type": "image/jpeg"}))
+            respx.get(big).mock(
+                return_value=httpx.Response(
+                    200,
+                    content=b"x" * (image_cache.MAX_IMAGE_BYTES + 1),
+                    headers={"content-type": "image/jpeg"},
+                )
+            )
             with pytest.raises(image_cache.ImageProxyError):
                 await image_cache.get_image(client, big)
 
         with respx.mock:
             hop = "https://a.ltrbxd.com/hop.jpg"
-            respx.get(hop).mock(return_value=httpx.Response(
-                302, headers={"location": "https://evil.example.com/steal.jpg"}))
+            respx.get(hop).mock(
+                return_value=httpx.Response(
+                    302, headers={"location": "https://evil.example.com/steal.jpg"}
+                )
+            )
             with pytest.raises(image_cache.ImageProxyError):
                 await image_cache.get_image(client, hop)
 
@@ -110,6 +140,7 @@ async def test_prune_evicts_oldest_until_under_cap(config_dir):
         (directory / f"k{index}.img").write_bytes(b"x" * 100)
         (directory / f"k{index}.json").write_text("{}")
         import os
+
         os.utime(directory / f"k{index}.img", (index, index))
 
     removed = image_cache.prune_cache(max_bytes=150)

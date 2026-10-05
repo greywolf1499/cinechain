@@ -36,8 +36,10 @@ def consume_veto_token(session: Session, user: User) -> bool:
     """Spend one token. Atomic (`WHERE veto_tokens > 0`) so two concurrent requests can't both
     spend the last one. The caller commits."""
     result = session.execute(
-        update(User).where(User.id == user.id, User.veto_tokens > 0)  # type: ignore[arg-type]
-        .values(veto_tokens=User.veto_tokens - 1))
+        update(User)
+        .where(User.id == user.id, User.veto_tokens > 0)  # type: ignore[arg-type]
+        .values(veto_tokens=User.veto_tokens - 1)
+    )
     if result.rowcount != 1:  # type: ignore[attr-defined]
         return False
     session.refresh(user)

@@ -71,11 +71,14 @@ def _countries(raw: str | None) -> list[str]:
     return [c for c in parsed if isinstance(c, str)] if isinstance(parsed, list) else []
 
 
-def _needs_work(session: Session, movie: CachedMovie | None, omdb_enabled: bool, movie_id: int) -> bool:
+def _needs_work(
+    session: Session, movie: CachedMovie | None, omdb_enabled: bool, movie_id: int
+) -> bool:
     if movie is None or movie.runtime is None or movie.directors_fetched_at is None:
         return True
     directors = session.exec(
-        select(CachedMovieDirector).where(CachedMovieDirector.movie_id == movie_id)).all()
+        select(CachedMovieDirector).where(CachedMovieDirector.movie_id == movie_id)
+    ).all()
     if any(d.gender is None for d in directors):
         return True
     return omdb_enabled and session.get(CachedMovieRating, movie_id) is None
@@ -83,14 +86,26 @@ def _needs_work(session: Session, movie: CachedMovie | None, omdb_enabled: bool,
 
 def _build_films(session: Session, rows: list[LetterboxdWatchlist]) -> list[BingoFilm]:
     movie_ids = [row.movie_id for row in rows]
-    movies = {
-        m.tmdb_id: m for m in session.exec(
-            select(CachedMovie).where(col(CachedMovie.tmdb_id).in_(movie_ids))).all()
-    } if movie_ids else {}
-    ratings = {
-        r.movie_id: r for r in session.exec(
-            select(CachedMovieRating).where(col(CachedMovieRating.movie_id).in_(movie_ids))).all()
-    } if movie_ids else {}
+    movies = (
+        {
+            m.tmdb_id: m
+            for m in session.exec(
+                select(CachedMovie).where(col(CachedMovie.tmdb_id).in_(movie_ids))
+            ).all()
+        }
+        if movie_ids
+        else {}
+    )
+    ratings = (
+        {
+            r.movie_id: r
+            for r in session.exec(
+                select(CachedMovieRating).where(col(CachedMovieRating.movie_id).in_(movie_ids))
+            ).all()
+        }
+        if movie_ids
+        else {}
+    )
     badges: dict[int, list[str]] = {}
     directors: dict[int, list[CachedMovieDirector]] = {}
     if movie_ids:
@@ -110,21 +125,26 @@ def _build_films(session: Session, rows: list[LetterboxdWatchlist]) -> list[Bing
         # 0 = TMDB doesn't know the gender, which says nothing either way.
         genders = [d.gender for d in directors.get(row.movie_id, []) if d.gender]
         fetched = movie is not None and movie.directors_fetched_at is not None
-        films.append(BingoFilm(
-            movie_id=row.movie_id,
-            title=movie.title if movie and movie.title else row.title,
-            year=parse_release_year(movie.release_date) if movie and movie.release_date else row.year,
-            poster_path=movie.poster_path if movie else None,
-            runtime=movie.runtime if movie else None,
-            original_language=movie.original_language if movie else None,
-            origin_countries=_countries(movie.origin_country) if movie else [],
-            genre_ids=(movie.genre_ids or []) if movie else [],
-            imdb_rating=_imdb_value(rating.imdb_rating) if rating else None,
-            popularity=movie.popularity if movie else None,
-            canon_badges=badges.get(row.movie_id, []),
-            directed_by_woman=(
-                any(g == FEMALE_GENDER for g in genders) if fetched and genders else None),
-        ))
+        films.append(
+            BingoFilm(
+                movie_id=row.movie_id,
+                title=movie.title if movie and movie.title else row.title,
+                year=parse_release_year(movie.release_date)
+                if movie and movie.release_date
+                else row.year,
+                poster_path=movie.poster_path if movie else None,
+                runtime=movie.runtime if movie else None,
+                original_language=movie.original_language if movie else None,
+                origin_countries=_countries(movie.origin_country) if movie else [],
+                genre_ids=(movie.genre_ids or []) if movie else [],
+                imdb_rating=_imdb_value(rating.imdb_rating) if rating else None,
+                popularity=movie.popularity if movie else None,
+                canon_badges=badges.get(row.movie_id, []),
+                directed_by_woman=(
+                    any(g == FEMALE_GENDER for g in genders) if fetched and genders else None
+                ),
+            )
+        )
     return films
 
 
@@ -140,10 +160,13 @@ async def bingo_watchlist(
     matching Bingo squares. `hydrate=N` first fills in runtime / language / genres,
     directors (for "directed by a woman") and ratings for up to N films still missing
     them; `pending` says how many films are left after that."""
-    rows = list(session.exec(
-        select(LetterboxdWatchlist).where(LetterboxdWatchlist.user_id == current_user.id)
-        .order_by(LetterboxdWatchlist.title)
-    ).all())
+    rows = list(
+        session.exec(
+            select(LetterboxdWatchlist)
+            .where(LetterboxdWatchlist.user_id == current_user.id)
+            .order_by(LetterboxdWatchlist.title)
+        ).all()
+    )
 
     if hydrate:
         deadline = time.monotonic() + HYDRATE_DEADLINE_SECONDS
@@ -159,11 +182,19 @@ async def bingo_watchlist(
                 if movie is None or movie.runtime is None:
                     await fetch_with_backoff(
                         lambda movie_id=row.movie_id: cache_repo.get_movie(
-                            session, tmdb, movie_id, refresh=True), deadline)
+                            session, tmdb, movie_id, refresh=True
+                        ),
+                        deadline,
+                    )
                 existing = session.get(CachedMovie, row.movie_id)
                 stale_gender = existing is not None and any(
-                    d.gender is None for d in session.exec(select(CachedMovieDirector).where(
-                        CachedMovieDirector.movie_id == row.movie_id)).all())
+                    d.gender is None
+                    for d in session.exec(
+                        select(CachedMovieDirector).where(
+                            CachedMovieDirector.movie_id == row.movie_id
+                        )
+                    ).all()
+                )
                 if existing is None or existing.directors_fetched_at is None or stale_gender:
                     if stale_gender:  # re-read TMDB crew so genders are stored
                         existing.directors_fetched_at = None
@@ -171,10 +202,16 @@ async def bingo_watchlist(
                         session.commit()
                     await fetch_with_backoff(
                         lambda movie_id=row.movie_id: cache_repo.get_movie_directors(
-                            session, tmdb, movie_id), deadline)
+                            session, tmdb, movie_id
+                        ),
+                        deadline,
+                    )
                 await fetch_with_backoff(
                     lambda movie_id=row.movie_id: cache_repo.get_movie_ratings(
-                        session, tmdb, omdb, movie_id), deadline)
+                        session, tmdb, omdb, movie_id
+                    ),
+                    deadline,
+                )
             except DeadlineReached:
                 break
             except Exception:
@@ -183,7 +220,8 @@ async def bingo_watchlist(
 
     films = _build_films(session, rows)
     pending = sum(
-        1 for row in rows
+        1
+        for row in rows
         if _needs_work(session, session.get(CachedMovie, row.movie_id), omdb.enabled, row.movie_id)
     )
     return BingoWatchlist(films=films, total=len(films), pending=pending)
@@ -200,20 +238,29 @@ def march_madness_seed(
     except RunSetupError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     titles = {
-        row.movie_id: row for row in session.exec(
+        row.movie_id: row
+        for row in session.exec(
             select(LetterboxdWatchlist).where(
                 LetterboxdWatchlist.user_id == current_user.id,
-                col(LetterboxdWatchlist.movie_id).in_(ids))).all()}
-    cached = {m.tmdb_id: m for m in session.exec(
-        select(CachedMovie).where(col(CachedMovie.tmdb_id).in_(ids))).all()}
+                col(LetterboxdWatchlist.movie_id).in_(ids),
+            )
+        ).all()
+    }
+    cached = {
+        m.tmdb_id: m
+        for m in session.exec(select(CachedMovie).where(col(CachedMovie.tmdb_id).in_(ids))).all()
+    }
     return [
         MovieSummary(
             tmdb_id=movie_id,
             title=cached[movie_id].title if movie_id in cached else titles[movie_id].title,
             poster_path=cached[movie_id].poster_path if movie_id in cached else None,
             release_year=(
-                parse_release_year(cached[movie_id].release_date) if movie_id in cached
-                else titles[movie_id].year),
-            origin_country=cached[movie_id].origin_country if movie_id in cached else None)
+                parse_release_year(cached[movie_id].release_date)
+                if movie_id in cached
+                else titles[movie_id].year
+            ),
+            origin_country=cached[movie_id].origin_country if movie_id in cached else None,
+        )
         for movie_id in ids
     ]

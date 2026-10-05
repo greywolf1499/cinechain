@@ -35,11 +35,9 @@ def register(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin authentication required"
         )
 
-    existing = session.exec(select(User).where(
-        User.username == payload.username)).first()
+    existing = session.exec(select(User).where(User.username == payload.username)).first()
     if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="Username already exists")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
 
     user = User(
         username=payload.username,
@@ -57,11 +55,9 @@ def register(
 def login(
     payload: LoginRequest, response: Response, session: Session = Depends(get_session)
 ) -> User:
-    user = session.exec(select(User).where(
-        User.username == payload.username)).first()
+    user = session.exec(select(User).where(User.username == payload.username)).first()
     # Always run one bcrypt check so unknown usernames cost the same as wrong passwords.
-    password_ok = verify_password(
-        payload.password, user.password_hash if user else _DUMMY_HASH)
+    password_ok = verify_password(payload.password, user.password_hash if user else _DUMMY_HASH)
     if user is None or not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password"

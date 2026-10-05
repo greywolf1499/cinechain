@@ -31,17 +31,30 @@ def seed_chain(db_engine, films: int = FILMS, popularity: float = 50.0) -> None:
         for actor in range(101, 101 + films):
             session.add(CachedActor(tmdb_id=actor, name=f"Actor {actor}"))
         for film in range(1, films + 1):
-            session.add(CachedMovie(
-                tmdb_id=film, title=f"Film {film}", release_date="2000-01-01",
-                status="Released", overview="x", popularity=popularity,
-                cast_fetched_at=utcnow(), directors_fetched_at=utcnow()))
+            session.add(
+                CachedMovie(
+                    tmdb_id=film,
+                    title=f"Film {film}",
+                    release_date="2000-01-01",
+                    status="Released",
+                    overview="x",
+                    popularity=popularity,
+                    cast_fetched_at=utcnow(),
+                    directors_fetched_at=utcnow(),
+                )
+            )
         session.commit()
         for film in range(1, films + 1):
             for order, actor in enumerate((100 + film - 1, 100 + film)):
                 if 101 <= actor < 101 + films:
-                    session.add(CachedMovieCast(
-                        movie_id=film, actor_id=actor, cast_order=order,
-                        character_name=f"Role {actor}"))
+                    session.add(
+                        CachedMovieCast(
+                            movie_id=film,
+                            actor_id=actor,
+                            cast_order=order,
+                            character_name=f"Role {actor}",
+                        )
+                    )
         session.commit()
 
 
@@ -59,8 +72,9 @@ def walk(puzzle: dict) -> list[int]:
 
 
 def hop(client, current, nxt):
-    return client.post("/api/puzzles/daily/validate-hop", json={
-        "current_movie_id": current, "next_movie_id": nxt})
+    return client.post(
+        "/api/puzzles/daily/validate-hop", json={"current_movie_id": current, "next_movie_id": nxt}
+    )
 
 
 def solve(client, puzzle):
@@ -96,7 +110,10 @@ def test_the_daily_puzzle_is_a_verified_pair_stored_once(client, db_engine, monk
     puzzle = get_daily(client)
     assert 3 <= puzzle["par_hops"] <= 5
     assert puzzle["puzzle_number"] >= 1
-    assert abs(puzzle["start_movie"]["tmdb_id"] - puzzle["target_movie"]["tmdb_id"]) == puzzle["par_hops"]
+    assert (
+        abs(puzzle["start_movie"]["tmdb_id"] - puzzle["target_movie"]["tmdb_id"])
+        == puzzle["par_hops"]
+    )
     assert puzzle["attempt"]["status"] == "not_started"
     assert puzzle["optimal_path"] is None  # the answer stays hidden until the attempt ends
 
@@ -106,7 +123,10 @@ def test_the_daily_puzzle_is_a_verified_pair_stored_once(client, db_engine, monk
     monkeypatch.setattr(daily_puzzle, "explore", boom)
     again = get_daily(client)
     assert (again["start_movie"], again["target_movie"], again["date"]) == (
-        puzzle["start_movie"], puzzle["target_movie"], puzzle["date"])
+        puzzle["start_movie"],
+        puzzle["target_movie"],
+        puzzle["date"],
+    )
     with Session(db_engine) as session:
         assert len(session.exec(select(DailyPuzzle)).all()) == 1
 
@@ -170,7 +190,10 @@ def test_reaching_the_target_solves_and_builds_the_share_grid(client, db_engine)
     assert lines[2].endswith(f"🎯 ({puzzle['par_hops']} Hops)") and "🟩" in lines[2]
     assert lines[3] == "cinechain.local"
     revealed = get_daily(client)
-    assert revealed["optimal_path"] is not None and len(revealed["optimal_path"]) == puzzle["par_hops"] + 1
+    assert (
+        revealed["optimal_path"] is not None
+        and len(revealed["optimal_path"]) == puzzle["par_hops"] + 1
+    )
 
 
 def test_a_detour_is_graded_yellow(client, db_engine):
@@ -182,18 +205,33 @@ def test_a_detour_is_graded_yellow(client, db_engine):
     with Session(db_engine) as session:
         session.add(CachedActor(tmdb_id=109, name="Actor 109"))
         for film in (9, 10):
-            session.add(CachedMovie(
-                tmdb_id=film, title=f"Film {film}", release_date="2000-01-01", status="Released",
-                overview="x", popularity=50.0, cast_fetched_at=utcnow(),
-                directors_fetched_at=utcnow()))
+            session.add(
+                CachedMovie(
+                    tmdb_id=film,
+                    title=f"Film {film}",
+                    release_date="2000-01-01",
+                    status="Released",
+                    overview="x",
+                    popularity=50.0,
+                    cast_fetched_at=utcnow(),
+                    directors_fetched_at=utcnow(),
+                )
+            )
         session.commit()
         for film, actor, order in ((9, 101, 0), (9, 109, 1), (10, 109, 0), (10, 102, 1)):
-            session.add(CachedMovieCast(
-                movie_id=film, actor_id=actor, cast_order=order, character_name="x"))
-        session.add(DailyPuzzle(
-            puzzle_date=daily_puzzle.today_utc().isoformat(), puzzle_number=1,
-            start_movie_id=1, target_movie_id=4, par_hops=3,
-            optimal_path=[{"movie_id": m, "link": None} for m in (1, 2, 3, 4)]))
+            session.add(
+                CachedMovieCast(movie_id=film, actor_id=actor, cast_order=order, character_name="x")
+            )
+        session.add(
+            DailyPuzzle(
+                puzzle_date=daily_puzzle.today_utc().isoformat(),
+                puzzle_number=1,
+                start_movie_id=1,
+                target_movie_id=4,
+                par_hops=3,
+                optimal_path=[{"movie_id": m, "link": None} for m in (1, 2, 3, 4)],
+            )
+        )
         session.commit()
 
     for current, nxt in ((1, 9), (9, 10), (10, 3), (3, 4)):
@@ -277,7 +315,8 @@ def test_convert_after_a_forfeit_uses_the_optimal_route(client, db_engine):
 
 def bridge_stream(client, start, target):
     return client.get(
-        "/api/engine/bridge/stream", params={"from_movie_id": start, "to_movie_id": target})
+        "/api/engine/bridge/stream", params={"from_movie_id": start, "to_movie_id": target}
+    )
 
 
 def test_the_solver_is_locked_for_todays_pair_until_solved_or_forfeited(client, db_engine):
@@ -289,7 +328,8 @@ def test_the_solver_is_locked_for_todays_pair_until_solved_or_forfeited(client, 
     assert locked.status_code == 403
     assert locked.json() == {
         "code": "anti_cheat_locked",
-        "message": "Bridge Solver is locked for today's Daily Puzzle until solved or forfeited!"}
+        "message": "Bridge Solver is locked for today's Daily Puzzle until solved or forfeited!",
+    }
     assert bridge_stream(client, target, start).status_code == 403  # the reverse is the same puzzle
     fast = client.post("/api/engine/bridge", json={"from_movie_id": start, "to_movie_id": target})
     assert fast.status_code == 403
@@ -305,8 +345,12 @@ def test_solving_also_unlocks_the_solver(client, db_engine):
     seed_chain(db_engine)
     puzzle = get_daily(client)
     solve(client, puzzle)
-    assert bridge_stream(
-        client, puzzle["start_movie"]["tmdb_id"], puzzle["target_movie"]["tmdb_id"]).status_code == 200
+    assert (
+        bridge_stream(
+            client, puzzle["start_movie"]["tmdb_id"], puzzle["target_movie"]["tmdb_id"]
+        ).status_code
+        == 200
+    )
 
 
 def test_the_solver_is_free_before_the_puzzle_exists(client, db_engine):

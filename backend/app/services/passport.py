@@ -96,7 +96,9 @@ def build_passport(session: Session, user_id: str) -> PassportOut:
     watched_movie_ids = select(RunStep.movie_id).where(watched)
     films_per_director = func.count(func.distinct(CachedMovieDirector.movie_id))
     director_rows = session.exec(
-        select(CachedMovieDirector.person_id, func.min(CachedMovieDirector.name), films_per_director)
+        select(
+            CachedMovieDirector.person_id, func.min(CachedMovieDirector.name), films_per_director
+        )
         .where(col(CachedMovieDirector.movie_id).in_(watched_movie_ids))
         .group_by(CachedMovieDirector.person_id)
         .order_by(films_per_director.desc(), func.min(CachedMovieDirector.name))
@@ -122,7 +124,8 @@ def build_passport(session: Session, user_id: str) -> PassportOut:
             DirectorCount(person_id=pid, name=name, count=int(n)) for pid, name, n in director_rows
         ],
         directors_coverage=DirectorCoverage(
-            movies_with_directors=int(with_directors), movies_total=len(films)),
+            movies_with_directors=int(with_directors), movies_total=len(films)
+        ),
     )
 
 
@@ -134,7 +137,10 @@ def movie_ids_missing_directors(session: Session, user_id: str) -> list[int]:
         & func.json_extract(RunStep.transition_metadata, "$.seed").is_not(1)
     )
     done = select(CachedMovie.tmdb_id).where(col(CachedMovie.directors_fetched_at).is_not(None))
-    return list(session.exec(
-        select(RunStep.movie_id).where(watched, col(RunStep.movie_id).not_in(done))
-        .group_by(RunStep.movie_id)
-    ).all())
+    return list(
+        session.exec(
+            select(RunStep.movie_id)
+            .where(watched, col(RunStep.movie_id).not_in(done))
+            .group_by(RunStep.movie_id)
+        ).all()
+    )

@@ -23,9 +23,7 @@ def test_models_create_all_tables(config_dir):
     with engine.connect() as conn:
         tables = {
             row[0]
-            for row in conn.execute(
-                text("select name from sqlite_master where type='table'")
-            ).all()
+            for row in conn.execute(text("select name from sqlite_master where type='table'")).all()
         }
     expected = {
         "users",

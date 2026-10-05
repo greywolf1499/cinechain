@@ -11,9 +11,7 @@ from app.services.tmdb import TMDBClient
 from app.services.veto import refresh_veto_tokens
 
 
-def get_optional_user(
-    request: Request, session: Session = Depends(get_session)
-) -> User | None:
+def get_optional_user(request: Request, session: Session = Depends(get_session)) -> User | None:
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         return None
@@ -28,15 +26,13 @@ def get_optional_user(
 
 def get_current_user(user: User | None = Depends(get_optional_user)) -> User:
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     return user
 
 
 def get_current_admin(user: User = Depends(get_current_user)) -> User:
     if not user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
     return user
 
 
@@ -49,12 +45,10 @@ def run_participant_guard(
     participants shouldn't be able to tell those two cases apart."""
     run = session.get(Run, run_id)
     if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     membership = session.get(RunParticipant, (run_id, current_user.id))
     if membership is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return run
 
 

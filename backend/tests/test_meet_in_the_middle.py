@@ -29,7 +29,8 @@ UNIVERSE = {
 @pytest.fixture()
 def client(config_dir):
     engine = create_engine(
-        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False})
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
 
     def override_get_session():
@@ -38,8 +39,10 @@ def client(config_dir):
 
     app.dependency_overrides[get_session] = override_get_session
     with TestClient(app) as test_client:
-        test_client.post("/api/auth/register", json={
-            "username": "alice", "password": "password123", "display_name": "Alice"})
+        test_client.post(
+            "/api/auth/register",
+            json={"username": "alice", "password": "password123", "display_name": "Alice"},
+        )
         test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
@@ -47,25 +50,77 @@ def client(config_dir):
 
 def mock_universe():
     for movie_id, (title, cast) in UNIVERSE.items():
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "title": title, "release_date": "2000-01-01", "poster_path": None,
-            "overview": "", "origin_country": ["US"], "original_language": "en", "runtime": 100,
-            "genres": [], "popularity": 5.0, "status": "Released"}))
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "crew": [],
-            "cast": [{"id": a, "name": f"Actor {a}", "profile_path": None, "character": "r",
-                      "order": i} for i, a in enumerate(cast)]}))
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "title": title,
+                    "release_date": "2000-01-01",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 100,
+                    "genres": [],
+                    "popularity": 5.0,
+                    "status": "Released",
+                },
+            )
+        )
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "crew": [],
+                    "cast": [
+                        {
+                            "id": a,
+                            "name": f"Actor {a}",
+                            "profile_path": None,
+                            "character": "r",
+                            "order": i,
+                        }
+                        for i, a in enumerate(cast)
+                    ],
+                },
+            )
+        )
     for actor in {a for _, cast in UNIVERSE.values() for a in cast}:
-        respx.get(f"{TMDB_BASE}/person/{actor}/movie_credits").mock(return_value=httpx.Response(200, json={
-            "id": actor, "crew": [],
-            "cast": [{"id": i, "title": t, "release_date": "2000-01-01", "poster_path": None,
-                      "genre_ids": [], "original_language": "en", "popularity": 5.0,
-                      "character": "r"} for i, (t, c) in UNIVERSE.items() if actor in c]}))
+        respx.get(f"{TMDB_BASE}/person/{actor}/movie_credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": actor,
+                    "crew": [],
+                    "cast": [
+                        {
+                            "id": i,
+                            "title": t,
+                            "release_date": "2000-01-01",
+                            "poster_path": None,
+                            "genre_ids": [],
+                            "original_language": "en",
+                            "popularity": 5.0,
+                            "character": "r",
+                        }
+                        for i, (t, c) in UNIVERSE.items()
+                        if actor in c
+                    ],
+                },
+            )
+        )
 
 
 def create_run(client, head=1, tail=10, expect=201, game_type="meet_in_the_middle", **extra):
-    payload = {"name": "Tunnel", "game_type": game_type, "seed_movie_id": head,
-               "tail_seed_movie_id": tail, **extra}
+    payload = {
+        "name": "Tunnel",
+        "game_type": game_type,
+        "seed_movie_id": head,
+        "tail_seed_movie_id": tail,
+        **extra,
+    }
     payload = {k: v for k, v in payload.items() if v is not None}
     resp = client.post("/api/runs", json=payload)
     assert resp.status_code == expect, resp.text
@@ -73,8 +128,9 @@ def create_run(client, head=1, tail=10, expect=201, game_type="meet_in_the_middl
 
 
 def log(client, run_id, movie_id, side="head", **extra):
-    return client.post(f"/api/runs/{run_id}/steps", json={
-        "movie_id": movie_id, "tunnel_side": side, **extra})
+    return client.post(
+        f"/api/runs/{run_id}/steps", json={"movie_id": movie_id, "tunnel_side": side, **extra}
+    )
 
 
 def run_detail(client, run_id):
@@ -94,8 +150,10 @@ def test_creation_needs_two_distinct_seeds(client):
         mock_universe()
         assert "two starting films" in create_run(client, tail=None, expect=422)["detail"]
         assert "different" in create_run(client, head=1, tail=1, expect=422)["detail"]
-        assert "only for Meet in the Middle" in create_run(
-            client, game_type="cinechain", expect=422)["detail"]
+        assert (
+            "only for Meet in the Middle"
+            in create_run(client, game_type="cinechain", expect=422)["detail"]
+        )
 
 
 def test_seeds_become_the_head_and_the_tail(client):
@@ -104,7 +162,9 @@ def test_seeds_become_the_head_and_the_tail(client):
         run = create_run(client)
     steps = run["steps"]
     assert [(s["movie_id"], s["transition_metadata"]["tunnel_side"]) for s in steps] == [
-        (1, "head"), (10, "tail")]
+        (1, "head"),
+        (10, "tail"),
+    ]
     assert run["rules_config"]["tunnel_hints_remaining"] == 2
 
 
@@ -130,7 +190,9 @@ def test_a_side_is_required_and_validated(client):
         mock_universe()
         run_id = create_run(client)["id"]
         missing = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 2})
-        wrong = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 2, "tunnel_side": "middle"})
+        wrong = client.post(
+            f"/api/runs/{run_id}/steps", json={"movie_id": 2, "tunnel_side": "middle"}
+        )
     assert missing.status_code == 422 and "head or tail" in missing.json()["detail"]
     assert wrong.status_code == 422
 
@@ -145,9 +207,14 @@ def test_each_end_links_from_its_own_frontier(client):
         wrong_end = log(client, run_id, 3, "tail")
         tail_ok = log(client, run_id, 12, "tail")  # 103 links Tail Seed
     assert ok.status_code == 201 and ok.json()["transition_metadata"]["tunnel_side"] == "head"
-    assert no_cast.status_code == 409 and "shared credited cast" in no_cast.json()["detail"]["reason"]
+    assert (
+        no_cast.status_code == 409 and "shared credited cast" in no_cast.json()["detail"]["reason"]
+    )
     assert wrong_end.status_code == 409
-    assert tail_ok.status_code == 201 and tail_ok.json()["transition_metadata"]["tunnel_side"] == "tail"
+    assert (
+        tail_ok.status_code == 201
+        and tail_ok.json()["transition_metadata"]["tunnel_side"] == "tail"
+    )
     assert run_detail(client, run_id)["status"] == "active"
 
 
@@ -197,13 +264,24 @@ def test_clients_cannot_forge_a_collision(client):
     with respx.mock:
         mock_universe()
         run_id = create_run(client)["id"]
-        step = log(client, run_id, 2, "head", transition_metadata={
-            "collision": True, "tunnel_side": "tail", "near_miss_with": 999, "actor_id": 100})
+        step = log(
+            client,
+            run_id,
+            2,
+            "head",
+            transition_metadata={
+                "collision": True,
+                "tunnel_side": "tail",
+                "near_miss_with": 999,
+                "actor_id": 100,
+            },
+        )
         assert step.status_code == 201
         meta = step.json()["transition_metadata"]
         patched = client.patch(
             f"/api/runs/{run_id}/steps/{step.json()['id']}",
-            json={"transition_metadata": {"collision": True, "note": "hi", "tunnel_side": "tail"}})
+            json={"transition_metadata": {"collision": True, "note": "hi", "tunnel_side": "tail"}},
+        )
     assert "collision" not in meta and meta["tunnel_side"] == "head"
     assert "near_miss_with" not in meta
     assert patched.status_code == 200
@@ -230,9 +308,15 @@ def test_validate_previews_the_collision(client):
         mock_universe()
         run_id = create_run(client)["id"]
         log(client, run_id, 2, "head")
-        collides = client.post(f"/api/runs/{run_id}/validate", json={"movie_id": 15, "tunnel_side": "head"})
-        plain = client.post(f"/api/runs/{run_id}/validate", json={"movie_id": 3, "tunnel_side": "head"})
-        invalid = client.post(f"/api/runs/{run_id}/validate", json={"movie_id": 20, "tunnel_side": "head"})
+        collides = client.post(
+            f"/api/runs/{run_id}/validate", json={"movie_id": 15, "tunnel_side": "head"}
+        )
+        plain = client.post(
+            f"/api/runs/{run_id}/validate", json={"movie_id": 3, "tunnel_side": "head"}
+        )
+        invalid = client.post(
+            f"/api/runs/{run_id}/validate", json={"movie_id": 20, "tunnel_side": "head"}
+        )
         no_side = client.post(f"/api/runs/{run_id}/validate", json={"movie_id": 3})
     assert collides.json()["valid"] is True and collides.json()["collision"] is True
     assert plain.json()["valid"] is True and plain.json()["collision"] is False
@@ -251,7 +335,9 @@ def test_tunnel_state_measures_the_distance_between_frontiers(client):
 
     assert far["head_frontier_movie_id"] == 1 and far["tail_frontier_movie_id"] == 10
     assert far["distance_hops"] == 3  # 1 - 2 - Bridge Film - 10
-    assert near["head_frontier_movie_id"] == 3 and near["head_steps"] == 3 and near["tail_steps"] == 1
+    assert (
+        near["head_frontier_movie_id"] == 3 and near["head_steps"] == 3 and near["tail_steps"] == 1
+    )
     assert near["distance_hops"] == 2  # 3 - 11 - 10 (the run's own films never reappear)
     assert near["collided"] is False
 
@@ -413,7 +499,11 @@ def test_pick_next_pool_works_from_either_frontier(client):
     with respx.mock:
         mock_universe()
         run_id = create_run(client)["id"]
-        head_pool = client.get(f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}).json()
-        tail_pool = client.get(f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 10}).json()
+        head_pool = client.get(
+            f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}
+        ).json()
+        tail_pool = client.get(
+            f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 10}
+        ).json()
     assert {c["movie_id"] for c in head_pool} == {2}
     assert {c["movie_id"] for c in tail_pool} == {11, 12, 15}

@@ -1,4 +1,4 @@
-""""Recommend Seed Movie": a random well-regarded film from the local cache."""
+""" "Recommend Seed Movie": a random well-regarded film from the local cache."""
 
 from __future__ import annotations
 
@@ -38,7 +38,10 @@ def _imdb_score(raw: str | None) -> float | None:
 
 
 def suggest_seed(
-    session: Session, exclude_ids: set[int], game_type: str | None = None, rng: random.Random | None = None
+    session: Session,
+    exclude_ids: set[int],
+    game_type: str | None = None,
+    rng: random.Random | None = None,
 ) -> SeedSuggestion | None:
     """Prefers canon-listed and highly rated films, then simply popular ones. Skips
     `exclude_ids` (earlier re-rolls) and, when possible, films the mode can't judge."""
@@ -54,16 +57,23 @@ def suggest_seed(
 
     def eligible(movie: CachedMovie | None) -> bool:
         return (
-            movie is not None and movie.tmdb_id not in exclude_ids and bool(movie.poster_path)
-            and bool(movie.title) and is_reality_eligible(movie)
+            movie is not None
+            and movie.tmdb_id not in exclude_ids
+            and bool(movie.poster_path)
+            and bool(movie.title)
+            and is_reality_eligible(movie)
         )
 
     acclaimed = [m for m in (session.get(CachedMovie, i) for i in reasons) if eligible(m)]
     popular = [
-        m for m in session.exec(
-            select(CachedMovie).where(CachedMovie.popularity.is_not(None))  # type: ignore[union-attr]
-            .order_by(CachedMovie.popularity.desc()).limit(POPULAR_FALLBACK_SIZE)  # type: ignore[union-attr]
-        ).all() if eligible(m)
+        m
+        for m in session.exec(
+            select(CachedMovie)
+            .where(CachedMovie.popularity.is_not(None))  # type: ignore[union-attr]
+            .order_by(CachedMovie.popularity.desc())
+            .limit(POPULAR_FALLBACK_SIZE)  # type: ignore[union-attr]
+        ).all()
+        if eligible(m)
     ]
     needs = MODE_REQUIREMENTS.get(game_type or "", lambda _m: True)
 

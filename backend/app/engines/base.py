@@ -100,7 +100,10 @@ class BaseChallengeEngine(ABC):
         return modifiers.merge_modifiers(self.default_modifiers, rules)
 
     def modifier_violation(
-        self, earlier: CachedMovie, later: CachedMovie, rules: dict | None,
+        self,
+        earlier: CachedMovie,
+        later: CachedMovie,
+        rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> str | None:
         return modifiers.pair_modifier_violation(
@@ -108,7 +111,9 @@ class BaseChallengeEngine(ABC):
         ) or chaos.violation(self.session, later, rules)
 
     def cooldown_countries(
-        self, rules: dict | None, history: Sequence[RunStep] | None,
+        self,
+        rules: dict | None,
+        history: Sequence[RunStep] | None,
         earlier: CachedMovie | None = None,
     ) -> list[str]:
         return modifiers.cooldown_countries(self.active_modifiers(rules), history, earlier)
@@ -155,8 +160,10 @@ class BaseChallengeEngine(ABC):
                 try:
                     fetched = await fetch_with_backoff(
                         lambda movie_id=candidate.movie_id: cache_repo.get_movie(
-                            self.session, self.tmdb, movie_id, refresh=True),
-                        self._hydration_deadline)
+                            self.session, self.tmdb, movie_id, refresh=True
+                        ),
+                        self._hydration_deadline,
+                    )
                     row = fetched or row
                 except DeadlineReached:
                     self._hydration_left = 0
@@ -202,7 +209,8 @@ class BaseChallengeEngine(ABC):
     ) -> list[DiscoveryCandidate]:
         """The primary candidate generator's pool, narrowed by the run's active modifiers."""
         pool = await self.discover_candidates(
-            frontier_movie_id, mode, cast_limit, rules, previous_transition, history)
+            frontier_movie_id, mode, cast_limit, rules, previous_transition, history
+        )
         return await self.filter_by_modifiers(frontier_movie_id, pool, rules, history)
 
     async def describe_run_constraint(
@@ -226,8 +234,10 @@ class BaseChallengeEngine(ABC):
         if info is None:
             info = ConstraintInfo(
                 kind="country" if locked else "free",
-                title="Recently visited countries are locked out" if locked
-                else "Run modifiers shape the next film")
+                title="Recently visited countries are locked out"
+                if locked
+                else "Run modifiers shape the next film",
+            )
         return info.model_copy(update={"cooldown_countries": locked, "modifier_notes": notes})
 
     def prepare_rules_config(self, rules: dict) -> dict:
@@ -309,8 +319,12 @@ class BaseChallengeEngine(ABC):
         run's steps logged so far, oldest first (needed by `country_cooldown`).
         """
         result = await self.validate_primary(
-            from_movie_id, to_movie_id, cast_limit=cast_limit, rules=rules,
-            previous_transition=previous_transition)
+            from_movie_id,
+            to_movie_id,
+            cast_limit=cast_limit,
+            rules=rules,
+            previous_transition=previous_transition,
+        )
         active = self.active_modifiers(rules)
         if result.blocked or (not active and chaos.active(rules) is None):
             return result
@@ -335,15 +349,15 @@ class BaseChallengeEngine(ABC):
         """Candidate next films reachable from `current_movie_id`."""
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None,
+        self,
+        tail_movie_id: int | None,
+        previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
         """The rule that currently shapes the run's next hop, for the UI. None = unconstrained."""
         return None
 
-    def link_metadata(
-        self, result: ValidationResult, client_metadata: dict | None
-    ) -> dict | None:
+    def link_metadata(self, result: ValidationResult, client_metadata: dict | None) -> dict | None:
         """Server-authoritative `transition_metadata` for a step, built from the
         engine's own validation result. None = keep whatever the client sent."""
         if not result.mechanic:

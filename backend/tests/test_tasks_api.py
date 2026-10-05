@@ -14,7 +14,8 @@ from app.services import letterboxd
 @pytest.fixture()
 def client(config_dir):
     engine = create_engine(
-        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False})
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
 
     def override_get_session():
@@ -28,23 +29,48 @@ def client(config_dir):
 
 
 def _login(client, username):
-    assert client.post("/api/auth/login", json={"username": username, "password": "password123"}).status_code == 200
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": username, "password": "password123"}
+        ).status_code
+        == 200
+    )
 
 
 def _setup_household(client):
-    client.post("/api/auth/register", json={
-        "username": "alice", "password": "password123", "display_name": "Alice"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password123", "display_name": "Alice"},
+    )
     _login(client, "alice")
-    assert client.post("/api/auth/register", json={
-        "username": "bob", "password": "password123", "display_name": "Bob"}).status_code == 201
+    assert (
+        client.post(
+            "/api/auth/register",
+            json={"username": "bob", "password": "password123", "display_name": "Bob"},
+        ).status_code
+        == 201
+    )
 
 
 def _fake_watchlist(films=None):
-    films = films if films is not None else [{"title": "Amelie", "year": 2001, "slug": "a", "tmdb_id": 194}]
+    films = (
+        films
+        if films is not None
+        else [{"title": "Amelie", "year": 2001, "slug": "a", "tmdb_id": 194}]
+    )
 
-    def _scrape(username, tmdb_api_key=None, max_pages=None, no_cache=False, progress_callback=None, deep=False):
+    def _scrape(
+        username,
+        tmdb_api_key=None,
+        max_pages=None,
+        no_cache=False,
+        progress_callback=None,
+        deep=False,
+    ):
         if progress_callback:
-            progress_callback({"stage": "page_done", "current": len(films), "total": len(films), "message": "ok"})
+            progress_callback(
+                {"stage": "page_done", "current": len(films), "total": len(films), "message": "ok"}
+            )
         return {"is_ranked": False, "total_films": len(films), "films": films}
 
     return _scrape
@@ -59,11 +85,15 @@ def test_tasks_require_login(client):
 def test_users_only_see_their_own_tasks_and_admin_sees_all(client, monkeypatch):
     monkeypatch.setattr(letterboxd, "scrape_letterboxd_watchlist", _fake_watchlist())
     _setup_household(client)
-    alice_task = client.post("/api/curated/watchlist/sync", json={"letterboxd_username": "alice_lb"}).json()
+    alice_task = client.post(
+        "/api/curated/watchlist/sync", json={"letterboxd_username": "alice_lb"}
+    ).json()
 
     with TestClient(app) as bob_phone:
         _login(bob_phone, "bob")
-        bob_task = bob_phone.post("/api/curated/watchlist/sync", json={"letterboxd_username": "bob_lb"}).json()
+        bob_task = bob_phone.post(
+            "/api/curated/watchlist/sync", json={"letterboxd_username": "bob_lb"}
+        ).json()
 
         assert [t["id"] for t in bob_phone.get("/api/tasks").json()] == [bob_task["id"]]
         assert bob_phone.get(f"/api/tasks/{alice_task['id']}").status_code == 404
@@ -93,13 +123,19 @@ def test_post_returns_202_with_task_id_and_polling_shows_result(client, monkeypa
 def test_stream_snapshot_emits_task_events_then_closes(client, monkeypatch):
     monkeypatch.setattr(letterboxd, "scrape_letterboxd_watchlist", _fake_watchlist())
     _setup_household(client)
-    task_id = client.post("/api/curated/watchlist/sync", json={"letterboxd_username": "alice_lb"}).json()["id"]
+    task_id = client.post(
+        "/api/curated/watchlist/sync", json={"letterboxd_username": "alice_lb"}
+    ).json()["id"]
 
     resp = client.get("/api/tasks/stream", params={"once": True})
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
-    data_lines = [line[6:] for line in resp.text.splitlines() if line.startswith("data: ") and line != "data: {}"]
+    data_lines = [
+        line[6:]
+        for line in resp.text.splitlines()
+        if line.startswith("data: ") and line != "data: {}"
+    ]
     events = [json.loads(line) for line in data_lines]
     assert [e["id"] for e in events] == [task_id]
     assert events[0]["status"] == "completed"
@@ -116,8 +152,12 @@ def test_duplicate_watchlist_sync_reuses_the_active_task(client, monkeypatch):
 
     override = next(iter(fastapi_app.dependency_overrides.values()))
     with next(override()) as session:
-        running = SystemTask(name="watchlist_sync", status="running", user_id=user_id,
-                             dedupe_key=f"watchlist_sync:{user_id}:alice_lb")
+        running = SystemTask(
+            name="watchlist_sync",
+            status="running",
+            user_id=user_id,
+            dedupe_key=f"watchlist_sync:{user_id}:alice_lb",
+        )
         session.add(running)
         session.commit()
         running_id = running.id
@@ -135,7 +175,9 @@ def test_failed_scrape_is_a_failed_task_with_error_code(client, monkeypatch):
 
     monkeypatch.setattr(letterboxd, "scrape_letterboxd_watchlist", broken)
     _setup_household(client)
-    created = client.post("/api/curated/watchlist/sync", json={"letterboxd_username": "alice_lb"}).json()
+    created = client.post(
+        "/api/curated/watchlist/sync", json={"letterboxd_username": "alice_lb"}
+    ).json()
 
     task = client.get(f"/api/tasks/{created['id']}").json()
 

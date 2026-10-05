@@ -77,11 +77,13 @@ async def _fetch_with_backoff[T](
 
     def on_pause(wait: float) -> None:
         stats.rate_limit_pauses += 1
-        stats.pending_events.append({
-            "type": "rate_limited",
-            "wait_seconds": round(wait, 1),
-            "rate_limit_pauses": stats.rate_limit_pauses,
-        })
+        stats.pending_events.append(
+            {
+                "type": "rate_limited",
+                "wait_seconds": round(wait, 1),
+                "rate_limit_pauses": stats.rate_limit_pauses,
+            }
+        )
 
     return await fetch_with_backoff(fetch, deadline, on_pause)
 
@@ -112,10 +114,18 @@ async def solve_bridge_bipartite(
         from app.services import constrained_pathfinder  # local: it imports this module
 
         async for event in constrained_pathfinder.solve_constrained(
-            session, tmdb, from_movie_id, to_movie_id, constraints,
-            max_depth=max_depth, call_budget=call_budget, cast_limit=cast_limit,
-            min_runtime=min_runtime, excluded_movie_ids=excluded_movie_ids,
-            max_duration_seconds=max_duration_seconds, min_hops=min_hops,
+            session,
+            tmdb,
+            from_movie_id,
+            to_movie_id,
+            constraints,
+            max_depth=max_depth,
+            call_budget=call_budget,
+            cast_limit=cast_limit,
+            min_runtime=min_runtime,
+            excluded_movie_ids=excluded_movie_ids,
+            max_duration_seconds=max_duration_seconds,
+            min_hops=min_hops,
         ):
             yield event
         return
@@ -136,7 +146,9 @@ async def solve_bridge_bipartite(
     # value here (e.g. tests forcing an immediate timeout), unlike the other
     # budget knobs above where 0 would never be a meaningful override.
     max_duration_seconds = (
-        max_duration_seconds if max_duration_seconds is not None else settings.bridge_max_duration_seconds
+        max_duration_seconds
+        if max_duration_seconds is not None
+        else settings.bridge_max_duration_seconds
     )
 
     async with _SEARCH_SEMAPHORE:
@@ -152,37 +164,41 @@ async def solve_bridge_bipartite(
 
             if from_movie_id == to_movie_id:
                 result = await _finish_result(
-                    session, tmdb, [[movie_node(from_movie_id)]], deadline)
+                    session, tmdb, [[movie_node(from_movie_id)]], deadline
+                )
                 yield {"type": "result", **result}
                 yield {"type": "done"}
                 return
 
             while forward.hops + backward.hops < max_depth:
                 if len(forward.frontier) != len(backward.frontier):
-                    pick_forward = len(forward.frontier) < len(
-                        backward.frontier)
+                    pick_forward = len(forward.frontier) < len(backward.frontier)
                 else:
                     pick_forward = not last_expanded_forward
                 side = forward if pick_forward else backward
                 last_expanded_forward = pick_forward
 
                 if side.next_type == "movie":
-                    expansion = asyncio.ensure_future(_expand_movie_side(
-                        session, tmdb, repo, side, cast_limit, stats, call_budget, deadline
-                    ))
+                    expansion = asyncio.ensure_future(
+                        _expand_movie_side(
+                            session, tmdb, repo, side, cast_limit, stats, call_budget, deadline
+                        )
+                    )
                 else:
-                    expansion = asyncio.ensure_future(_expand_actor_side(
-                        session,
-                        tmdb,
-                        repo,
-                        side,
-                        actor_cap,
-                        stats,
-                        call_budget,
-                        deadline,
-                        excluded_movie_ids,
-                        min_runtime,
-                    ))
+                    expansion = asyncio.ensure_future(
+                        _expand_actor_side(
+                            session,
+                            tmdb,
+                            repo,
+                            side,
+                            actor_cap,
+                            stats,
+                            call_budget,
+                            deadline,
+                            excluded_movie_ids,
+                            min_runtime,
+                        )
+                    )
                 try:
                     # Wake periodically so a 429 pause can be streamed to the client live.
                     while not expansion.done():
@@ -218,17 +234,18 @@ async def solve_bridge_bipartite(
                 }
 
                 if min_hops:
-                    candidate_paths = _collect_deeper_paths(
-                        forward, backward, min_hops, limit=3)
+                    candidate_paths = _collect_deeper_paths(forward, backward, min_hops, limit=3)
                 else:
-                    candidate_paths = prefer_disjoint_paths([
-                        _reconstruct_path(forward, backward, meeting)
-                        for meeting in _find_intersections(
-                            forward.visited, backward.visited, limit=_MEETING_SCAN_LIMIT)
-                    ])[:MAX_ALTERNATE_PATHS]
+                    candidate_paths = prefer_disjoint_paths(
+                        [
+                            _reconstruct_path(forward, backward, meeting)
+                            for meeting in _find_intersections(
+                                forward.visited, backward.visited, limit=_MEETING_SCAN_LIMIT
+                            )
+                        ]
+                    )[:MAX_ALTERNATE_PATHS]
                 if candidate_paths:
-                    result = await _finish_result(
-                        session, tmdb, candidate_paths, deadline)
+                    result = await _finish_result(session, tmdb, candidate_paths, deadline)
                     yield {"type": "result", **result}
                     yield {"type": "done"}
                     return
@@ -312,8 +329,11 @@ async def _expand_movie_side(
         try:
             cast = await _fetch_with_backoff(
                 lambda movie_id=movie_id: cache_repo.get_movie_cast(
-                    session, tmdb, movie_id, cast_limit),
-                stats, deadline)
+                    session, tmdb, movie_id, cast_limit
+                ),
+                stats,
+                deadline,
+            )
         except _DeadlineReached:
             break  # the main loop reports the timeout
         stats.tmdb_calls += 1
@@ -366,9 +386,10 @@ async def _expand_actor_side(
                 await asyncio.sleep(tmdb.pacing_delay_seconds)
             try:
                 credits_ = await _fetch_with_backoff(
-                    lambda actor_id=actor_id: cache_repo.get_actor_credits(
-                        session, tmdb, actor_id),
-                    stats, deadline)
+                    lambda actor_id=actor_id: cache_repo.get_actor_credits(session, tmdb, actor_id),
+                    stats,
+                    deadline,
+                )
             except _DeadlineReached:
                 break  # the main loop reports the timeout
             stats.tmdb_calls += 1
@@ -433,7 +454,9 @@ def _find_intersections(
     return found[:limit]
 
 
-def _reconstruct_path(forward: FrontierSide, backward: FrontierSide, meeting: NodeKey) -> list[NodeKey]:
+def _reconstruct_path(
+    forward: FrontierSide, backward: FrontierSide, meeting: NodeKey
+) -> list[NodeKey]:
     forward_chain: list[NodeKey] = []
     node: NodeKey | None = meeting
     while node is not None:
@@ -484,8 +507,8 @@ async def _finish_result(
     then builds the result off the now-complete cache."""
     movie_ids = [node[1] for path in candidate_paths for node in path[0::2]]
     await hydrate_movies(
-        session, tmdb, movie_ids,
-        deadline=max(deadline, time.monotonic() + _MIN_HYDRATE_SECONDS))
+        session, tmdb, movie_ids, deadline=max(deadline, time.monotonic() + _MIN_HYDRATE_SECONDS)
+    )
     return await anyio.to_thread.run_sync(_build_multi_result, session, candidate_paths)
 
 
@@ -495,8 +518,7 @@ def _build_result(session: Session, combined_path: list[NodeKey]) -> dict:
     link_nodes = combined_path[1::2]
 
     bridge_nodes = [
-        make_bridge_node(session.get(CachedMovie, movie_id), movie_id)
-        for movie_id in movie_ids
+        make_bridge_node(session.get(CachedMovie, movie_id), movie_id) for movie_id in movie_ids
     ]
 
     connections = []
@@ -504,7 +526,8 @@ def _build_result(session: Session, combined_path: list[NodeKey]) -> dict:
         from_id, to_id = movie_ids[i], movie_ids[i + 1]
         if kind == DIRECTOR_NODE:
             director_row = session.get(CachedMovieDirector, (from_id, person_id)) or session.get(
-                CachedMovieDirector, (to_id, person_id))
+                CachedMovieDirector, (to_id, person_id)
+            )
             connections.append(
                 SharedActorConnection(
                     kind=DIRECTOR_NODE,
@@ -571,8 +594,7 @@ def _label_paths(session: Session, built: list[dict]) -> list[str]:
 
     def avg_intermediate_popularity(entry: dict) -> float:
         intermediates = entry["path"][1:-1]
-        pops = [
-            node.popularity for node in intermediates if node.popularity is not None]
+        pops = [node.popularity for node in intermediates if node.popularity is not None]
         return sum(pops) / len(pops) if pops else 0.0
 
     def has_canon_badge(entry: dict) -> bool:
@@ -581,8 +603,7 @@ def _label_paths(session: Session, built: list[dict]) -> list[str]:
             return False
         return (
             session.exec(
-                select(CanonMovieBadge.id).where(
-                    CanonMovieBadge.movie_id.in_(movie_ids)).limit(1)
+                select(CanonMovieBadge.id).where(CanonMovieBadge.movie_id.in_(movie_ids)).limit(1)
             ).first()
             is not None
         )
@@ -591,8 +612,7 @@ def _label_paths(session: Session, built: list[dict]) -> list[str]:
     primary_popularity = avg_intermediate_popularity(built[0])
     rest = built[1:]
     rest_popularity = [avg_intermediate_popularity(entry) for entry in rest]
-    underdog_index = rest_popularity.index(
-        min(rest_popularity)) if rest_popularity else None
+    underdog_index = rest_popularity.index(min(rest_popularity)) if rest_popularity else None
 
     labels = ["Shortest"]
     for i, entry in enumerate(rest):

@@ -51,15 +51,13 @@ def _register_and_login(client, username, password="password123", display_name=N
             "display_name": display_name or username.title(),
         },
     )
-    client.post("/api/auth/login",
-                json={"username": username, "password": password})
+    client.post("/api/auth/login", json={"username": username, "password": password})
 
 
 def _new_client_for(client, username):
     """Same app/engine, independent cookie jar - simulates a second logged-in user."""
     other = TestClient(app)
-    other.post("/api/auth/login",
-               json={"username": username, "password": "password123"})
+    other.post("/api/auth/login", json={"username": username, "password": "password123"})
     return other
 
 
@@ -94,8 +92,7 @@ def test_create_run_with_participants(client):
 
     resp = client.post(
         "/api/runs",
-        json={"name": "Bacon Run", "game_type": "cinechain",
-              "participant_user_ids": [bob_id]},
+        json={"name": "Bacon Run", "game_type": "cinechain", "participant_user_ids": [bob_id]},
     )
     assert resp.status_code == 201
     body = resp.json()
@@ -144,8 +141,7 @@ def test_non_participant_gets_404(client):
     _register_and_login(client, "alice")
     client.post(
         "/api/auth/register",
-        json={"username": "carol", "password": "password123",
-              "display_name": "Carol"},
+        json={"username": "carol", "password": "password123", "display_name": "Carol"},
     )
     run_id = client.post(
         "/api/runs", json={"name": "Alice Only", "participant_user_ids": []}
@@ -159,9 +155,7 @@ def test_non_participant_gets_404(client):
 def test_adding_step_denormalizes_metadata_and_sets_logger(client):
     _register_and_login(client, "alice")
     alice_id = client.get("/api/auth/me").json()["id"]
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
 
     with respx.mock:
         _mock_movie(603, "The Matrix", "1999-03-30")
@@ -199,9 +193,7 @@ def test_logging_stub_movie_hydrates_country(client, db_engine, as_seed):
             run_id = client.post(
                 "/api/runs", json={"name": "Run", "participant_user_ids": []}
             ).json()["id"]
-            response = client.post(
-                f"/api/runs/{run_id}/steps", json={"movie_id": 603}
-            )
+            response = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
             steps = [response.json()]
 
     assert response.status_code == 201
@@ -214,14 +206,10 @@ def test_logging_stub_movie_hydrates_country(client, db_engine, as_seed):
 
 def test_get_run_heals_missing_step_country_from_cache(client, db_engine):
     _register_and_login(client, "alice")
-    run_id = client.post(
-        "/api/runs", json={"name": "Run", "participant_user_ids": []}
-    ).json()["id"]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
     with respx.mock:
         _mock_movie(603, "The Matrix")
-        step = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 603}
-        ).json()
+        step = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
 
     with Session(db_engine) as session:
         stored_step = session.get(RunStep, step["id"])
@@ -242,9 +230,7 @@ def test_get_run_heals_missing_step_country_from_cache(client, db_engine):
 
 def test_deleting_run_cascades(client):
     _register_and_login(client, "alice")
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
     with respx.mock:
         _mock_movie(603, "The Matrix")
         client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
@@ -256,9 +242,7 @@ def test_deleting_run_cascades(client):
 
 def test_only_last_step_can_be_deleted(client):
     _register_and_login(client, "alice")
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
     with respx.mock:
         _mock_movie(603, "The Matrix", "1999-03-30")
         _mock_movie(604, "Matrix Reloaded", "2003-05-15")
@@ -270,8 +254,7 @@ def test_only_last_step_can_be_deleted(client):
         respx.get(f"{TMDB_BASE}/movie/604/credits").mock(
             return_value=httpx.Response(200, json={"id": 604, "cast": []})
         )
-        step1 = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
+        step1 = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
         # force=True: this test is about delete ordering, not chain validity.
         step2 = client.post(
             f"/api/runs/{run_id}/steps", json={"movie_id": 604, "force": True}
@@ -286,9 +269,7 @@ def test_only_last_step_can_be_deleted(client):
 
 def test_fetching_run_timeline_makes_zero_http_calls(client):
     _register_and_login(client, "alice")
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
     with respx.mock:
         movie_route = _mock_movie(603, "The Matrix")
         client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
@@ -302,18 +283,14 @@ def test_fetching_run_timeline_makes_zero_http_calls(client):
 
 def test_update_step_accepts_watched_at_and_notes(client):
     _register_and_login(client, "alice")
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
     with respx.mock:
         _mock_movie(603, "The Matrix", "1999-03-30")
-        step = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
+        step = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
 
     resp = client.patch(
         f"/api/runs/{run_id}/steps/{step['id']}",
-        json={"user_notes": "Rewatched with commentary",
-              "watched_at": "2020-05-01T00:00:00"},
+        json={"user_notes": "Rewatched with commentary", "watched_at": "2020-05-01T00:00:00"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -323,9 +300,7 @@ def test_update_step_accepts_watched_at_and_notes(client):
 
 def test_update_step_watched_at_promotes_planned_to_watched(client):
     _register_and_login(client, "alice")
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
     with respx.mock:
         _mock_movie(603, "The Matrix", "1999-03-30")
         step = client.post(
@@ -346,9 +321,7 @@ def test_update_step_watched_at_promotes_planned_to_watched(client):
 
 def test_discover_endpoint_flags_movies_already_in_run(client):
     _register_and_login(client, "alice")
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
     with respx.mock:
         _mock_movie(1, "Frontier Film")
         respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
@@ -356,14 +329,20 @@ def test_discover_endpoint_flags_movies_already_in_run(client):
                 200,
                 json={
                     "id": 1,
-                    "cast": [{"id": 10, "name": "Actor X",
-                             "profile_path": None, "character": "Hero", "order": 0}],
+                    "cast": [
+                        {
+                            "id": 10,
+                            "name": "Actor X",
+                            "profile_path": None,
+                            "character": "Hero",
+                            "order": 0,
+                        }
+                    ],
                 },
             )
         )
         _mock_movie(2, "Already Logged Film")
-        step = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 1}).json()
+        step = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 1}).json()
         respx.get(f"{TMDB_BASE}/movie/2/credits").mock(
             return_value=httpx.Response(200, json={"id": 2, "cast": []})
         )
@@ -377,10 +356,22 @@ def test_discover_endpoint_flags_movies_already_in_run(client):
                 json={
                     "id": 10,
                     "cast": [
-                        {"id": 2, "title": "Already Logged Film", "release_date": "2001-01-01",
-                            "poster_path": None, "character": "Cameo", "genre_ids": []},
-                        {"id": 3, "title": "Brand New Film", "release_date": "2005-01-01",
-                            "poster_path": None, "character": "Lead", "genre_ids": []},
+                        {
+                            "id": 2,
+                            "title": "Already Logged Film",
+                            "release_date": "2001-01-01",
+                            "poster_path": None,
+                            "character": "Cameo",
+                            "genre_ids": [],
+                        },
+                        {
+                            "id": 3,
+                            "title": "Brand New Film",
+                            "release_date": "2005-01-01",
+                            "poster_path": None,
+                            "character": "Lead",
+                            "genre_ids": [],
+                        },
                     ],
                 },
             )
@@ -413,14 +404,11 @@ def _default_rules(**overrides):
 
 def test_update_run_rules_persists_new_values(client):
     _register_and_login(client, "alice")
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
 
     resp = client.patch(
         f"/api/runs/{run_id}/rules",
-        json=_default_rules(preset="purist", max_cast_order=5,
-                            min_runtime=60, wildcards_budget=0),
+        json=_default_rules(preset="purist", max_cast_order=5, min_runtime=60, wildcards_budget=0),
     )
 
     assert resp.status_code == 200
@@ -434,8 +422,11 @@ def test_update_run_rules_rejects_budget_below_consumed_wildcards(client):
     _register_and_login(client, "alice")
     run_id = client.post(
         "/api/runs",
-        json={"name": "Run", "participant_user_ids": [],
-              "rules_config": _default_rules(wildcards_budget=2)},
+        json={
+            "name": "Run",
+            "participant_user_ids": [],
+            "rules_config": _default_rules(wildcards_budget=2),
+        },
     ).json()["id"]
 
     with respx.mock:
@@ -450,8 +441,7 @@ def test_update_run_rules_rejects_budget_below_consumed_wildcards(client):
             return_value=httpx.Response(200, json={"id": 2, "cast": []})
         )
         # No shared cast with Film One + force=True -> spends 1 wildcard.
-        resp = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 2, "force": True})
+        resp = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 2, "force": True})
         assert resp.json()["transition_metadata"]["wildcard_used"] is True
 
     # 1 wildcard already consumed - trying to set the budget to 0 must 409.
@@ -478,9 +468,7 @@ def test_update_run_rules_rejects_budget_below_consumed_wildcards(client):
 
 def test_bridge_stream_run_scoped_excludes_watched_movies_and_404s_for_non_participant(client):
     _register_and_login(client, "alice")
-    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()[
-        "id"
-    ]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
     with respx.mock:
         _mock_movie(1, "Watched Film")
         respx.get(f"{TMDB_BASE}/movie/1/credits").mock(

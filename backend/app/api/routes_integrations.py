@@ -39,17 +39,13 @@ def get_jellyfin_client(
     return client
 
 
-def get_radarr_client(
-    request: Request, session: Session = Depends(get_session)
-) -> RadarrClient:
+def get_radarr_client(request: Request, session: Session = Depends(get_session)) -> RadarrClient:
     client = RadarrClient(request.app.state.http_client)
     client.set_overrides(settings_repo.get_overrides(session))
     return client
 
 
-def get_seerr_client(
-    request: Request, session: Session = Depends(get_session)
-) -> SeerrClient:
+def get_seerr_client(request: Request, session: Session = Depends(get_session)) -> SeerrClient:
     client = SeerrClient(request.app.state.http_client)
     client.set_overrides(settings_repo.get_overrides(session))
     return client
@@ -62,7 +58,8 @@ def _http_error(exc: IntegrationError) -> HTTPException:
 async def _request_status(client: RadarrClient | SeerrClient) -> RequestClientStatus:
     health = await client.check_health()
     return RequestClientStatus(
-        enabled=health["enabled"], reachable=health["reachable"] if health["enabled"] else None,
+        enabled=health["enabled"],
+        reachable=health["reachable"] if health["enabled"] else None,
         version=health["version"],
     )
 
@@ -75,9 +72,11 @@ async def integrations_status(
     _current_user: User = Depends(get_current_user),
 ) -> IntegrationsStatus:
     health, radarr_status, seerr_status = await asyncio.gather(
-        jellyfin.check_health(), _request_status(radarr), _request_status(seerr))
+        jellyfin.check_health(), _request_status(radarr), _request_status(seerr)
+    )
     return IntegrationsStatus(
-        jellyfin=JellyfinStatus(**health), radarr=radarr_status, seerr=seerr_status)
+        jellyfin=JellyfinStatus(**health), radarr=radarr_status, seerr=seerr_status
+    )
 
 
 @router.post("/jellyfin/lookup", response_model=dict[int, JellyfinItemSummary])
@@ -156,8 +155,11 @@ async def seerr_options(
     except IntegrationError as exc:
         raise _http_error(exc) from exc
     return SeerrOptions(
-        enabled=True, request_mode=seerr.request_mode, default_user_id=seerr.default_user_id,
-        users=users, servers=servers,
+        enabled=True,
+        request_mode=seerr.request_mode,
+        default_user_id=seerr.default_user_id,
+        users=users,
+        servers=servers,
     )
 
 
@@ -168,22 +170,28 @@ async def seerr_request(
     current_user: User = Depends(get_current_user),
 ) -> RequestResult:
     if not seerr.enabled:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            detail="Seerr is not configured")
-    targeted = any(v is not None for v in (payload.server_id,
-                   payload.profile_id, payload.root_folder))
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Seerr is not configured")
+    targeted = any(
+        v is not None for v in (payload.server_id, payload.profile_id, payload.root_folder)
+    )
     if targeted and payload.server_id is None:
         raise HTTPException(
             422,
             detail="server_id is required when choosing a profile or root folder",
         )
     # Only admins may attribute a request to a specific Seerr user.
-    user_id = payload.user_id if current_user.is_admin and payload.user_id is not None \
+    user_id = (
+        payload.user_id
+        if current_user.is_admin and payload.user_id is not None
         else seerr.default_user_id
+    )
     try:
         await seerr.request_movie(
-            payload.tmdb_id, user_id=user_id, server_id=payload.server_id,
-            profile_id=payload.profile_id, root_folder=payload.root_folder,
+            payload.tmdb_id,
+            user_id=user_id,
+            server_id=payload.server_id,
+            profile_id=payload.profile_id,
+            root_folder=payload.root_folder,
         )
     except IntegrationError as exc:
         raise _http_error(exc) from exc
@@ -199,11 +207,14 @@ async def radarr_profiles(
         return RadarrOptions(enabled=False)
     try:
         profiles, folders = await asyncio.gather(
-            radarr.get_quality_profiles(), radarr.get_root_folders())
+            radarr.get_quality_profiles(), radarr.get_root_folders()
+        )
     except IntegrationError as exc:
         raise _http_error(exc) from exc
     return RadarrOptions(
-        enabled=True, profiles=profiles, root_folders=folders,
+        enabled=True,
+        profiles=profiles,
+        root_folders=folders,
         default_quality_profile_id=radarr.default_quality_profile_id,
         default_root_folder_path=radarr.default_root_folder_path,
     )
@@ -216,8 +227,7 @@ async def radarr_add(
     _current_user: User = Depends(get_current_user),
 ) -> RequestResult:
     if not radarr.enabled:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            detail="Radarr is not configured")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Radarr is not configured")
     profile_id = payload.quality_profile_id or radarr.default_quality_profile_id
     root_folder = payload.root_folder_path or radarr.default_root_folder_path
     if profile_id is None or not root_folder:
@@ -230,7 +240,8 @@ async def radarr_add(
     except IntegrationError as exc:
         raise _http_error(exc) from exc
     return RequestResult(
-        service="radarr", mode="advanced" if payload.quality_profile_id else "auto")
+        service="radarr", mode="advanced" if payload.quality_profile_id else "auto"
+    )
 
 
 def merge_acquisition_status(
@@ -288,10 +299,13 @@ async def status_lookup(
             return {}
 
     on_server, radarr_map, seerr_map = await asyncio.gather(
-        jellyfin.lookup_movies(ids, session=session), radarr_states(), seerr_states())
+        jellyfin.lookup_movies(ids, session=session), radarr_states(), seerr_states()
+    )
     return {
         tmdb_id: merge_acquisition_status(
             on_server[tmdb_id].on_server if tmdb_id in on_server else None,
-            radarr_map.get(tmdb_id), seerr_map.get(tmdb_id))
+            radarr_map.get(tmdb_id),
+            seerr_map.get(tmdb_id),
+        )
         for tmdb_id in ids
     }

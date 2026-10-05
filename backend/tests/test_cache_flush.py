@@ -18,30 +18,36 @@ FRESH = utcnow() - timedelta(days=1)
 
 @pytest.fixture()
 def engine(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path}/flush.db", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{tmp_path}/flush.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     return engine
 
 
 def _seed(session):
     # Movie 1: stale cast (actors 10, 11). Movie 2: fresh cast (actors 11, 12).
-    session.add_all([
-        CachedMovie(tmdb_id=1, title="Stale", cast_fetched_at=OLD, overview="kept"),
-        CachedMovie(tmdb_id=2, title="Fresh", cast_fetched_at=FRESH),
-        CachedMovie(tmdb_id=3, title="Never fetched cast"),
-        CachedActor(tmdb_id=10, name="Only in stale", credits_fetched_at=FRESH),
-        CachedActor(tmdb_id=11, name="Shared", credits_fetched_at=FRESH),
-        CachedActor(tmdb_id=12, name="Only in fresh", credits_fetched_at=OLD),
-        CachedMovieRating(movie_id=1, imdb_rating="8", fetched_at=OLD),
-        CachedMovieRating(movie_id=2, imdb_rating="7", fetched_at=FRESH),
-    ])
+    session.add_all(
+        [
+            CachedMovie(tmdb_id=1, title="Stale", cast_fetched_at=OLD, overview="kept"),
+            CachedMovie(tmdb_id=2, title="Fresh", cast_fetched_at=FRESH),
+            CachedMovie(tmdb_id=3, title="Never fetched cast"),
+            CachedActor(tmdb_id=10, name="Only in stale", credits_fetched_at=FRESH),
+            CachedActor(tmdb_id=11, name="Shared", credits_fetched_at=FRESH),
+            CachedActor(tmdb_id=12, name="Only in fresh", credits_fetched_at=OLD),
+            CachedMovieRating(movie_id=1, imdb_rating="8", fetched_at=OLD),
+            CachedMovieRating(movie_id=2, imdb_rating="7", fetched_at=FRESH),
+        ]
+    )
     session.flush()
-    session.add_all([
-        CachedMovieCast(movie_id=1, actor_id=10, cast_order=0),
-        CachedMovieCast(movie_id=1, actor_id=11, cast_order=1),
-        CachedMovieCast(movie_id=2, actor_id=11, cast_order=0),
-        CachedMovieCast(movie_id=2, actor_id=12, cast_order=1),
-    ])
+    session.add_all(
+        [
+            CachedMovieCast(movie_id=1, actor_id=10, cast_order=0),
+            CachedMovieCast(movie_id=1, actor_id=11, cast_order=1),
+            CachedMovieCast(movie_id=2, actor_id=11, cast_order=0),
+            CachedMovieCast(movie_id=2, actor_id=12, cast_order=1),
+        ]
+    )
     session.commit()
 
 
@@ -58,7 +64,9 @@ def test_flush_drops_only_stale_entries_and_keeps_fresh_data(engine):
             "actors_removed": 1,  # actor 10 only lived in the stale movie
         }
         movies = {m.tmdb_id: m for m in session.exec(select(CachedMovie)).all()}
-        assert movies[1].cast_fetched_at is None and movies[1].overview == "kept"  # detail row survives
+        assert (
+            movies[1].cast_fetched_at is None and movies[1].overview == "kept"
+        )  # detail row survives
         assert movies[2].cast_fetched_at is not None
         assert {r.movie_id for r in session.exec(select(CachedMovieRating)).all()} == {2}
         actors = {a.tmdb_id: a for a in session.exec(select(CachedActor)).all()}
@@ -92,7 +100,9 @@ def test_flushed_cast_is_reported_as_uncached_so_it_refetches(engine):
 
 @pytest.fixture()
 def client(config_dir):
-    engine = create_engine(f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
 
     def override_get_session():
@@ -112,9 +122,15 @@ def _login(client, username):
 
 def test_flush_endpoint_is_admin_only_and_reports_counts(client):
     assert client.post("/api/system/cache/flush").status_code == 401
-    client.post("/api/auth/register", json={"username": "alice", "password": "password123", "display_name": "A"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password123", "display_name": "A"},
+    )
     _login(client, "alice")
-    client.post("/api/auth/register", json={"username": "bob", "password": "password123", "display_name": "B"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "display_name": "B"},
+    )
     with Session(client.db_engine) as session:
         _seed(session)
 

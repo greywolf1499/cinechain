@@ -53,7 +53,8 @@ def merge_modifiers(defaults: dict[str, Any], rules: dict | None) -> dict[str, A
         if rules.get(key) is not None:
             active[key] = rules[key]
     return {
-        key: value for key, value in active.items()
+        key: value
+        for key, value in active.items()
         if key in PAIR_MODIFIER_KEYS and (key != COOLDOWN_KEY or value)
     }
 
@@ -68,7 +69,8 @@ def modifier_problems(rules: dict | None) -> list[str]:
             problems.append(f"{key} must be one of {list(allowed)} or null")
     cooldown = rules.get(COOLDOWN_KEY)
     if cooldown is not None and (
-        isinstance(cooldown, bool) or not isinstance(cooldown, int)
+        isinstance(cooldown, bool)
+        or not isinstance(cooldown, int)
         or not 0 <= cooldown <= MAX_COUNTRY_COOLDOWN
     ):
         problems.append(f"{COOLDOWN_KEY} must be an integer between 0 and {MAX_COUNTRY_COOLDOWN}")
@@ -152,7 +154,9 @@ def _staircase_violation(direction: str, earlier: CachedMovie, later: CachedMovi
 
 
 def _cooldown_violation(
-    active: dict[str, Any], earlier: CachedMovie, later: CachedMovie,
+    active: dict[str, Any],
+    earlier: CachedMovie,
+    later: CachedMovie,
     history: Sequence[RunStep] | None,
 ) -> str | None:
     country = primary_country(later)
@@ -168,7 +172,9 @@ def _cooldown_violation(
 
 
 def pair_modifier_violation(
-    active: dict[str, Any], earlier: CachedMovie, later: CachedMovie,
+    active: dict[str, Any],
+    earlier: CachedMovie,
+    later: CachedMovie,
     history: Sequence[RunStep] | None = None,
 ) -> str | None:
     """The first active modifier `later` breaks relative to `earlier`; None = allowed."""
@@ -197,7 +203,8 @@ def modifier_mechanic(
             mechanic.update(year_delta=year_b - year_a, direction=active[CHRONO_KEY])
     if active.get(STAIRCASE_KEY) and earlier.runtime and later.runtime:
         mechanic.update(
-            runtime_delta=later.runtime - earlier.runtime, runtime_staircase=active[STAIRCASE_KEY])
+            runtime_delta=later.runtime - earlier.runtime, runtime_staircase=active[STAIRCASE_KEY]
+        )
     return mechanic or None
 
 
@@ -208,10 +215,13 @@ def modifier_notes(active: dict[str, Any], tail: CachedMovie | None) -> list[str
         word = "before" if active[CHRONO_KEY] == "descent" else "after"
         year = parse_release_year(tail.release_date) if tail is not None else None
         notes.append(
-            f"Chrono {active[CHRONO_KEY]}: released {word} " + (str(year) if year else "the last film"))
+            f"Chrono {active[CHRONO_KEY]}: released {word} "
+            + (str(year) if year else "the last film")
+        )
     if active.get(STAIRCASE_KEY):
         word = "shorter" if active[STAIRCASE_KEY] == "descending" else "longer"
         runtime = tail.runtime if tail is not None and tail.runtime else None
         notes.append(
-            f"Runtime staircase: {word} than " + (f"{runtime} min" if runtime else "the last film"))
+            f"Runtime staircase: {word} than " + (f"{runtime} min" if runtime else "the last film")
+        )
     return notes

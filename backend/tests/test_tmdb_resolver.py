@@ -54,8 +54,15 @@ async def test_falls_back_to_adjacent_year_then_title_only():
 
 async def test_rejects_weak_title_matches_and_far_years():
     def handler(request):
-        return httpx.Response(200, json={"results": [
-            _movie(4, "Completely Different", "2019-01-01"), _movie(5, "Roma", "1990-01-01")]})
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    _movie(4, "Completely Different", "2019-01-01"),
+                    _movie(5, "Roma", "1990-01-01"),
+                ]
+            },
+        )
 
     found, _ = await _resolve(handler, "Roma", 2019)
     assert found is None

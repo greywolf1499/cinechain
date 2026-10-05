@@ -65,7 +65,9 @@ class FeatureEngine(MutatorEngine):
         """Compute and persist any missing features for these films."""
         raise NotImplementedError
 
-    def annotate(self, candidate: DiscoveryCandidate, row: CachedMovie, metric: float | None) -> None:
+    def annotate(
+        self, candidate: DiscoveryCandidate, row: CachedMovie, metric: float | None
+    ) -> None:
         raise NotImplementedError
 
     def with_metric(self, result: ValidationResult, metric: float | None) -> ValidationResult:
@@ -97,16 +99,16 @@ class FeatureEngine(MutatorEngine):
         reason = None if metric is None else self.violation(earlier, later, metric)
         if reason:
             return self.with_metric(
-                ValidationResult(valid=False, blocked=True, reason=reason), metric)
+                ValidationResult(valid=False, blocked=True, reason=reason), metric
+            )
         if not self.cast_link_required(rules):
             return self.with_metric(ValidationResult(valid=True), metric)
         result = await CineChainEngine.validate_primary(
-            self, from_movie_id, to_movie_id, cast_limit=cast_limit)
+            self, from_movie_id, to_movie_id, cast_limit=cast_limit
+        )
         return self.with_metric(result, metric)
 
-    def link_metadata(
-        self, result: ValidationResult, client_metadata: dict | None
-    ) -> dict | None:
+    def link_metadata(self, result: ValidationResult, client_metadata: dict | None) -> dict | None:
         meta = dict(client_metadata or {})
         for key, value in self.metadata_fields(result).items():
             if value is None:
@@ -129,21 +131,27 @@ class FeatureEngine(MutatorEngine):
     ) -> list[DiscoveryCandidate]:
         if not self.cast_link_required(rules):
             return await super().discover_candidates(
-                frontier_movie_id, mode, cast_limit, rules, previous_transition, history)
+                frontier_movie_id, mode, cast_limit, rules, previous_transition, history
+            )
         candidates = await CineChainEngine.discover_candidates(
-            self, frontier_movie_id, mode, cast_limit)
+            self, frontier_movie_id, mode, cast_limit
+        )
         frontier = await self._load(frontier_movie_id, hydrate=True)
         return await self._filter_pool(frontier, candidates, rules)
 
     async def _filter_pool(
-        self, frontier: CachedMovie, candidates: list[DiscoveryCandidate],
+        self,
+        frontier: CachedMovie,
+        candidates: list[DiscoveryCandidate],
         rules: dict | None = None,
     ) -> list[DiscoveryCandidate]:
         rows = await self._hydrate_pool(candidates)
-        by_popularity = sorted(
-            candidates, key=lambda c: -(c.popularity or 0.0))[:POOL_FEATURE_BUDGET]
-        await self.prepare([frontier, *(
-            rows[c.movie_id] for c in by_popularity if c.movie_id in rows)])
+        by_popularity = sorted(candidates, key=lambda c: -(c.popularity or 0.0))[
+            :POOL_FEATURE_BUDGET
+        ]
+        await self.prepare(
+            [frontier, *(rows[c.movie_id] for c in by_popularity if c.movie_id in rows)]
+        )
         keep: set[int] = set()
         for candidate in candidates:
             row = rows.get(candidate.movie_id)
@@ -202,7 +210,9 @@ class AestheticGradientEngine(FeatureEngine):
     async def prepare(self, movies: list[CachedMovie]) -> None:
         await movie_features.ensure_dominant_colors(self.session, self.tmdb, movies)
 
-    def annotate(self, candidate: DiscoveryCandidate, row: CachedMovie, metric: float | None) -> None:
+    def annotate(
+        self, candidate: DiscoveryCandidate, row: CachedMovie, metric: float | None
+    ) -> None:
         candidate.dominant_color = row.dominant_color
 
     def with_metric(self, result: ValidationResult, metric: float | None) -> ValidationResult:
@@ -213,7 +223,9 @@ class AestheticGradientEngine(FeatureEngine):
         return {"color_distance": result.color_distance}
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None,
+        self,
+        frontier: CachedMovie,
+        rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         await self.prepare([frontier])
@@ -240,27 +252,37 @@ class AestheticGradientEngine(FeatureEngine):
         except POOL_FETCH_ERRORS:
             fresh = []
         fresh = [r for r in fresh if r.tmdb_id not in pool]
-        await self.prepare(sorted(fresh, key=lambda r: -(r.popularity or 0.0))[:POOL_FEATURE_BUDGET])
+        await self.prepare(
+            sorted(fresh, key=lambda r: -(r.popularity or 0.0))[:POOL_FEATURE_BUDGET]
+        )
         pool.update({r.tmdb_id: r for r in fresh})
         return self._scored_candidates(frontier, list(pool.values()), best_first="low")
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None,
+        self,
+        tail_movie_id: int | None,
+        previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
         if tail_movie_id is None:
             return ConstraintInfo(
-                kind="color", title="Any film starts the gradient",
-                detail="Every later poster must be a similar colour to the one before it - or share a trope with it.")
+                kind="color",
+                title="Any film starts the gradient",
+                detail="Every later poster must be a similar colour to the one before it - or share a trope with it.",
+            )
         tail = await self._load(tail_movie_id)
         await self.prepare([tail])
         if not tail.dominant_color:
             return ConstraintInfo(
-                kind="color", title="Next poster must be a similar colour",
-                detail="The last poster's colour couldn't be read, so it can't be checked.")
+                kind="color",
+                title="Next poster must be a similar colour",
+                detail="The last poster's colour couldn't be read, so it can't be checked.",
+            )
         return ConstraintInfo(
-            kind="color", title=f"Next poster must be close to {tail.dominant_color}",
-            detail=f"Colour distance of at most {COLOR_DISTANCE_THRESHOLD:.0f} (RGB, 0-442).")
+            kind="color",
+            title=f"Next poster must be close to {tail.dominant_color}",
+            detail=f"Colour distance of at most {COLOR_DISTANCE_THRESHOLD:.0f} (RGB, 0-442).",
+        )
 
 
 def shared_trope(earlier: CachedMovie, later: CachedMovie) -> str | None:
@@ -298,7 +320,8 @@ class SemanticTropeEngine(FeatureEngine):
         ):
             return None
         return embeddings.normalize_similarity(
-            embeddings.cosine_similarity(vector_a, vector_b), fingerprint)
+            embeddings.cosine_similarity(vector_a, vector_b), fingerprint
+        )
 
     def violation(self, earlier: CachedMovie, later: CachedMovie, metric: float) -> str | None:
         if metric > SEMANTIC_SIMILARITY_THRESHOLD or shared_trope(earlier, later):
@@ -334,13 +357,19 @@ class SemanticTropeEngine(FeatureEngine):
         later = await self._load(to_movie_id, hydrate=True)
         await self.prepare_tropes([earlier, later])
         result = await super().validate_primary(
-            from_movie_id, to_movie_id, cast_limit=cast_limit, rules=rules,
-            previous_transition=previous_transition)
+            from_movie_id,
+            to_movie_id,
+            cast_limit=cast_limit,
+            rules=rules,
+            previous_transition=previous_transition,
+        )
         if result.valid:
             result.shared_trope = shared_trope(earlier, later)
         return result
 
-    def annotate(self, candidate: DiscoveryCandidate, row: CachedMovie, metric: float | None) -> None:
+    def annotate(
+        self, candidate: DiscoveryCandidate, row: CachedMovie, metric: float | None
+    ) -> None:
         candidate.semantic_score = None if metric is None else max(0.0, round(metric, 4))
         candidate.tropes = list(row.extracted_tropes or [])
 
@@ -352,7 +381,9 @@ class SemanticTropeEngine(FeatureEngine):
         return {"semantic_score": result.similarity, "shared_trope": result.shared_trope}
 
     async def _filter_pool(
-        self, frontier: CachedMovie, candidates: list[DiscoveryCandidate],
+        self,
+        frontier: CachedMovie,
+        candidates: list[DiscoveryCandidate],
         rules: dict | None = None,
     ) -> list[DiscoveryCandidate]:
         await self.prepare_tropes([frontier])
@@ -381,7 +412,9 @@ class SemanticTropeEngine(FeatureEngine):
         return [candidate for _, candidate in scored[:RULE_POOL_SIZE]]
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None,
+        self,
+        frontier: CachedMovie,
+        rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         await self.prepare([frontier])
@@ -395,12 +428,14 @@ class SemanticTropeEngine(FeatureEngine):
 
         # Films already embedded (by the same model as the frontier) from earlier play.
         fingerprint = embeddings.row_fingerprint(frontier.overview_embedding_model)
-        statement = select(CachedMovie).where(
-            CachedMovie.overview_embedding.is_not(None))  # type: ignore[union-attr]
+        statement = select(CachedMovie).where(CachedMovie.overview_embedding.is_not(None))  # type: ignore[union-attr]
         if fingerprint == embeddings.LOCAL_FINGERPRINT:
-            statement = statement.where(or_(
-                CachedMovie.overview_embedding_model.is_(None),  # type: ignore[union-attr]
-                CachedMovie.overview_embedding_model == fingerprint))
+            statement = statement.where(
+                or_(
+                    CachedMovie.overview_embedding_model.is_(None),  # type: ignore[union-attr]
+                    CachedMovie.overview_embedding_model == fingerprint,
+                )
+            )
         else:
             statement = statement.where(CachedMovie.overview_embedding_model == fingerprint)
         for row in self.session.exec(statement).all():
@@ -419,27 +454,35 @@ class SemanticTropeEngine(FeatureEngine):
 
         # Films sharing one of the frontier's tropes qualify even without a close plot match.
         if frontier.extracted_tropes:
-            tagged = self.session.exec(select(CachedMovie).where(
-                CachedMovie.extracted_tropes.is_not(None))).all()  # type: ignore[union-attr]
+            tagged = self.session.exec(
+                select(CachedMovie).where(CachedMovie.extracted_tropes.is_not(None))
+            ).all()  # type: ignore[union-attr]
             pool.update({r.tmdb_id: r for r in tagged if shared_trope(frontier, r)})
             by_popularity = sorted(
                 (r for r in pool.values() if r.extracted_tropes is None and r.overview),
-                key=lambda r: -(r.popularity or 0.0))
+                key=lambda r: -(r.popularity or 0.0),
+            )
             await self.prepare_tropes(by_popularity[:POOL_TROPE_BUDGET])
         return self._scored_candidates(frontier, list(pool.values()), best_first="high")
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None,
+        self,
+        tail_movie_id: int | None,
+        previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
         floor = f"more than {_percent(SEMANTIC_SIMILARITY_THRESHOLD)}%"
         if tail_movie_id is None:
             return ConstraintInfo(
-                kind="semantic", title="Any film starts the web",
-                detail=f"Every later film's plot must be a semantic match of {floor} to the one before it.")
+                kind="semantic",
+                title="Any film starts the web",
+                detail=f"Every later film's plot must be a semantic match of {floor} to the one before it.",
+            )
         return ConstraintInfo(
-            kind="semantic", title="Next film must match the plot or share a trope",
-            detail=f"Plot similarity {floor} to the last film's overview, or at least one trope in common.")
+            kind="semantic",
+            title="Next film must match the plot or share a trope",
+            detail=f"Plot similarity {floor} to the last film's overview, or at least one trope in common.",
+        )
 
 
 def _percent(similarity: float) -> int:

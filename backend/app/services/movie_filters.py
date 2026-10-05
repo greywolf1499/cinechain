@@ -35,8 +35,7 @@ def passes_filters(movie: CachedMovie, filters: SuggestionFilters) -> bool:
     if not is_reality_eligible(movie):
         return False
     if filters.country is not None:
-        countries = json.loads(
-            movie.origin_country) if movie.origin_country else []
+        countries = json.loads(movie.origin_country) if movie.origin_country else []
         if filters.country not in countries:
             return False
     if filters.decade is not None:

@@ -9,8 +9,12 @@ from app.services.movie_filters import is_reality_eligible
 
 
 def _movie(**overrides) -> CachedMovie:
-    defaults = {"tmdb_id": 1, "title": "Test Film",
-                "release_date": "2000-01-01", "status": "Released"}
+    defaults = {
+        "tmdb_id": 1,
+        "title": "Test Film",
+        "release_date": "2000-01-01",
+        "status": "Released",
+    }
     defaults.update(overrides)
     return CachedMovie(**defaults)
 
@@ -49,5 +53,4 @@ def test_unknown_status_does_not_block_an_already_released_movie():
 def test_low_popularity_indie_film_is_never_filtered():
     """The reality filter is release-date/status ONLY - never popularity,
     vote_count, or rating. This is the core philosophy guardrail."""
-    assert is_reality_eligible(
-        _movie(popularity=0.001, status="Released")) is True
+    assert is_reality_eligible(_movie(popularity=0.001, status="Released")) is True

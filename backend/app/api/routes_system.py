@@ -58,8 +58,7 @@ def cache_stats(
     """Read-only counts for the JIT adjacency cache - no pruning in v1."""
     movies = session.exec(select(func.count()).select_from(CachedMovie)).one()
     actors = session.exec(select(func.count()).select_from(CachedActor)).one()
-    cast_edges = session.exec(
-        select(func.count()).select_from(CachedMovieCast)).one()
+    cast_edges = session.exec(select(func.count()).select_from(CachedMovieCast)).one()
 
     db_path = get_settings().database_path
     db_size_bytes = db_path.stat().st_size if db_path.exists() else None
@@ -90,8 +89,12 @@ def flush_cache(
     counts = cache_flush.flush_stale_cache(session, max_age_days)
     vacuumed = cache_flush.vacuum(session.get_bind()) if vacuum else False
     return CacheFlushResult(
-        max_age_days=max_age_days, **counts, vacuumed=vacuumed,
-        db_size_before=before, db_size_after=size())
+        max_age_days=max_age_days,
+        **counts,
+        vacuumed=vacuumed,
+        db_size_before=before,
+        db_size_after=size(),
+    )
 
 
 def _current_rss_bytes() -> int | None:

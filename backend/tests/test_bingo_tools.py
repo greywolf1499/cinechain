@@ -37,8 +37,7 @@ def client(db_engine):
             "/api/auth/register",
             json={"username": "alice", "password": "password123", "display_name": "Alice"},
         )
-        test_client.post(
-            "/api/auth/login", json={"username": "alice", "password": "password123"})
+        test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
 
@@ -46,30 +45,54 @@ def client(db_engine):
 def alice_id(db_engine) -> str:
     with Session(db_engine) as session:
         from sqlmodel import select
+
         return session.exec(select(User)).first().id
 
 
 def seed(db_engine):
     uid = alice_id(db_engine)
     with Session(db_engine) as session:
-        session.add(CuratedList(id="l", title="L", url="https://letterboxd.com/a/list/l/", badge_prefix="SS"))
-        session.add(CachedMovie(
-            tmdb_id=1, title="Cached Classic", release_date="1962-01-01", runtime=82,
-            original_language="fr", origin_country='["FR"]', genre_ids=[18], popularity=3.0,
-            poster_path="/p.jpg", directors_fetched_at=utcnow()))
+        session.add(
+            CuratedList(
+                id="l", title="L", url="https://letterboxd.com/a/list/l/", badge_prefix="SS"
+            )
+        )
+        session.add(
+            CachedMovie(
+                tmdb_id=1,
+                title="Cached Classic",
+                release_date="1962-01-01",
+                runtime=82,
+                original_language="fr",
+                origin_country='["FR"]',
+                genre_ids=[18],
+                popularity=3.0,
+                poster_path="/p.jpg",
+                directors_fetched_at=utcnow(),
+            )
+        )
         session.flush()
         session.add(CachedMovieDirector(movie_id=1, person_id=9, name="Agnes", gender=1))
         session.add(CachedMovieRating(movie_id=1, imdb_rating="8.1"))
         session.add(CanonMovieBadge(curated_list_id="l", movie_id=1, badge_label="SS22 #4"))
-        session.add(LetterboxdWatchlist(user_id=uid, letterboxd_username="a", movie_id=1,
-                                        title="Cached Classic", year=1962))
-        session.add(LetterboxdWatchlist(user_id=uid, letterboxd_username="a", movie_id=2,
-                                        title="Uncached", year=2020))
+        session.add(
+            LetterboxdWatchlist(
+                user_id=uid, letterboxd_username="a", movie_id=1, title="Cached Classic", year=1962
+            )
+        )
+        session.add(
+            LetterboxdWatchlist(
+                user_id=uid, letterboxd_username="a", movie_id=2, title="Uncached", year=2020
+            )
+        )
         # someone else's watchlist must never leak in
         session.add(User(id="bob", username="bob", display_name="Bob", password_hash="x"))
         session.flush()
-        session.add(LetterboxdWatchlist(user_id="bob", letterboxd_username="b", movie_id=3,
-                                        title="Not Mine", year=2001))
+        session.add(
+            LetterboxdWatchlist(
+                user_id="bob", letterboxd_username="b", movie_id=3, title="Not Mine", year=2001
+            )
+        )
         session.commit()
 
 
@@ -97,14 +120,37 @@ def test_watchlist_is_joined_with_the_cache_and_scoped_to_the_user(client, db_en
 def test_hydrate_fills_in_detail_directors_and_gender(client, db_engine):
     seed(db_engine)
     with respx.mock:
-        respx.get(f"{TMDB_BASE}/movie/2").mock(return_value=httpx.Response(200, json={
-            "id": 2, "title": "Uncached", "release_date": "2020-05-01", "poster_path": None,
-            "overview": "", "origin_country": ["JP"], "original_language": "ja", "runtime": 120,
-            "genres": [{"id": 27, "name": "Horror"}], "popularity": 4.0, "status": "Released"}))
-        respx.get(f"{TMDB_BASE}/movie/2/credits").mock(return_value=httpx.Response(200, json={
-            "id": 2, "cast": [], "crew": [
-                {"id": 77, "name": "Sofia", "job": "Director", "gender": 1},
-                {"id": 78, "name": "Writer", "job": "Writer", "gender": 2}]}))
+        respx.get(f"{TMDB_BASE}/movie/2").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 2,
+                    "title": "Uncached",
+                    "release_date": "2020-05-01",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": ["JP"],
+                    "original_language": "ja",
+                    "runtime": 120,
+                    "genres": [{"id": 27, "name": "Horror"}],
+                    "popularity": 4.0,
+                    "status": "Released",
+                },
+            )
+        )
+        respx.get(f"{TMDB_BASE}/movie/2/credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 2,
+                    "cast": [],
+                    "crew": [
+                        {"id": 77, "name": "Sofia", "job": "Director", "gender": 1},
+                        {"id": 78, "name": "Writer", "job": "Writer", "gender": 2},
+                    ],
+                },
+            )
+        )
         body = client.get("/api/tools/bingo/watchlist", params={"hydrate": 5}).json()
 
     films = {f["movie_id"]: f for f in body["films"]}
@@ -126,12 +172,23 @@ def test_men_directing_is_false_and_unspecified_gender_is_unknown(client, db_eng
     uid = alice_id(db_engine)
     with Session(db_engine) as session:
         for movie_id, gender in ((10, 2), (11, 0)):
-            session.add(CachedMovie(tmdb_id=movie_id, title=f"M{movie_id}", runtime=100,
-                                    directors_fetched_at=utcnow()))
+            session.add(
+                CachedMovie(
+                    tmdb_id=movie_id,
+                    title=f"M{movie_id}",
+                    runtime=100,
+                    directors_fetched_at=utcnow(),
+                )
+            )
             session.flush()
-            session.add(CachedMovieDirector(movie_id=movie_id, person_id=movie_id, name="D", gender=gender))
-            session.add(LetterboxdWatchlist(user_id=uid, letterboxd_username="a", movie_id=movie_id,
-                                            title=f"M{movie_id}"))
+            session.add(
+                CachedMovieDirector(movie_id=movie_id, person_id=movie_id, name="D", gender=gender)
+            )
+            session.add(
+                LetterboxdWatchlist(
+                    user_id=uid, letterboxd_username="a", movie_id=movie_id, title=f"M{movie_id}"
+                )
+            )
         session.commit()
     films = {f["movie_id"]: f for f in client.get("/api/tools/bingo/watchlist").json()["films"]}
     assert films[10]["directed_by_woman"] is False

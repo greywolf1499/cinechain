@@ -127,7 +127,8 @@ class RottenTomatoesSplitEngine(TrackerEngine):
         problems = super().validate_rules_config(rules)
         target = (rules or {}).get(TARGET_KEY)
         if target is not None and (
-            isinstance(target, bool) or not isinstance(target, int)
+            isinstance(target, bool)
+            or not isinstance(target, int)
             or not 1 <= target <= MAX_TARGET_POINTS
         ):
             problems.append(f"{TARGET_KEY} must be a whole number from 1 to {MAX_TARGET_POINTS}")
@@ -147,8 +148,9 @@ class RottenTomatoesSplitEngine(TrackerEngine):
         """Cached films whose critic and audience scores diverge enough, biggest split first."""
         pool: list[tuple[CachedMovie, SplitScores]] = []
         for rating, movie in self.session.exec(
-            select(CachedMovieRating, CachedMovie)
-            .join(CachedMovie, col(CachedMovie.tmdb_id) == col(CachedMovieRating.movie_id))
+            select(CachedMovieRating, CachedMovie).join(
+                CachedMovie, col(CachedMovie.tmdb_id) == col(CachedMovieRating.movie_id)
+            )
         ).all():
             scores = split_scores(rating)
             if scores and scores.divergence >= MIN_DIVERGENCE and movie.tmdb_id not in exclude_ids:
@@ -162,13 +164,19 @@ class RottenTomatoesSplitEngine(TrackerEngine):
         scores = self.scores_of(movie_id)
         if scores is None:
             return ValidationResult(
-                valid=False, blocked=True,
-                reason=f"No Rotten Tomatoes and IMDb scores on file for {title} (needs OMDb)")
+                valid=False,
+                blocked=True,
+                reason=f"No Rotten Tomatoes and IMDb scores on file for {title} (needs OMDb)",
+            )
         if scores.divergence < MIN_DIVERGENCE:
             return ValidationResult(
-                valid=False, blocked=True,
-                reason=(f"Not a split: {title} has critics {scores.critic}% and audience "
-                        f"{scores.audience}% (a gap of {scores.divergence}, need {MIN_DIVERGENCE}+)"))
+                valid=False,
+                blocked=True,
+                reason=(
+                    f"Not a split: {title} has critics {scores.critic}% and audience "
+                    f"{scores.audience}% (a gap of {scores.divergence}, need {MIN_DIVERGENCE}+)"
+                ),
+            )
         return ValidationResult(valid=True)
 
     def settle(self, movie_id: int, household_score: int) -> dict[str, Any]:
@@ -177,8 +185,10 @@ class RottenTomatoesSplitEngine(TrackerEngine):
         if scores is None:
             raise ValueError(f"Film {movie_id} has no split scores")
         return {
-            "household_score": household_score, "critic_score": scores.critic,
-            "audience_score": scores.audience, "divergence": scores.divergence,
+            "household_score": household_score,
+            "critic_score": scores.critic,
+            "audience_score": scores.audience,
+            "divergence": scores.divergence,
             "point_to": settle_point(household_score, scores),
         }
 
@@ -187,12 +197,15 @@ class RottenTomatoesSplitEngine(TrackerEngine):
     def team_players(self, run: Run) -> dict[str, str | None]:
         """Team Critic = the run's owner, Team Audience = the next partner who joined."""
         participants = self.session.exec(
-            select(RunParticipant).where(RunParticipant.run_id == run.id)
-            .order_by(RunParticipant.joined_at)).all()
+            select(RunParticipant)
+            .where(RunParticipant.run_id == run.id)
+            .order_by(RunParticipant.joined_at)
+        ).all()
         ids = [p.user_id for p in sorted(participants, key=lambda p: p.role != "owner")]
         return {
             TEAM_CRITIC: ids[0] if ids else None,
-            TEAM_AUDIENCE: ids[1] if len(ids) > 1 else None}
+            TEAM_AUDIENCE: ids[1] if len(ids) > 1 else None,
+        }
 
     def sync_run_state(self, run: Run, steps: Sequence[RunStep]) -> None:
         rules = run.rules_config or {}
@@ -217,5 +230,6 @@ class RottenTomatoesSplitEngine(TrackerEngine):
             return RunOutcome(
                 RUN_STATUS_COMPLETED,
                 f"{VICTORY_PREFIX} {self._team_name(run, winner)} wins "
-                f"{scores[winner]}-{scores[loser]}!")
+                f"{scores[winner]}-{scores[loser]}!",
+            )
         return super().evaluate_run_outcome(run, steps)

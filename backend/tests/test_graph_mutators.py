@@ -37,15 +37,20 @@ def client(db_engine):
             "/api/auth/register",
             json={"username": "alice", "password": "password123", "display_name": "Alice"},
         )
-        test_client.post(
-            "/api/auth/login", json={"username": "alice", "password": "password123"})
+        test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
 
 
 def movie(title, year, countries=("US",), cast=(), directors=(), popularity=1.0):
-    return {"title": title, "year": year, "countries": list(countries), "cast": list(cast),
-            "directors": list(directors), "popularity": popularity}
+    return {
+        "title": title,
+        "year": year,
+        "countries": list(countries),
+        "cast": list(cast),
+        "directors": list(directors),
+        "popularity": popularity,
+    }
 
 
 def mock_universe(universe: dict[int, dict]):
@@ -55,38 +60,91 @@ def mock_universe(universe: dict[int, dict]):
     for movie_id, m in universe.items():
         for person in [*m["cast"], *m["directors"]]:
             people.setdefault(person, f"Person {person}")
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "title": m["title"], "release_date": f"{m['year']}-06-01",
-            "poster_path": None, "overview": "", "origin_country": m["countries"],
-            "original_language": "en", "runtime": 100, "genres": [], "popularity": m["popularity"],
-            "status": "Released",
-        }))
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(return_value=httpx.Response(200, json={
-            "id": movie_id,
-            "cast": [{"id": a, "name": people[a], "profile_path": None, "character": f"Role {a}",
-                      "order": i} for i, a in enumerate(m["cast"])],
-            "crew": [{"id": d, "name": people[d], "job": "Director"} for d in m["directors"]],
-        }))
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "title": m["title"],
+                    "release_date": f"{m['year']}-06-01",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": m["countries"],
+                    "original_language": "en",
+                    "runtime": 100,
+                    "genres": [],
+                    "popularity": m["popularity"],
+                    "status": "Released",
+                },
+            )
+        )
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "cast": [
+                        {
+                            "id": a,
+                            "name": people[a],
+                            "profile_path": None,
+                            "character": f"Role {a}",
+                            "order": i,
+                        }
+                        for i, a in enumerate(m["cast"])
+                    ],
+                    "crew": [
+                        {"id": d, "name": people[d], "job": "Director"} for d in m["directors"]
+                    ],
+                },
+            )
+        )
     for person in people:
+
         def credit(movie_id, m, **extra):
-            return {"id": movie_id, "title": m["title"], "release_date": f"{m['year']}-06-01",
-                    "poster_path": None, "genre_ids": [], "original_language": "en",
-                    "popularity": m["popularity"], **extra}
+            return {
+                "id": movie_id,
+                "title": m["title"],
+                "release_date": f"{m['year']}-06-01",
+                "poster_path": None,
+                "genre_ids": [],
+                "original_language": "en",
+                "popularity": m["popularity"],
+                **extra,
+            }
+
         respx.get(f"{TMDB_BASE}/person/{person}/movie_credits").mock(
-            return_value=httpx.Response(200, json={
-                "id": person,
-                "cast": [credit(i, m, character=f"Role {person}")
-                         for i, m in universe.items() if person in m["cast"]],
-                "crew": [credit(i, m, job="Director")
-                         for i, m in universe.items() if person in m["directors"]],
-            }))
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": person,
+                    "cast": [
+                        credit(i, m, character=f"Role {person}")
+                        for i, m in universe.items()
+                        if person in m["cast"]
+                    ],
+                    "crew": [
+                        credit(i, m, job="Director")
+                        for i, m in universe.items()
+                        if person in m["directors"]
+                    ],
+                },
+            )
+        )
     return people
 
 
 def create_run(client, game_type, **rules):
-    base = {"allow_repeats": "strict", "no_consecutive_actor": False, "min_runtime": 0,
-            "wildcards_budget": 2, **rules}
-    resp = client.post("/api/runs", json={"name": "Run", "game_type": game_type, "rules_config": base})
+    base = {
+        "allow_repeats": "strict",
+        "no_consecutive_actor": False,
+        "min_runtime": 0,
+        "wildcards_budget": 2,
+        **rules,
+    }
+    resp = client.post(
+        "/api/runs", json={"name": "Run", "game_type": game_type, "rules_config": base}
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -180,7 +238,9 @@ BRIDGE_CHRONO = {
 async def test_chrono_bridge_skips_hops_that_go_backwards(config_dir, db_engine):
     with Session(db_engine) as session, respx.mock:
         mock_universe(BRIDGE_CHRONO)
-        constrained = await _solve(session, ChronoClimbEngine, 1, 9, max_depth=3, rules={"require_cast_link": True})
+        constrained = await _solve(
+            session, ChronoClimbEngine, 1, 9, max_depth=3, rules={"require_cast_link": True}
+        )
         unconstrained = await _solve(session, CineChainEngine, 1, 9, max_depth=3)
 
     result = next(e for e in constrained if e["type"] == "result")
@@ -193,7 +253,9 @@ async def test_chrono_bridge_skips_hops_that_go_backwards(config_dir, db_engine)
 async def test_chrono_bridge_is_impossible_when_the_target_is_older(config_dir, db_engine):
     with Session(db_engine) as session, respx.mock:
         mock_universe(BRIDGE_CHRONO)
-        events = await _solve(session, ChronoClimbEngine, 9, 1, max_depth=3, rules={"require_cast_link": True})
+        events = await _solve(
+            session, ChronoClimbEngine, 9, 1, max_depth=3, rules={"require_cast_link": True}
+        )
 
     exhausted = next(e for e in events if e["type"] == "exhausted")
     assert exhausted["reason"] == "constraint_impossible"
@@ -245,8 +307,12 @@ def test_passport_hybrid_pool_flags_films_it_could_not_verify(client, monkeypatc
     with respx.mock:
         mock_universe(PASSPORT)
         log(client, run_id, 1)
-        pool = {c["movie_id"]: c for c in client.get(
-            f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}).json()}
+        pool = {
+            c["movie_id"]: c
+            for c in client.get(
+                f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}
+            ).json()
+        }
 
     assert pool[2]["constraint_unverified"] is False  # most popular: hydrated (FR)
     assert pool[4]["constraint_unverified"] is True  # over budget: kept but flagged
@@ -264,7 +330,9 @@ BRIDGE_PASSPORT = {
 async def test_passport_bridge_verifies_lazily_discovered_countries(config_dir, db_engine):
     with Session(db_engine) as session, respx.mock:
         mock_universe(BRIDGE_PASSPORT)
-        events = await _solve(session, WorldPassportEngine, 1, 9, max_depth=3, rules={"require_cast_link": True})
+        events = await _solve(
+            session, WorldPassportEngine, 1, 9, max_depth=3, rules={"require_cast_link": True}
+        )
 
     result = next(e for e in events if e["type"] == "result")
     assert [n.movie_id for n in result["path"]] == [1, 5, 9]  # 6 is US -> US: rejected
@@ -308,7 +376,10 @@ def test_auteur_alternates_actor_and_director_hops(client):
         assert meta["connection_type"] == "director"
         assert meta["director_id"] == 500 and "actor_id" not in meta
 
-        assert client.get(f"/api/runs/{run_id}/constraint").json()["title"] == "Next hop must be an Actor"
+        assert (
+            client.get(f"/api/runs/{run_id}/constraint").json()["title"]
+            == "Next hop must be an Actor"
+        )
         # 3 -> 5 shares only the director again: a hard block, even with a wildcard.
         for force in (False, True):
             resp = log(client, run_id, 5, force=force)
@@ -322,8 +393,16 @@ def test_auteur_free_first_hop_honours_the_clients_choice(client):
     with respx.mock:
         mock_universe(AUTEUR)
         log(client, run_id, 1)
-        second = log(client, run_id, 2, transition_metadata={
-            "connection_type": "director", "actor_id": 100, "actor_name": "ignored"})
+        second = log(
+            client,
+            run_id,
+            2,
+            transition_metadata={
+                "connection_type": "director",
+                "actor_id": 100,
+                "actor_name": "ignored",
+            },
+        )
 
     meta = second.json()["transition_metadata"]
     assert meta["connection_type"] == "director"
@@ -334,7 +413,9 @@ def test_auteur_ignores_a_claimed_connection_on_the_first_film(client):
     run_id = create_run(client, "auteur_relay")
     with respx.mock:
         mock_universe(AUTEUR)
-        first = log(client, run_id, 1, transition_metadata={"connection_type": "actor", "note": "x"})
+        first = log(
+            client, run_id, 1, transition_metadata={"connection_type": "actor", "note": "x"}
+        )
         assert client.get(f"/api/runs/{run_id}/constraint").json()["kind"] == "free"
     assert first.json()["transition_metadata"] == {"note": "x"}
 
@@ -376,8 +457,9 @@ async def test_auteur_bridge_continues_the_runs_alternation(config_dir, db_engin
     with Session(db_engine) as session, respx.mock:
         mock_universe(BRIDGE_AUTEUR)
         # The run's last hop was a director link, so hop one must be an actor...
-        events = await _solve(session, AuteurRelayEngine, 1, 4, max_depth=3,
-                              start_connection_type="director")
+        events = await _solve(
+            session, AuteurRelayEngine, 1, 4, max_depth=3, start_connection_type="director"
+        )
 
     # ...but 1 and 3 share no actor, so the director-first route is unavailable.
     assert not any(e["type"] == "result" for e in events)
@@ -406,8 +488,15 @@ def test_bridge_stream_passes_the_runs_last_connection_type(client):
     with respx.mock:
         mock_universe(BRIDGE_AUTEUR)
         log(client, run_id, 1)
-        resp = client.get("/api/engine/bridge/stream", params={
-            "from_movie_id": 1, "to_movie_id": 4, "game_type": "auteur_relay",
-            "run_id": run_id, "max_depth": 3})
+        resp = client.get(
+            "/api/engine/bridge/stream",
+            params={
+                "from_movie_id": 1,
+                "to_movie_id": 4,
+                "game_type": "auteur_relay",
+                "run_id": run_id,
+                "max_depth": 3,
+            },
+        )
     assert resp.status_code == 200
     assert "event: result" in resp.text

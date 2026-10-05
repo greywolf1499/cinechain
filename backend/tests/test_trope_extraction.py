@@ -61,14 +61,17 @@ def mock_llm(client, replies: dict[str, object] | None = None) -> respx.Route:
 # --- extract_tropes ---
 
 
-@pytest.mark.parametrize("reply,expected", [
-    ('["heist", "time-loop", "cyberpunk"]', ["heist", "time-loop", "cyberpunk"]),
-    ('```json\n["Time Loop", "Heist!", "heist"]\n```', ["time-loop", "heist"]),
-    ('<think>hmm</think>["unreliable-narrator"]', ["unreliable-narrator"]),
-    ("heist, time loop; cyberpunk", ["heist", "time-loop", "cyberpunk"]),
-    ('["a","b","c","d","e","f","g"]', ["a", "b", "c", "d", "e"]),
-    ('[1, null, "ok"]', ["ok"]),
-])
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        ('["heist", "time-loop", "cyberpunk"]', ["heist", "time-loop", "cyberpunk"]),
+        ('```json\n["Time Loop", "Heist!", "heist"]\n```', ["time-loop", "heist"]),
+        ('<think>hmm</think>["unreliable-narrator"]', ["unreliable-narrator"]),
+        ("heist, time loop; cyberpunk", ["heist", "time-loop", "cyberpunk"]),
+        ('["a","b","c","d","e","f","g"]', ["a", "b", "c", "d", "e"]),
+        ('[1, null, "ok"]', ["ok"]),
+    ],
+)
 def test_parse_tropes_normalizes_to_kebab_case(reply, expected):
     assert llm.parse_tropes(reply) == expected
 
@@ -82,8 +85,11 @@ async def test_extract_tropes_is_empty_when_the_llm_is_off():
 async def test_extract_tropes_prompts_the_configured_model():
     config = llm.LlmConfig(provider="ollama")
     with respx.mock:
-        route = respx.post(OLLAMA_CHAT).mock(return_value=httpx.Response(200, json={
-            "message": {"role": "assistant", "content": '["heist", "Time Loop"]'}}))
+        route = respx.post(OLLAMA_CHAT).mock(
+            return_value=httpx.Response(
+                200, json={"message": {"role": "assistant", "content": '["heist", "Time Loop"]'}}
+            )
+        )
         tropes = await llm.extract_tropes("A crew plans a heist.", config)
     assert tropes == ["heist", "time-loop"]
     assert "kebab-case" in json.loads(route.calls[0].request.content)["messages"][0]["content"]
@@ -143,10 +149,24 @@ def test_changing_the_overview_drops_the_stale_tropes(client, db_engine):
         mock_universe(PLOTS)
         mock_llm(client)
         client.post("/api/movies/1/tropes/extract")
-        respx.get(f"{TMDB_BASE}/movie/1").mock(return_value=httpx.Response(200, json={
-            "id": 1, "title": "Heist One", "release_date": "2000-01-01", "poster_path": None,
-            "overview": "a new plot", "origin_country": ["US"], "original_language": "en",
-            "runtime": 100, "genres": [], "popularity": 9, "status": "Released"}))
+        respx.get(f"{TMDB_BASE}/movie/1").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 1,
+                    "title": "Heist One",
+                    "release_date": "2000-01-01",
+                    "poster_path": None,
+                    "overview": "a new plot",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 100,
+                    "genres": [],
+                    "popularity": 9,
+                    "status": "Released",
+                },
+            )
+        )
         refreshed = client.get("/api/movies/1", params={"refresh": True}).json()
     assert refreshed["extracted_tropes"] is None
 
@@ -229,19 +249,33 @@ def test_a_failing_llm_never_blocks_a_plot_match(client, fake_model):
 def test_pick_next_offers_trope_sharers_and_exposes_tropes(client, fake_model):
     run_id = create_run(client, "semantic_trope")
     related = [
-        {"id": i, "title": PLOTS[i]["title"], "release_date": "2000-06-01", "poster_path": None,
-         "genre_ids": [], "original_language": "en", "popularity": PLOTS[i]["popularity"]}
-        for i in (2, 3)]
+        {
+            "id": i,
+            "title": PLOTS[i]["title"],
+            "release_date": "2000-06-01",
+            "poster_path": None,
+            "genre_ids": [],
+            "original_language": "en",
+            "popularity": PLOTS[i]["popularity"],
+        }
+        for i in (2, 3)
+    ]
     with respx.mock:
         mock_universe(PLOTS)
         mock_llm(client)
         respx.get(f"{TMDB_BASE}/movie/1/recommendations").mock(
-            return_value=httpx.Response(200, json={"results": related}))
+            return_value=httpx.Response(200, json={"results": related})
+        )
         respx.get(f"{TMDB_BASE}/movie/1/similar").mock(
-            return_value=httpx.Response(200, json={"results": []}))
+            return_value=httpx.Response(200, json={"results": []})
+        )
         log(client, run_id, 1)
-        pool = {c["movie_id"]: c for c in client.get(
-            f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}).json()}
+        pool = {
+            c["movie_id"]: c
+            for c in client.get(
+                f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}
+            ).json()
+        }
 
     # "Love Story" has an orthogonal plot, but shares the "heist" trope with the frontier.
     assert set(pool) == {2, 3}

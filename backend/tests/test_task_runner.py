@@ -15,7 +15,9 @@ from app.utils.ids import utcnow
 
 @pytest.fixture()
 def engine(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path}/tasks.db", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{tmp_path}/tasks.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     return engine
 
@@ -63,24 +65,34 @@ async def test_failure_is_recorded_not_raised(engine):
     background = BackgroundTasks()
     with Session(engine) as session:
         task, _ = task_runner.submit_task(
-            background, session, "demo", work,
-            describe_error=lambda exc: {"code": "boom", "status": 418})
+            background,
+            session,
+            "demo",
+            work,
+            describe_error=lambda exc: {"code": "boom", "status": 418},
+        )
 
     await background()  # must not raise
 
     failed = _status(engine, task.id)
     assert failed.status == "failed"
     assert failed.error == "scrape exploded"
-    assert failed.progress_data["error"] == {"code": "boom", "message": "scrape exploded", "status": 418}
+    assert failed.progress_data["error"] == {
+        "code": "boom",
+        "message": "scrape exploded",
+        "status": 418,
+    }
 
 
 async def test_duplicate_active_task_returns_existing_and_schedules_nothing(engine):
     background = BackgroundTasks()
     with Session(engine) as session:
         first, created_first = task_runner.submit_task(
-            background, session, "demo", lambda ctx: None, dedupe_key="same")
+            background, session, "demo", lambda ctx: None, dedupe_key="same"
+        )
         second, created_second = task_runner.submit_task(
-            background, session, "demo", lambda ctx: None, dedupe_key="same")
+            background, session, "demo", lambda ctx: None, dedupe_key="same"
+        )
 
         assert (created_first, created_second) == (True, False)
         assert second.id == first.id
@@ -88,7 +100,8 @@ async def test_duplicate_active_task_returns_existing_and_schedules_nothing(engi
 
         await background()
         third, created_third = task_runner.submit_task(
-            BackgroundTasks(), session, "demo", lambda ctx: None, dedupe_key="same")
+            BackgroundTasks(), session, "demo", lambda ctx: None, dedupe_key="same"
+        )
         assert created_third and third.id != first.id  # finished tasks don't block a re-run
 
 
@@ -130,9 +143,17 @@ def test_startup_marks_orphaned_tasks_failed(engine):
 
 async def test_old_finished_tasks_are_pruned_on_submit(engine):
     with Session(engine) as session:
-        session.add(SystemTask(name="old", status="completed", updated_at=utcnow() - timedelta(days=8)))
-        session.add(SystemTask(name="recent", status="completed", updated_at=utcnow() - timedelta(days=1)))
-        session.add(SystemTask(name="old-but-active", status="running", updated_at=utcnow() - timedelta(days=30)))
+        session.add(
+            SystemTask(name="old", status="completed", updated_at=utcnow() - timedelta(days=8))
+        )
+        session.add(
+            SystemTask(name="recent", status="completed", updated_at=utcnow() - timedelta(days=1))
+        )
+        session.add(
+            SystemTask(
+                name="old-but-active", status="running", updated_at=utcnow() - timedelta(days=30)
+            )
+        )
         session.commit()
         task_runner.submit_task(BackgroundTasks(), session, "demo", lambda ctx: None)
         names = {t.name for t in session.exec(select(SystemTask)).all()}
@@ -160,8 +181,10 @@ async def test_worker_slots_cap_concurrency(engine, monkeypatch):
         for _ in range(3):
             task_runner.submit_task(background, session, "demo", work)
 
-    threads = [threading.Thread(target=task_runner._execute, args=(engine, t.id, work, None))
-               for t in _all_tasks(engine)]
+    threads = [
+        threading.Thread(target=task_runner._execute, args=(engine, t.id, work, None))
+        for t in _all_tasks(engine)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:

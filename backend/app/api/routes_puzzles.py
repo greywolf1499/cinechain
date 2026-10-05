@@ -26,7 +26,8 @@ async def _today(session: Session, tmdb: TMDBClient) -> DailyPuzzle:
     except daily_puzzle.PuzzleUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "puzzle_unavailable", "message": str(exc)}) from exc
+            detail={"code": "puzzle_unavailable", "message": str(exc)},
+        ) from exc
 
 
 def _puzzle_out(session: Session, puzzle: DailyPuzzle, user: User) -> DailyPuzzleOut:
@@ -65,7 +66,8 @@ async def validate_daily_hop(
     puzzle = await _today(session, tmdb)
     try:
         links, reason, recorded, attempt = await daily_puzzle.attempt_hop(
-            session, tmdb, puzzle, user.id, payload.current_movie_id, payload.next_movie_id)
+            session, tmdb, puzzle, user.id, payload.current_movie_id, payload.next_movie_id
+        )
     except daily_puzzle.HopError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return ValidateHopResult(
@@ -102,7 +104,9 @@ async def forfeit_daily_puzzle(
     puzzle = await _today(session, tmdb)
     existing = daily_puzzle.get_attempt(session, puzzle.puzzle_date, user.id)
     if existing is not None and existing.status == "solved":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Today's puzzle is already solved")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Today's puzzle is already solved"
+        )
     attempt = daily_puzzle.forfeit(session, puzzle, user.id)
     return ForfeitResult(
         puzzle_number=puzzle.puzzle_number,
@@ -112,7 +116,9 @@ async def forfeit_daily_puzzle(
     )
 
 
-@router.post("/daily/convert-to-run", response_model=ConvertToRunResult, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/daily/convert-to-run", response_model=ConvertToRunResult, status_code=status.HTTP_201_CREATED
+)
 async def convert_daily_to_run(
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
@@ -125,6 +131,7 @@ async def convert_daily_to_run(
     if attempt is None or attempt.status == ATTEMPT_IN_PROGRESS:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Solve or forfeit today's puzzle before queueing it as a run")
+            detail="Solve or forfeit today's puzzle before queueing it as a run",
+        )
     run, count = daily_puzzle.convert_to_run(session, puzzle, attempt, user.id)
     return ConvertToRunResult(run_id=run.id, movies=count)

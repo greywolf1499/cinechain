@@ -102,8 +102,7 @@ def validate_conditions(rules: dict[str, Any] | None) -> list[str]:
                 continue
             ctype = condition.get("type")
             if ctype not in registry:
-                errors.append(
-                    f"{key}.type must be one of {sorted(registry)} (got {ctype!r})")
+                errors.append(f"{key}.type must be one of {sorted(registry)} (got {ctype!r})")
             count = condition.get("count")
             if isinstance(count, bool) or not isinstance(count, int) or count < 1:
                 errors.append(f"{key}.count must be a positive integer")

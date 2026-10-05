@@ -35,20 +35,31 @@ def client(db_engine):
             "/api/auth/register",
             json={"username": "alice", "password": "password123", "display_name": "Alice"},
         )
-        test_client.post(
-            "/api/auth/login", json={"username": "alice", "password": "password123"})
+        test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
 
 
 def _mock_movie(tmdb_id: int, title: str, year: int = 1975, cast: list[dict] | None = None):
-    respx.get(f"{TMDB_BASE}/movie/{tmdb_id}").mock(return_value=httpx.Response(200, json={
-        "id": tmdb_id, "title": title, "release_date": f"{year}-06-01", "poster_path": None,
-        "overview": "", "origin_country": ["US"], "original_language": "en", "runtime": 100,
-        "genres": [],
-    }))
+    respx.get(f"{TMDB_BASE}/movie/{tmdb_id}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": tmdb_id,
+                "title": title,
+                "release_date": f"{year}-06-01",
+                "poster_path": None,
+                "overview": "",
+                "origin_country": ["US"],
+                "original_language": "en",
+                "runtime": 100,
+                "genres": [],
+            },
+        )
+    )
     respx.get(f"{TMDB_BASE}/movie/{tmdb_id}/credits").mock(
-        return_value=httpx.Response(200, json={"id": tmdb_id, "cast": cast or []}))
+        return_value=httpx.Response(200, json={"id": tmdb_id, "cast": cast or []})
+    )
 
 
 def _cast(actor_id: int, name: str = "Actor", order: int = 0):
@@ -62,23 +73,29 @@ def _make_list(db_engine, title="Canon", movie_ids=()) -> str:
         session.commit()
         session.refresh(curated)
         for movie_id in movie_ids:
-            session.add(CanonMovieBadge(
-                curated_list_id=curated.id, movie_id=movie_id, badge_label="C"))
+            session.add(
+                CanonMovieBadge(curated_list_id=curated.id, movie_id=movie_id, badge_label="C")
+            )
         session.commit()
         return curated.id
 
 
 def _create(client, game_type, rules, **extra):
-    return client.post("/api/runs", json={"name": "Run", "game_type": game_type,
-                                          "rules_config": rules, **extra})
+    return client.post(
+        "/api/runs", json={"name": "Run", "game_type": game_type, "rules_config": rules, **extra}
+    )
 
 
 def _log(client, run_id, movie_id, **extra):
     return client.post(f"/api/runs/{run_id}/steps", json={"movie_id": movie_id, **extra})
 
 
-STANDARD = {"allow_repeats": "strict", "no_consecutive_actor": False, "min_runtime": 0,
-            "wildcards_budget": 2}
+STANDARD = {
+    "allow_repeats": "strict",
+    "no_consecutive_actor": False,
+    "min_runtime": 0,
+    "wildcards_budget": 2,
+}
 
 
 # --- registry ---
@@ -101,14 +118,19 @@ def test_island_requires_an_existing_list(client, db_engine):
     resp = _create(client, "canon_island", {**STANDARD, "allowed_curated_list_id": "nope"})
     assert resp.status_code == 422
     list_id = _make_list(db_engine)
-    assert _create(client, "canon_island", {**STANDARD, "allowed_curated_list_id": list_id}
-                   ).status_code == 201
+    assert (
+        _create(
+            client, "canon_island", {**STANDARD, "allowed_curated_list_id": list_id}
+        ).status_code
+        == 201
+    )
 
 
 def test_island_blocks_non_canon_films_even_with_a_wildcard(client, db_engine):
     list_id = _make_list(db_engine, "Sight & Sound", movie_ids=(1, 2))
-    run_id = _create(client, "canon_island",
-                     {**STANDARD, "allowed_curated_list_id": list_id}).json()["id"]
+    run_id = _create(
+        client, "canon_island", {**STANDARD, "allowed_curated_list_id": list_id}
+    ).json()["id"]
     with respx.mock:
         _mock_movie(1, "Canon One", cast=[_cast(100)])
         _mock_movie(2, "Canon Two", cast=[_cast(100)])
@@ -145,8 +167,9 @@ def test_island_checks_the_first_film_and_the_seed(client, db_engine):
 
 def test_island_still_requires_a_shared_actor(client, db_engine):
     list_id = _make_list(db_engine, movie_ids=(1, 2))
-    run_id = _create(client, "canon_island",
-                     {**STANDARD, "allowed_curated_list_id": list_id}).json()["id"]
+    run_id = _create(
+        client, "canon_island", {**STANDARD, "allowed_curated_list_id": list_id}
+    ).json()["id"]
     with respx.mock:
         _mock_movie(1, "One", cast=[_cast(100)])
         _mock_movie(2, "Two", cast=[_cast(200)])
@@ -159,16 +182,31 @@ def test_island_still_requires_a_shared_actor(client, db_engine):
 
 def test_island_discovery_only_offers_canon_films(client, db_engine):
     list_id = _make_list(db_engine, movie_ids=(2,))
-    run_id = _create(client, "canon_island",
-                     {**STANDARD, "allowed_curated_list_id": list_id}).json()["id"]
-    credit = {"release_date": "2000-01-01", "poster_path": None, "character": "R",
-              "genre_ids": [], "original_language": "en"}
+    run_id = _create(
+        client, "canon_island", {**STANDARD, "allowed_curated_list_id": list_id}
+    ).json()["id"]
+    credit = {
+        "release_date": "2000-01-01",
+        "poster_path": None,
+        "character": "R",
+        "genre_ids": [],
+        "original_language": "en",
+    }
     with respx.mock:
         _mock_movie(1, "Frontier", cast=[_cast(100)])
         respx.get(f"{TMDB_BASE}/person/100/movie_credits").mock(
-            return_value=httpx.Response(200, json={"id": 100, "cast": [
-                {"id": 1, "title": "Frontier", **credit}, {"id": 2, "title": "Canon Two", **credit},
-                {"id": 3, "title": "Not Canon", **credit}]}))
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 100,
+                    "cast": [
+                        {"id": 1, "title": "Frontier", **credit},
+                        {"id": 2, "title": "Canon Two", **credit},
+                        {"id": 3, "title": "Not Canon", **credit},
+                    ],
+                },
+            )
+        )
         resp = client.get(f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1})
 
     assert [c["movie_id"] for c in resp.json()] == [2]
@@ -238,8 +276,16 @@ def _seed_cache(db_engine):
     ]
     with Session(db_engine) as session:
         for tmdb_id, title, runtime, genres, release_date, status in rows:
-            session.add(CachedMovie(tmdb_id=tmdb_id, title=title, runtime=runtime,
-                                    genre_ids=genres, release_date=release_date, status=status))
+            session.add(
+                CachedMovie(
+                    tmdb_id=tmdb_id,
+                    title=title,
+                    runtime=runtime,
+                    genre_ids=genres,
+                    release_date=release_date,
+                    status=status,
+                )
+            )
         session.commit()
         session.add(CachedMovieRating(movie_id=1, imdb_rating="7.8"))
         session.add(CachedMovieRating(movie_id=3, imdb_rating="6.1"))
@@ -315,8 +361,9 @@ def test_roulette_run_logs_any_film_without_a_link(client):
 
 
 def test_win_conditions_work_in_tracker_modes(client):
-    run_id = _create(client, "roulette", {**STANDARD, "win_condition": {
-        "type": "movies_watched", "count": 2}}).json()["id"]
+    run_id = _create(
+        client, "roulette", {**STANDARD, "win_condition": {"type": "movies_watched", "count": 2}}
+    ).json()["id"]
     with respx.mock:
         _mock_movie(1, "One")
         _mock_movie(2, "Two")
@@ -338,8 +385,16 @@ def _seed_matrix(db_engine):
     ]
     with Session(db_engine) as session:
         for tmdb_id, runtime, genres, _ in rows:
-            session.add(CachedMovie(tmdb_id=tmdb_id, title=f"M{tmdb_id}", runtime=runtime,
-                                    genre_ids=genres, release_date="2000-01-01", status="Released"))
+            session.add(
+                CachedMovie(
+                    tmdb_id=tmdb_id,
+                    title=f"M{tmdb_id}",
+                    runtime=runtime,
+                    genre_ids=genres,
+                    release_date="2000-01-01",
+                    status="Released",
+                )
+            )
         session.commit()
         for tmdb_id, _, _, imdb in rows:
             session.add(CachedMovieRating(movie_id=tmdb_id, imdb_rating=imdb))
@@ -362,19 +417,32 @@ def test_spin_genre_and_requires_every_genre_or_any(client, db_engine):
 
 def test_spin_genre_and_with_no_film_having_all_is_a_404(client, db_engine):
     _seed_matrix(db_engine)
-    resp = client.get("/api/engine/roulette/spin", params={
-        "genre_ids": [35, 18], "genre_operator": "AND"})
+    resp = client.get(
+        "/api/engine/roulette/spin", params={"genre_ids": [35, 18], "genre_operator": "AND"}
+    )
     assert resp.status_code == 404
 
 
 def test_spin_rejects_inverted_ranges_and_bad_operators(client, db_engine):
     _seed_matrix(db_engine)
-    assert client.get("/api/engine/roulette/spin", params={
-        "min_runtime": 200, "max_runtime": 100}).status_code == 422
-    assert client.get("/api/engine/roulette/spin", params={
-        "min_rating": 8, "max_rating": 3}).status_code == 422
-    assert client.get("/api/engine/roulette/spin", params={
-        "genre_ids": [35], "genre_operator": "XOR"}).status_code == 422
+    assert (
+        client.get(
+            "/api/engine/roulette/spin", params={"min_runtime": 200, "max_runtime": 100}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(
+            "/api/engine/roulette/spin", params={"min_rating": 8, "max_rating": 3}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(
+            "/api/engine/roulette/spin", params={"genre_ids": [35], "genre_operator": "XOR"}
+        ).status_code
+        == 422
+    )
 
 
 def test_spin_on_a_cold_cache_is_a_helpful_404(client):

@@ -38,8 +38,7 @@ def test_build_paginated_url_detail_mode():
 
 
 def test_build_paginated_url_standard_mode():
-    url = letterboxd.build_paginated_url(
-        "https://letterboxd.com/alice/watchlist/", 3)
+    url = letterboxd.build_paginated_url("https://letterboxd.com/alice/watchlist/", 3)
     assert url == "https://letterboxd.com/alice/watchlist/page/3/"
 
 
@@ -50,10 +49,10 @@ def test_year_from_slug():
 
 
 def test_normalize_slug_strips_prefixes():
-    assert letterboxd.normalize_slug(
-        "https://letterboxd.com/film/parasite-2019/") == "parasite-2019"
-    assert letterboxd.normalize_slug(
-        "/film/parasite-2019/crew/") == "parasite-2019"
+    assert (
+        letterboxd.normalize_slug("https://letterboxd.com/film/parasite-2019/") == "parasite-2019"
+    )
+    assert letterboxd.normalize_slug("/film/parasite-2019/crew/") == "parasite-2019"
 
 
 def test_clean_title_str_strips_accents_and_quotes():
@@ -62,13 +61,16 @@ def test_clean_title_str_strips_accents_and_quotes():
 
 
 def test_derive_badge_prefix_uses_explicit_value():
-    assert letterboxd.derive_badge_prefix(
-        "https://letterboxd.com/any/list/anything/", "ss22") == "SS22"
+    assert (
+        letterboxd.derive_badge_prefix("https://letterboxd.com/any/list/anything/", "ss22")
+        == "SS22"
+    )
 
 
 def test_derive_badge_prefix_falls_back_to_slug():
     prefix = letterboxd.derive_badge_prefix(
-        "https://letterboxd.com/someone/list/top-100-greatest-films/")
+        "https://letterboxd.com/someone/list/top-100-greatest-films/"
+    )
     assert prefix  # non-empty
     assert prefix == prefix.upper()
 
@@ -131,8 +133,7 @@ def test_has_next_page_true_and_false():
     with_next = BeautifulSoup(
         '<div class="paginate-pages"><a class="next" href="/page/2/">Next</a></div>', "html.parser"
     )
-    without_next = BeautifulSoup(
-        "<div class='paginate-pages'></div>", "html.parser")
+    without_next = BeautifulSoup("<div class='paginate-pages'></div>", "html.parser")
     assert letterboxd.has_next_page(with_next) is True
     assert letterboxd.has_next_page(without_next) is False
 
@@ -172,8 +173,7 @@ def test_resolve_tmdb_multipass_matches_exact_year():
         [[{"id": 496243, "title": "Parasite", "release_date": "2019-05-30"}]]
     )
     tmdb_id = letterboxd.resolve_tmdb_multipass(
-        session, "Parasite", 2019, [
-            "Bong Joon-ho"], "fake-api-key", "parasite-2019"
+        session, "Parasite", 2019, ["Bong Joon-ho"], "fake-api-key", "parasite-2019"
     )
     assert tmdb_id["tmdb_id"] == 496243
 
@@ -181,8 +181,7 @@ def test_resolve_tmdb_multipass_matches_exact_year():
 def test_resolve_tmdb_multipass_falls_back_to_title_only():
     # Exact year, year-1, year+1 all empty; title-only pass (4th call) matches.
     session = _FakeTmdbSession(
-        [[], [], [], [{"id": 11, "title": "Star Wars",
-                       "release_date": "1977-05-25"}]]
+        [[], [], [], [{"id": 11, "title": "Star Wars", "release_date": "1977-05-25"}]]
     )
     tmdb_id = letterboxd.resolve_tmdb_multipass(
         session, "Star Wars", 1977, [], "fake-api-key", "star-wars-1977"
@@ -244,17 +243,21 @@ def test_scrape_letterboxd_list_end_to_end(tmp_path, monkeypatch):
     list_url = "https://letterboxd.com/official/list/top-250-documentary-films/"
     page_1_url = letterboxd.build_paginated_url(list_url, 1, detail_mode=True)
 
-    monkeypatch.setattr(letterboxd, "new_session",
-                        lambda: _FakeScrapeSession({page_1_url: DETAIL_HTML}))
+    monkeypatch.setattr(
+        letterboxd, "new_session", lambda: _FakeScrapeSession({page_1_url: DETAIL_HTML})
+    )
     monkeypatch.setattr(letterboxd, "cache_dir", lambda: tmp_path)
     monkeypatch.setattr(letterboxd, "checkpoint_dir", lambda: tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
 
     tmdb_ids_by_slug = {"parasite-2019": 496243, "stalker-1979": 10543}
     monkeypatch.setattr(
-        letterboxd, "resolve_tmdb_multipass",
+        letterboxd,
+        "resolve_tmdb_multipass",
         lambda client, title, year, directors, api_key, slug=None: {
-            "tmdb_id": tmdb_ids_by_slug.get(slug), "tmdb_type": "movie"},
+            "tmdb_id": tmdb_ids_by_slug.get(slug),
+            "tmdb_type": "movie",
+        },
     )
 
     progress_events = []
@@ -275,16 +278,19 @@ def test_scrape_letterboxd_list_end_to_end(tmp_path, monkeypatch):
 # Anti-bot session handling
 # ---------------------------------------------------------
 class _SeqResponse:
-    def __init__(self, text: str = "<html>Letterboxd</html>", status_code: int = 200,
-                 headers: dict[str, str] | None = None):
+    def __init__(
+        self,
+        text: str = "<html>Letterboxd</html>",
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ):
         self.text = text
         self.status_code = status_code
         self.headers = headers or {}
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise curl_requests.exceptions.HTTPError(
-                str(self.status_code), response=self)
+            raise curl_requests.exceptions.HTTPError(str(self.status_code), response=self)
 
 
 class _SeqSession:
@@ -320,13 +326,18 @@ def test_fetch_html_backs_off_on_429_then_succeeds(tmp_path, monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(time, "sleep", sleeps.append)
     events: list[dict] = []
-    session = _SeqSession({"https://letterboxd.com/x/": [
-        _SeqResponse(status_code=429, headers={"Retry-After": "7"}),
-        _SeqResponse("<html>Letterboxd ok</html>"),
-    ]})
+    session = _SeqSession(
+        {
+            "https://letterboxd.com/x/": [
+                _SeqResponse(status_code=429, headers={"Retry-After": "7"}),
+                _SeqResponse("<html>Letterboxd ok</html>"),
+            ]
+        }
+    )
 
     html = letterboxd.fetch_html(
-        session, "https://letterboxd.com/x/", progress_callback=events.append)
+        session, "https://letterboxd.com/x/", progress_callback=events.append
+    )
 
     assert "ok" in html
     assert any(s >= 8 for s in sleeps)  # Retry-After plus jitter
@@ -336,8 +347,13 @@ def test_fetch_html_backs_off_on_429_then_succeeds(tmp_path, monkeypatch):
 def test_fetch_html_raises_cloudflare_block(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
-    session = _SeqSession({"https://letterboxd.com/x/": _SeqResponse(
-        "<title>Just a moment...</title>", status_code=200)})
+    session = _SeqSession(
+        {
+            "https://letterboxd.com/x/": _SeqResponse(
+                "<title>Just a moment...</title>", status_code=200
+            )
+        }
+    )
 
     with pytest.raises(letterboxd.CloudflareBlock):
         letterboxd.fetch_html(session, "https://letterboxd.com/x/")
@@ -348,8 +364,10 @@ def test_fetch_html_ignores_poisoned_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda _s: None)
     url = "https://letterboxd.com/x/"
     import hashlib
+
     (tmp_path / f"{hashlib.md5(url.encode()).hexdigest()}.html").write_text(
-        "<title>Just a moment...</title> Letterboxd", encoding="utf-8")
+        "<title>Just a moment...</title> Letterboxd", encoding="utf-8"
+    )
     session = _SeqSession({url: _SeqResponse("<html>Letterboxd fresh</html>")})
 
     assert "fresh" in letterboxd.fetch_html(session, url)
@@ -372,8 +390,7 @@ def test_polite_delay_triggers_macro_break(monkeypatch):
 # Checkpointing / resume
 # ---------------------------------------------------------
 LIST_URL = "https://letterboxd.com/someone/list/my-list/"
-PAGE_1_HTML = DETAIL_HTML + \
-    '<div class="paginate-pages"><a class="next" href="/p2/">Next</a></div>'
+PAGE_1_HTML = DETAIL_HTML + '<div class="paginate-pages"><a class="next" href="/p2/">Next</a></div>'
 PAGE_2_HTML = """
 <ul><li class="film-detail">
   <div class="film-poster" data-film-slug="dune-2021"></div>
@@ -384,24 +401,32 @@ PAGE_2_HTML = """
 
 def _resolver_by_slug(ids: dict[str, int]):
     return lambda client, title, year, directors, api_key, slug=None: {
-        "tmdb_id": ids.get(slug), "tmdb_type": "movie", "original_language": "en"}
+        "tmdb_id": ids.get(slug),
+        "tmdb_type": "movie",
+        "original_language": "en",
+    }
 
 
 def test_scrape_resumes_from_checkpoint_after_cloudflare_block(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
-    monkeypatch.setattr(letterboxd, "resolve_tmdb_multipass",
-                        _resolver_by_slug({"parasite-2019": 1, "stalker-1979": 2, "dune-2021": 3}))
+    monkeypatch.setattr(
+        letterboxd,
+        "resolve_tmdb_multipass",
+        _resolver_by_slug({"parasite-2019": 1, "stalker-1979": 2, "dune-2021": 3}),
+    )
     p1 = letterboxd.build_paginated_url(LIST_URL, 1, detail_mode=True)
     p2 = letterboxd.build_paginated_url(LIST_URL, 2, detail_mode=True)
 
-    blocked = _SeqSession({p1: _SeqResponse(PAGE_1_HTML),
-                           p2: _SeqResponse("<title>Just a moment...</title>")})
+    blocked = _SeqSession(
+        {p1: _SeqResponse(PAGE_1_HTML), p2: _SeqResponse("<title>Just a moment...</title>")}
+    )
     monkeypatch.setattr(letterboxd, "new_session", lambda: blocked)
     events: list[dict] = []
     with pytest.raises(letterboxd.CloudflareBlock):
         letterboxd.scrape_letterboxd_list(
-            LIST_URL, tmdb_api_key="k", progress_callback=events.append)
+            LIST_URL, tmdb_api_key="k", progress_callback=events.append
+        )
     assert any(e["stage"] == "aborted" for e in events)
     assert len(list(tmp_path.glob("checkpoint_*.json"))) == 1
 
@@ -409,22 +434,24 @@ def test_scrape_resumes_from_checkpoint_after_cloudflare_block(tmp_path, monkeyp
     monkeypatch.setattr(letterboxd, "new_session", lambda: healthy)
     events.clear()
     result = letterboxd.scrape_letterboxd_list(
-        LIST_URL, tmdb_api_key="k", progress_callback=events.append)
+        LIST_URL, tmdb_api_key="k", progress_callback=events.append
+    )
 
     assert healthy.requested == [p2]  # page 1 is not re-fetched
-    assert [f["slug"] for f in result["films"]] == [
-        "parasite-2019", "stalker-1979", "dune-2021"]
+    assert [f["slug"] for f in result["films"]] == ["parasite-2019", "stalker-1979", "dune-2021"]
     assert [f["rank"] for f in result["films"]] == [1, 2, 3]
     assert any(e["stage"] == "resume" for e in events)
-    assert list(tmp_path.glob("checkpoint_*.json")
-                ) == []  # cleared on completion
+    assert list(tmp_path.glob("checkpoint_*.json")) == []  # cleared on completion
 
 
 def test_scrape_treats_404_on_later_page_as_end_of_list(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
-    monkeypatch.setattr(letterboxd, "resolve_tmdb_multipass",
-                        _resolver_by_slug({"parasite-2019": 1, "stalker-1979": 2}))
+    monkeypatch.setattr(
+        letterboxd,
+        "resolve_tmdb_multipass",
+        _resolver_by_slug({"parasite-2019": 1, "stalker-1979": 2}),
+    )
     p1 = letterboxd.build_paginated_url(LIST_URL, 1, detail_mode=True)
     session = _SeqSession({p1: _SeqResponse(PAGE_1_HTML)})  # page 2 -> 404
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
@@ -470,13 +497,19 @@ def test_resolve_tmdb_multipass_uses_directors_to_break_ties(monkeypatch):
             if "/credits" in url:
                 name = "Andrei Tarkovsky" if "/movie/1/" in url else "Steven Soderbergh"
                 return _FakeResponse(200, {"crew": [{"job": "Director", "name": name}]})
-            return _FakeResponse(200, {"results": [
-                {"id": 1, "title": "Solaris", "release_date": "1972-03-20"},
-                {"id": 2, "title": "Solaris", "release_date": "2002-11-27"},
-            ]})
+            return _FakeResponse(
+                200,
+                {
+                    "results": [
+                        {"id": 1, "title": "Solaris", "release_date": "1972-03-20"},
+                        {"id": 2, "title": "Solaris", "release_date": "2002-11-27"},
+                    ]
+                },
+            )
 
     match = letterboxd.resolve_tmdb_multipass(
-        Session(), "Solaris", None, ["Steven Soderbergh"], "k")
+        Session(), "Solaris", None, ["Steven Soderbergh"], "k"
+    )
 
     assert match is not None and match["tmdb_id"] == 2
 
@@ -488,11 +521,9 @@ def test_extract_deep_metadata_reads_tmdb_and_imdb_ids(tmp_path, monkeypatch):
         '<html><body data-tmdb-id="496243" data-tmdb-type="movie">Letterboxd'
         '<a href="https://www.imdb.com/title/tt6751668/maps">IMDb</a></body></html>'
     )
-    session = _SeqSession(
-        {"https://letterboxd.com/film/parasite-2019/": _SeqResponse(html)})
+    session = _SeqSession({"https://letterboxd.com/film/parasite-2019/": _SeqResponse(html)})
 
-    meta = letterboxd.extract_deep_metadata(
-        session, "parasite-2019", no_cache=True)
+    meta = letterboxd.extract_deep_metadata(session, "parasite-2019", no_cache=True)
 
     assert meta["tmdb_id"] == 496243
     assert meta["tmdb_type"] == "movie"
@@ -530,8 +561,7 @@ DIARY_HTML = """
 
 
 def test_parse_diary_entries_carries_month_state_and_flags_rewatches():
-    entries = letterboxd.parse_diary_entries(
-        BeautifulSoup(DIARY_HTML, "html.parser"))
+    entries = letterboxd.parse_diary_entries(BeautifulSoup(DIARY_HTML, "html.parser"))
 
     assert [e["slug"] for e in entries] == ["parasite-2019", "stalker-1979"]
     assert entries[0]["watched_at"] == "2024-05-03"
@@ -547,8 +577,13 @@ def test_scrape_user_diary_history_keeps_repeat_watches(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
     url = "https://letterboxd.com/alice/films/diary/"
-    session = _SeqSession({url: _SeqResponse(DIARY_HTML + DIARY_HTML.replace("3</a>", "9</a>")
-                                             .replace("/03/", "/09/"))})
+    session = _SeqSession(
+        {
+            url: _SeqResponse(
+                DIARY_HTML + DIARY_HTML.replace("3</a>", "9</a>").replace("/03/", "/09/")
+            )
+        }
+    )
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     result = letterboxd.scrape_user_diary_history("alice", mode="diary")
@@ -578,8 +613,7 @@ RSS_XML = """<?xml version="1.0" encoding="utf-8"?>
 
 
 def test_ingest_rss_diary_parses_entries(monkeypatch):
-    session = _SeqSession(
-        {"https://letterboxd.com/alice/rss/": _SeqResponse(RSS_XML)})
+    session = _SeqSession({"https://letterboxd.com/alice/rss/": _SeqResponse(RSS_XML)})
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     result = letterboxd.ingest_rss_diary("alice")
@@ -597,8 +631,7 @@ def test_ingest_rss_diary_parses_entries(monkeypatch):
 
 def test_ingest_rss_diary_rejects_entity_expansion(monkeypatch):
     bomb = '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><rss><channel/></rss>'
-    session = _SeqSession(
-        {"https://letterboxd.com/alice/rss/": _SeqResponse(bomb)})
+    session = _SeqSession({"https://letterboxd.com/alice/rss/": _SeqResponse(bomb)})
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     with pytest.raises(Exception, match="(?i)entit"):
@@ -667,8 +700,7 @@ def test_clean_username_rejects_path_injection():
 def test_discover_hq_accounts_parses_directory(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
-    session = _SeqSession(
-        {"https://letterboxd.com/members/hq/": _SeqResponse(HQ_DIRECTORY_HTML)})
+    session = _SeqSession({"https://letterboxd.com/members/hq/": _SeqResponse(HQ_DIRECTORY_HTML)})
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     result = letterboxd.discover_hq_accounts()
@@ -685,29 +717,32 @@ def test_discover_hq_accounts_following_filters_non_hq(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
     html = HQ_DIRECTORY_HTML.replace(
-        '<span class="badge -hq">HQ</span>\n    <p class="bio">', '<p class="bio">')
-    session = _SeqSession(
-        {"https://letterboxd.com/alice/following/": _SeqResponse(html)})
+        '<span class="badge -hq">HQ</span>\n    <p class="bio">', '<p class="bio">'
+    )
+    session = _SeqSession({"https://letterboxd.com/alice/following/": _SeqResponse(html)})
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     only_hq = letterboxd.discover_hq_accounts("alice")
-    everyone = letterboxd.discover_hq_accounts(
-        "alice", include_all=True, no_cache=True)
+    everyone = letterboxd.discover_hq_accounts("alice", include_all=True, no_cache=True)
 
     assert [a["username"] for a in only_hq["accounts"]] == ["bfi"]
-    assert [a["username"]
-            for a in everyone["accounts"]] == ["criterion", "bfi"]
+    assert [a["username"] for a in everyone["accounts"]] == ["criterion", "bfi"]
 
 
 def test_discover_hq_accounts_returns_partial_on_cloudflare_block(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
     page_1 = HQ_DIRECTORY_HTML.replace(
-        "</ul>", '</ul><div class="paginate-pages"><a class="next" href="/p2/">Next</a></div>')
-    session = _SeqSession({
-        "https://letterboxd.com/members/hq/": _SeqResponse(page_1),
-        "https://letterboxd.com/members/hq/page/2/": _SeqResponse("<title>Just a moment...</title>"),
-    })
+        "</ul>", '</ul><div class="paginate-pages"><a class="next" href="/p2/">Next</a></div>'
+    )
+    session = _SeqSession(
+        {
+            "https://letterboxd.com/members/hq/": _SeqResponse(page_1),
+            "https://letterboxd.com/members/hq/page/2/": _SeqResponse(
+                "<title>Just a moment...</title>"
+            ),
+        }
+    )
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     result = letterboxd.discover_hq_accounts()
@@ -720,8 +755,7 @@ def test_discover_hq_accounts_returns_partial_on_cloudflare_block(tmp_path, monk
 def test_inspect_account_reads_profile(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
-    session = _SeqSession(
-        {"https://letterboxd.com/criterion/": _SeqResponse(PROFILE_HTML)})
+    session = _SeqSession({"https://letterboxd.com/criterion/": _SeqResponse(PROFILE_HTML)})
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     profile = letterboxd.inspect_account("criterion")
@@ -736,8 +770,7 @@ def test_inspect_account_reads_profile(tmp_path, monkeypatch):
 def test_discover_user_lists_parses_cards(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
-    session = _SeqSession(
-        {"https://letterboxd.com/criterion/lists/": _SeqResponse(LISTS_HTML)})
+    session = _SeqSession({"https://letterboxd.com/criterion/lists/": _SeqResponse(LISTS_HTML)})
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     result = letterboxd.discover_user_lists("criterion")
@@ -749,7 +782,9 @@ def test_discover_user_lists_parses_cards(tmp_path, monkeypatch):
     assert first["total_films"] == 1234
     assert first["description"] == "Every spine number."
     assert first["preview_posters"] == [
-        "https://letterboxd.com/posters/1.jpg", "https://letterboxd.com/posters/2.jpg"]
+        "https://letterboxd.com/posters/1.jpg",
+        "https://letterboxd.com/posters/2.jpg",
+    ]
     assert first["preview_slugs"] == ["seven-samurai-1954", "stalker-1979"]
     assert second["total_films"] == 12
     assert result["partial"] is False
@@ -761,22 +796,29 @@ def test_discover_user_lists_parses_cards(tmp_path, monkeypatch):
 def test_watchlist_scrape_uses_the_plain_grid_url_not_detail(tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(time, "sleep", lambda _s: None)
-    monkeypatch.setattr(letterboxd, "resolve_tmdb_multipass",
-                        _resolver_by_slug({"dune-2021": 1, "amelie-2001": 2}))
-    grid = _SeqResponse(GRID_HTML + '<div class="paginate-pages"><a class="next" href="/p2/">Next</a></div>')
-    session = _SeqSession({
-        "https://letterboxd.com/rsrax/watchlist/": grid,
-        "https://letterboxd.com/rsrax/watchlist/page/2/": _SeqResponse(GRID_HTML),
-        # what Letterboxd really serves for the old (broken) URL shape
-        "https://letterboxd.com/rsrax/watchlist/detail/": _SeqResponse(status_code=404),
-    })
+    monkeypatch.setattr(
+        letterboxd, "resolve_tmdb_multipass", _resolver_by_slug({"dune-2021": 1, "amelie-2001": 2})
+    )
+    grid = _SeqResponse(
+        GRID_HTML + '<div class="paginate-pages"><a class="next" href="/p2/">Next</a></div>'
+    )
+    session = _SeqSession(
+        {
+            "https://letterboxd.com/rsrax/watchlist/": grid,
+            "https://letterboxd.com/rsrax/watchlist/page/2/": _SeqResponse(GRID_HTML),
+            # what Letterboxd really serves for the old (broken) URL shape
+            "https://letterboxd.com/rsrax/watchlist/detail/": _SeqResponse(status_code=404),
+        }
+    )
     monkeypatch.setattr(letterboxd, "new_session", lambda: session)
 
     result = letterboxd.scrape_letterboxd_watchlist("/rsrax/", tmdb_api_key="k")
 
     assert result["total_films"] == 2
     assert session.requested == [
-        "https://letterboxd.com/rsrax/watchlist/", "https://letterboxd.com/rsrax/watchlist/page/2/"]
+        "https://letterboxd.com/rsrax/watchlist/",
+        "https://letterboxd.com/rsrax/watchlist/page/2/",
+    ]
 
 
 def test_watchlist_404_on_the_first_page_is_reported_as_not_found(tmp_path, monkeypatch):
@@ -789,8 +831,10 @@ def test_watchlist_404_on_the_first_page_is_reported_as_not_found(tmp_path, monk
 
 
 def test_build_paginated_url_collapses_double_slashes():
-    assert letterboxd.build_paginated_url(
-        "https://letterboxd.com//rsrax///watchlist", 2) == "https://letterboxd.com/rsrax/watchlist/page/2/"
+    assert (
+        letterboxd.build_paginated_url("https://letterboxd.com//rsrax///watchlist", 2)
+        == "https://letterboxd.com/rsrax/watchlist/page/2/"
+    )
 
 
 def test_sessions_follow_redirects():
@@ -828,7 +872,9 @@ def test_parse_list_card_takes_the_title_from_the_headline_not_the_poster_overla
 
 
 def test_parse_list_card_falls_back_to_a_readable_title():
-    html = ('<article><a class="poster-list-link" href="/x/list/best-of-2020/">'
-            '<img src="p.jpg"></a></article>')
+    html = (
+        '<article><a class="poster-list-link" href="/x/list/best-of-2020/">'
+        '<img src="p.jpg"></a></article>'
+    )
     entry = letterboxd._parse_list_card(BeautifulSoup(html, "html.parser").select_one("article"))
     assert entry["title"] == "Best Of 2020"

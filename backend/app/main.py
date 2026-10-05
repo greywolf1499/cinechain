@@ -63,8 +63,7 @@ async def lifespan(app: FastAPI):
         yield
 
 
-app = FastAPI(title="CineChain",
-              default_response_class=JSONResponse, lifespan=lifespan)
+app = FastAPI(title="CineChain", default_response_class=JSONResponse, lifespan=lifespan)
 
 api_router_prefix = "/api"
 app.include_router(system_router, prefix=api_router_prefix)

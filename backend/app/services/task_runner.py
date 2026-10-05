@@ -120,8 +120,9 @@ def submit_task(
     """
     if dedupe_key is not None:
         existing = session.exec(
-            select(SystemTask)
-            .where(SystemTask.dedupe_key == dedupe_key, col(SystemTask.status).in_(ACTIVE_STATUSES))
+            select(SystemTask).where(
+                SystemTask.dedupe_key == dedupe_key, col(SystemTask.status).in_(ACTIVE_STATUSES)
+            )
         ).first()
         if existing is not None:
             return existing, False

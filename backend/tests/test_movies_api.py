@@ -35,11 +35,9 @@ def client(config_dir):
 def _register_and_login(client, username="alice"):
     client.post(
         "/api/auth/register",
-        json={"username": username, "password": "password123",
-              "display_name": username.title()},
+        json={"username": username, "password": "password123", "display_name": username.title()},
     )
-    client.post("/api/auth/login",
-                json={"username": username, "password": "password123"})
+    client.post("/api/auth/login", json={"username": username, "password": "password123"})
 
 
 def test_search_movies(client):
@@ -198,8 +196,7 @@ def test_list_genres(client):
         respx.get(f"{TMDB_BASE}/genre/movie/list").mock(
             return_value=httpx.Response(
                 200,
-                json={"genres": [{"id": 28, "name": "Action"},
-                                 {"id": 18, "name": "Drama"}]},
+                json={"genres": [{"id": 28, "name": "Action"}, {"id": 18, "name": "Drama"}]},
             )
         )
         resp = client.get("/api/movies/genres")
@@ -224,9 +221,15 @@ def test_movie_ratings_null_when_omdb_not_configured(client):
             return_value=httpx.Response(
                 200,
                 json={
-                    "id": 603, "title": "The Matrix", "release_date": "1999-03-30",
-                    "poster_path": None, "overview": "", "origin_country": ["US"],
-                    "original_language": "en", "runtime": 136, "genres": [],
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 136,
+                    "genres": [],
                 },
             )
         )
@@ -238,17 +241,22 @@ def test_movie_ratings_null_when_omdb_not_configured(client):
 
 def test_movie_ratings_bulk_endpoint(client):
     _register_and_login(client)
-    client.patch("/api/settings/integrations",
-                 json={"omdb_api_key": "test-key"})
+    client.patch("/api/settings/integrations", json={"omdb_api_key": "test-key"})
 
     with respx.mock:
         respx.get(f"{TMDB_BASE}/movie/603").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "id": 603, "title": "The Matrix", "release_date": "1999-03-30",
-                    "poster_path": None, "overview": "", "origin_country": ["US"],
-                    "original_language": "en", "runtime": 136, "genres": [],
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 136,
+                    "genres": [],
                 },
             )
         )
@@ -256,18 +264,22 @@ def test_movie_ratings_bulk_endpoint(client):
             return_value=httpx.Response(
                 200,
                 json={
-                    "id": 604, "title": "Some Other Film", "release_date": "2001-01-01",
-                    "poster_path": None, "overview": "", "origin_country": ["US"],
-                    "original_language": "en", "runtime": 100, "genres": [],
+                    "id": 604,
+                    "title": "Some Other Film",
+                    "release_date": "2001-01-01",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 100,
+                    "genres": [],
                 },
             )
         )
         respx.get("https://www.omdbapi.com/").mock(
-            return_value=httpx.Response(
-                200, json={"Response": "True", "imdbRating": "8.7"})
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.7"})
         )
-        resp = client.post("/api/movies/ratings/bulk",
-                           json={"tmdb_ids": [603, 604]})
+        resp = client.post("/api/movies/ratings/bulk", json={"tmdb_ids": [603, 604]})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -287,8 +299,13 @@ def test_get_movie_hydrates_stub_overview_and_supports_refresh(client):
         route = respx.get(f"{TMDB_BASE}/movie/603").mock(
             return_value=httpx.Response(
                 200,
-                json={"id": 603, "title": "The Matrix", "overview": "A hacker learns the truth.",
-                      "runtime": 136, "genres": []},
+                json={
+                    "id": 603,
+                    "title": "The Matrix",
+                    "overview": "A hacker learns the truth.",
+                    "runtime": 136,
+                    "genres": [],
+                },
             )
         )
         first = client.get("/api/movies/603")

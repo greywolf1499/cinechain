@@ -43,7 +43,9 @@ class SplitPool(BaseModel):
 
 @router.get("/{run_id}/split-pool", response_model=SplitPool)
 async def get_split_pool(
-    scan: int = Query(default=0, ge=0, le=MAX_SCAN, description="Rate up to N more cached films first"),
+    scan: int = Query(
+        default=0, ge=0, le=MAX_SCAN, description="Rate up to N more cached films first"
+    ),
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
@@ -54,7 +56,8 @@ async def get_split_pool(
     yet (OMDb has no bulk lookup, so the pool grows a little at a time)."""
     if run.game_type != RT_SPLIT:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="This isn't a Rotten Tomatoes Split run")
+            status_code=status.HTTP_400_BAD_REQUEST, detail="This isn't a Rotten Tomatoes Split run"
+        )
     scanned = 0
     if scan and omdb.enabled:
         rated = select(CachedMovieRating.movie_id)
@@ -62,7 +65,8 @@ async def get_split_pool(
             select(CachedMovie.tmdb_id)
             .where(col(CachedMovie.tmdb_id).not_in(rated))
             .order_by(col(CachedMovie.popularity).desc())
-            .limit(scan)).all()
+            .limit(scan)
+        ).all()
         deadline = time.monotonic() + SCAN_DEADLINE_SECONDS
         for movie_id in unrated:
             if time.monotonic() >= deadline:
@@ -73,13 +77,20 @@ async def get_split_pool(
     watched = set(session.exec(select(RunStep.movie_id).where(RunStep.run_id == run.id)).all())
     engine = RottenTomatoesSplitEngine(session, tmdb)
     return SplitPool(
-        omdb_enabled=omdb.enabled, min_divergence=MIN_DIVERGENCE, scanned=scanned,
+        omdb_enabled=omdb.enabled,
+        min_divergence=MIN_DIVERGENCE,
+        scanned=scanned,
         candidates=[
             SplitCandidate(
-                movie_id=movie.tmdb_id, title=movie.title,
-                year=parse_release_year(movie.release_date), poster_path=movie.poster_path,
-                critic_score=scores.critic, audience_score=scores.audience,
+                movie_id=movie.tmdb_id,
+                title=movie.title,
+                year=parse_release_year(movie.release_date),
+                poster_path=movie.poster_path,
+                critic_score=scores.critic,
+                audience_score=scores.audience,
                 divergence=scores.divergence,
-                favours="critics" if scores.critic > scores.audience else "audience")
+                favours="critics" if scores.critic > scores.audience else "audience",
+            )
             for movie, scores in engine.split_pool(exclude_ids=watched, limit=POOL_SIZE)
-        ])
+        ],
+    )

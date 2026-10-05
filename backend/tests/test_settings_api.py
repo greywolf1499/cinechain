@@ -40,11 +40,9 @@ def client(config_dir):
 def _register_and_login(client, username="alice"):
     client.post(
         "/api/auth/register",
-        json={"username": username, "password": "password123",
-              "display_name": username.title()},
+        json={"username": username, "password": "password123", "display_name": username.title()},
     )
-    client.post("/api/auth/login",
-                json={"username": username, "password": "password123"})
+    client.post("/api/auth/login", json={"username": username, "password": "password123"})
 
 
 def test_non_admin_is_forbidden_from_all_settings_routes(client):
@@ -53,14 +51,14 @@ def test_non_admin_is_forbidden_from_all_settings_routes(client):
         "/api/auth/register",
         json={"username": "bob", "password": "password123", "display_name": "Bob"},
     )
-    client.post("/api/auth/login",
-                json={"username": "bob", "password": "password123"})
+    client.post("/api/auth/login", json={"username": "bob", "password": "password123"})
 
     assert client.get("/api/settings/integrations").status_code == 403
-    assert client.patch("/api/settings/integrations",
-                        json={"tmdb_api_key": "x"}).status_code == 403
-    assert client.post("/api/settings/integrations/test-tmdb",
-                       json={"tmdb_api_key": "x"}).status_code == 403
+    assert client.patch("/api/settings/integrations", json={"tmdb_api_key": "x"}).status_code == 403
+    assert (
+        client.post("/api/settings/integrations/test-tmdb", json={"tmdb_api_key": "x"}).status_code
+        == 403
+    )
 
 
 def test_admin_get_reflects_no_overrides_by_default(client):
@@ -78,8 +76,11 @@ def test_admin_patch_sets_and_masks_override(client):
     _register_and_login(client)
     resp = client.patch(
         "/api/settings/integrations",
-        json={"tmdb_api_key": "abcdefgh1234", "jellyfin_url": "http://jf.local",
-              "jellyfin_api_key": "supersecretwxyz"},
+        json={
+            "tmdb_api_key": "abcdefgh1234",
+            "jellyfin_url": "http://jf.local",
+            "jellyfin_api_key": "supersecretwxyz",
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -96,10 +97,8 @@ def test_admin_patch_sets_and_masks_override(client):
 
 def test_admin_patch_empty_string_clears_override(client):
     _register_and_login(client)
-    client.patch("/api/settings/integrations",
-                 json={"tmdb_api_key": "abcdefgh1234"})
-    resp = client.patch("/api/settings/integrations",
-                        json={"tmdb_api_key": ""})
+    client.patch("/api/settings/integrations", json={"tmdb_api_key": "abcdefgh1234"})
+    resp = client.patch("/api/settings/integrations", json={"tmdb_api_key": ""})
     assert resp.status_code == 200
     body = resp.json()
     assert body["tmdb_configured"] is False
@@ -112,8 +111,9 @@ async def test_test_tmdb_endpoint_success(client):
         respx.get(f"{TMDB_BASE}/authentication").mock(
             return_value=httpx.Response(200, json={"success": True})
         )
-        resp = client.post("/api/settings/integrations/test-tmdb",
-                           json={"tmdb_api_key": "good-token"})
+        resp = client.post(
+            "/api/settings/integrations/test-tmdb", json={"tmdb_api_key": "good-token"}
+        )
     assert resp.status_code == 200
     assert resp.json() == {"reachable": True, "version": None, "detail": None}
 
@@ -123,10 +123,12 @@ async def test_test_tmdb_endpoint_failure(client):
     with respx.mock:
         respx.get(f"{TMDB_BASE}/authentication").mock(
             return_value=httpx.Response(
-                401, json={"success": False, "status_message": "Invalid API key"})
+                401, json={"success": False, "status_message": "Invalid API key"}
+            )
         )
-        resp = client.post("/api/settings/integrations/test-tmdb",
-                           json={"tmdb_api_key": "bad-token"})
+        resp = client.post(
+            "/api/settings/integrations/test-tmdb", json={"tmdb_api_key": "bad-token"}
+        )
     assert resp.status_code == 200
     body = resp.json()
     assert body["reachable"] is False
@@ -144,8 +146,7 @@ async def test_test_jellyfin_endpoint_success(client):
             json={"jellyfin_url": JELLYFIN_BASE, "jellyfin_api_key": "token"},
         )
     assert resp.status_code == 200
-    assert resp.json() == {"reachable": True,
-                           "version": "10.9.0", "detail": None}
+    assert resp.json() == {"reachable": True, "version": "10.9.0", "detail": None}
 
 
 async def test_test_jellyfin_endpoint_unreachable(client):
@@ -165,13 +166,11 @@ async def test_test_jellyfin_endpoint_unreachable(client):
 async def test_saved_tmdb_override_is_used_on_the_next_request(client):
     """End-to-end proof of the deps.py wiring: PATCH now, next request uses it."""
     _register_and_login(client)
-    client.patch("/api/settings/integrations",
-                 json={"tmdb_api_key": "brand-new-token"})
+    client.patch("/api/settings/integrations", json={"tmdb_api_key": "brand-new-token"})
 
     with respx.mock:
         route = respx.get(f"{TMDB_BASE}/search/movie").mock(
-            return_value=httpx.Response(
-                200, json={"results": [], "total_results": 0})
+            return_value=httpx.Response(200, json={"results": [], "total_results": 0})
         )
         resp = client.get("/api/movies/search?q=matrix")
 
@@ -181,8 +180,7 @@ async def test_saved_tmdb_override_is_used_on_the_next_request(client):
 
 def test_admin_patch_sets_and_masks_omdb_override(client):
     _register_and_login(client)
-    resp = client.patch("/api/settings/integrations",
-                        json={"omdb_api_key": "abcdefgh1234"})
+    resp = client.patch("/api/settings/integrations", json={"omdb_api_key": "abcdefgh1234"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["omdb_configured"] is True
@@ -193,11 +191,11 @@ async def test_test_omdb_endpoint_success(client):
     _register_and_login(client)
     with respx.mock:
         respx.get(OMDB_BASE).mock(
-            return_value=httpx.Response(
-                200, json={"Response": "True", "imdbRating": "8.8"})
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.8"})
         )
-        resp = client.post("/api/settings/integrations/test-omdb",
-                           json={"omdb_api_key": "good-key"})
+        resp = client.post(
+            "/api/settings/integrations/test-omdb", json={"omdb_api_key": "good-key"}
+        )
     assert resp.status_code == 200
     assert resp.json() == {"reachable": True, "version": None, "detail": None}
 
@@ -207,10 +205,10 @@ async def test_test_omdb_endpoint_failure(client):
     with respx.mock:
         respx.get(OMDB_BASE).mock(
             return_value=httpx.Response(
-                200, json={"Response": "False", "Error": "Invalid API key!"})
+                200, json={"Response": "False", "Error": "Invalid API key!"}
+            )
         )
-        resp = client.post("/api/settings/integrations/test-omdb",
-                           json={"omdb_api_key": "bad-key"})
+        resp = client.post("/api/settings/integrations/test-omdb", json={"omdb_api_key": "bad-key"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["reachable"] is False
@@ -221,23 +219,27 @@ async def test_saved_omdb_override_is_used_by_ratings_lookup(client):
     """End-to-end proof the OMDb override flows through get_omdb_client into
     an actual movie-detail ratings fetch, not just persisted to the DB."""
     _register_and_login(client)
-    client.patch("/api/settings/integrations",
-                 json={"omdb_api_key": "brand-new-omdb-key"})
+    client.patch("/api/settings/integrations", json={"omdb_api_key": "brand-new-omdb-key"})
 
     with respx.mock:
         respx.get(f"{TMDB_BASE}/movie/603").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "id": 603, "title": "The Matrix", "release_date": "1999-03-30",
-                    "poster_path": None, "overview": "", "origin_country": ["US"],
-                    "original_language": "en", "runtime": 136, "genres": [],
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 136,
+                    "genres": [],
                 },
             )
         )
         omdb_route = respx.get(OMDB_BASE).mock(
-            return_value=httpx.Response(
-                200, json={"Response": "True", "imdbRating": "8.7"})
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.7"})
         )
         resp = client.get("/api/movies/603")
 
@@ -252,39 +254,40 @@ def test_solver_settings_requires_admin(client):
         "/api/auth/register",
         json={"username": "bob", "password": "password123", "display_name": "Bob"},
     )
-    client.post("/api/auth/login",
-                json={"username": "bob", "password": "password123"})
+    client.post("/api/auth/login", json={"username": "bob", "password": "password123"})
 
     assert client.get("/api/settings/solver").status_code == 403
-    assert client.patch("/api/settings/solver",
-                        json={"bridge_max_duration_seconds": 60}).status_code == 403
+    assert (
+        client.patch("/api/settings/solver", json={"bridge_max_duration_seconds": 60}).status_code
+        == 403
+    )
 
 
 def test_solver_settings_default_and_update(client):
     _register_and_login(client)
-    assert client.get("/api/settings/solver").json() == {
-        "bridge_max_duration_seconds": 45}
+    assert client.get("/api/settings/solver").json() == {"bridge_max_duration_seconds": 45}
 
-    resp = client.patch("/api/settings/solver",
-                        json={"bridge_max_duration_seconds": 90})
+    resp = client.patch("/api/settings/solver", json={"bridge_max_duration_seconds": 90})
     assert resp.status_code == 200
     assert resp.json()["bridge_max_duration_seconds"] == 90
 
     # Persisted - a fresh GET reflects the saved override.
-    assert client.get("/api/settings/solver").json()[
-        "bridge_max_duration_seconds"] == 90
+    assert client.get("/api/settings/solver").json()["bridge_max_duration_seconds"] == 90
 
 
 def test_solver_settings_rejects_out_of_range_values(client):
     _register_and_login(client)
-    resp = client.patch("/api/settings/solver",
-                        json={"bridge_max_duration_seconds": 1})
+    resp = client.patch("/api/settings/solver", json={"bridge_max_duration_seconds": 1})
     assert resp.status_code == 422
 
 
 def test_solver_timeout_allows_up_to_600_seconds(client):
     _register_and_login(client)
-    assert client.patch("/api/settings/solver",
-                        json={"bridge_max_duration_seconds": 600}).status_code == 200
-    assert client.patch("/api/settings/solver",
-                        json={"bridge_max_duration_seconds": 601}).status_code == 422
+    assert (
+        client.patch("/api/settings/solver", json={"bridge_max_duration_seconds": 600}).status_code
+        == 200
+    )
+    assert (
+        client.patch("/api/settings/solver", json={"bridge_max_duration_seconds": 601}).status_code
+        == 422
+    )

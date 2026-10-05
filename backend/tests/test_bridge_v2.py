@@ -38,49 +38,74 @@ def client(db_engine):
             "/api/auth/register",
             json={"username": "alice", "password": "password123", "display_name": "Alice"},
         )
-        test_client.post(
-            "/api/auth/login", json={"username": "alice", "password": "password123"})
+        test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
 
 
-def _movie_json(tmdb_id: int, title: str, runtime: int = 100, countries=("US",),
-                release_date: str = "2000-01-01"):
+def _movie_json(
+    tmdb_id: int,
+    title: str,
+    runtime: int = 100,
+    countries=("US",),
+    release_date: str = "2000-01-01",
+):
     return {
-        "id": tmdb_id, "title": title, "release_date": release_date, "poster_path": None,
-        "overview": "", "origin_country": list(countries), "original_language": "en",
-        "runtime": runtime, "genres": [],
+        "id": tmdb_id,
+        "title": title,
+        "release_date": release_date,
+        "poster_path": None,
+        "overview": "",
+        "origin_country": list(countries),
+        "original_language": "en",
+        "runtime": runtime,
+        "genres": [],
     }
 
 
 def _mock_movie(tmdb_id: int, title: str, cast: list[dict] | None = None, **kwargs):
     respx.get(f"{TMDB_BASE}/movie/{tmdb_id}").mock(
-        return_value=httpx.Response(200, json=_movie_json(tmdb_id, title, **kwargs)))
+        return_value=httpx.Response(200, json=_movie_json(tmdb_id, title, **kwargs))
+    )
     if cast is not None:
         respx.get(f"{TMDB_BASE}/movie/{tmdb_id}/credits").mock(
-            return_value=httpx.Response(200, json={"id": tmdb_id, "cast": cast}))
+            return_value=httpx.Response(200, json={"id": tmdb_id, "cast": cast})
+        )
 
 
 def _cast(actor_id: int, name: str, order: int = 0):
-    return {"id": actor_id, "name": name, "profile_path": None, "character": f"{name} role", "order": order}
+    return {
+        "id": actor_id,
+        "name": name,
+        "profile_path": None,
+        "character": f"{name} role",
+        "order": order,
+    }
 
 
 def _credit(movie_id: int, title: str, popularity: float = 1.0, release_date: str = "2000-01-01"):
     return {
-        "id": movie_id, "title": title, "release_date": release_date, "poster_path": None,
-        "character": f"Role in {title}", "genre_ids": [], "original_language": "en",
+        "id": movie_id,
+        "title": title,
+        "release_date": release_date,
+        "poster_path": None,
+        "character": f"Role in {title}",
+        "genre_ids": [],
+        "original_language": "en",
         "popularity": popularity,
     }
 
 
 def _mock_person(actor_id: int, credits_: list[dict]):
     return respx.get(f"{TMDB_BASE}/person/{actor_id}/movie_credits").mock(
-        return_value=httpx.Response(200, json={"id": actor_id, "cast": credits_}))
+        return_value=httpx.Response(200, json={"id": actor_id, "cast": credits_})
+    )
 
 
 def _node(movie_id: int, runtime=None, countries=()):
-    return BridgeNode(movie_id=movie_id, title=str(movie_id), runtime=runtime,
-                      origin_countries=list(countries))
+    return BridgeNode(
+        movie_id=movie_id, title=str(movie_id), runtime=runtime, origin_countries=list(countries)
+    )
 
 
 # --- tags ---
@@ -119,7 +144,9 @@ def test_epic_runtimes_needs_two_films_over_150_minutes(db_engine):
         one_epic = [_node(1, runtime=200), _node(2, runtime=150), _node(3, runtime=90)]
         assert bridge_paths.analyze_path_tags(session, one_epic) == []
         two_epics = [_node(1, runtime=200), _node(2, runtime=151), _node(3, runtime=None)]
-        assert [t.key for t in bridge_paths.analyze_path_tags(session, two_epics)] == ["epic_runtimes"]
+        assert [t.key for t in bridge_paths.analyze_path_tags(session, two_epics)] == [
+            "epic_runtimes"
+        ]
 
 
 async def test_solved_result_carries_tags(config_dir, db_engine):
@@ -127,8 +154,12 @@ async def test_solved_result_carries_tags(config_dir, db_engine):
         _mock_movie(1, "Epic A", [_cast(100, "Shared")], runtime=190, countries=("US",))
         _mock_movie(2, "Epic B", [_cast(100, "Shared")], runtime=170, countries=("FR",))
         async with httpx.AsyncClient() as http:
-            events = [e async for e in pathfinder.solve_bridge_bipartite(
-                session, TMDBClient(http), 1, 2, max_depth=3)]
+            events = [
+                e
+                async for e in pathfinder.solve_bridge_bipartite(
+                    session, TMDBClient(http), 1, 2, max_depth=3
+                )
+            ]
 
     result = next(e for e in events if e["type"] == "result")
     assert [t.key for t in result["tags"]] == ["epic_runtimes"]
@@ -173,16 +204,37 @@ def test_tags_endpoint_hydrates_and_analyzes(client, db_engine):
 
 def _mock_swap_universe():
     # Actors X=100, Y=200. B=2 is the current node; 4 and 5 star both actors.
-    _mock_person(100, [_credit(1, "A"), _credit(2, "B"), _credit(4, "Alt Four", popularity=5.0),
-                       _credit(5, "Alt Five", popularity=50.0), _credit(6, "Only X"),
-                       _credit(8, "Unreleased", release_date="2999-01-01")])
-    return _mock_person(200, [_credit(2, "B"), _credit(3, "C"), _credit(4, "Alt Four", popularity=5.0),
-                              _credit(5, "Alt Five", popularity=50.0), _credit(7, "Only Y"),
-                              _credit(8, "Unreleased", release_date="2999-01-01")])
+    _mock_person(
+        100,
+        [
+            _credit(1, "A"),
+            _credit(2, "B"),
+            _credit(4, "Alt Four", popularity=5.0),
+            _credit(5, "Alt Five", popularity=50.0),
+            _credit(6, "Only X"),
+            _credit(8, "Unreleased", release_date="2999-01-01"),
+        ],
+    )
+    return _mock_person(
+        200,
+        [
+            _credit(2, "B"),
+            _credit(3, "C"),
+            _credit(4, "Alt Four", popularity=5.0),
+            _credit(5, "Alt Five", popularity=50.0),
+            _credit(7, "Only Y"),
+            _credit(8, "Unreleased", release_date="2999-01-01"),
+        ],
+    )
 
 
-SWAP_PARAMS = {"movie_id": 2, "from_movie_id": 1, "to_movie_id": 3,
-               "actor_in_id": 100, "actor_out_id": 200}
+SWAP_PARAMS = {
+    "movie_id": 2,
+    "from_movie_id": 1,
+    "to_movie_id": 3,
+    "actor_in_id": 100,
+    "actor_out_id": 200,
+}
 
 
 def test_same_actor_swap_returns_the_filmography_intersection(client):
@@ -208,7 +260,8 @@ def test_swap_skips_films_already_on_the_path_and_uses_the_cache(client):
         client.get("/api/engine/bridge/swap-node", params=SWAP_PARAMS)
         calls_after_first = x_route.call_count
         resp = client.get(
-            "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "exclude_movie_ids": "5"})
+            "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "exclude_movie_ids": "5"}
+        )
 
     assert [c["node"]["movie_id"] for c in resp.json()["candidates"]] == [4]
     assert x_route.call_count == calls_after_first  # second call was pure SQLite
@@ -247,15 +300,21 @@ def _mock_deeper_universe():
 
 async def _solve(session, **kwargs):
     async with httpx.AsyncClient() as http:
-        return [e async for e in pathfinder.solve_bridge_bipartite(
-            session, TMDBClient(http), 1, 3, **kwargs)]
+        return [
+            e
+            async for e in pathfinder.solve_bridge_bipartite(
+                session, TMDBClient(http), 1, 3, **kwargs
+            )
+        ]
 
 
 async def test_search_deeper_skips_the_shallow_route(config_dir, db_engine):
     with Session(db_engine) as session, respx.mock:
         _mock_deeper_universe()
         shallow = next(e for e in await _solve(session, max_depth=3) if e["type"] == "result")
-        deeper = next(e for e in await _solve(session, max_depth=3, min_hops=2) if e["type"] == "result")
+        deeper = next(
+            e for e in await _solve(session, max_depth=3, min_hops=2) if e["type"] == "result"
+        )
 
     assert shallow["hops"] == 1
     assert deeper["hops"] == 2
@@ -290,8 +349,9 @@ async def test_search_deeper_still_honours_the_solver_timeout(config_dir, db_eng
 
 
 def test_stream_validates_min_hops(client):
-    resp = client.get("/api/engine/bridge/stream",
-                      params={"from_movie_id": 1, "to_movie_id": 3, "min_hops": 99})
+    resp = client.get(
+        "/api/engine/bridge/stream", params={"from_movie_id": 1, "to_movie_id": 3, "min_hops": 99}
+    )
     assert resp.status_code == 422
 
 
@@ -314,8 +374,12 @@ def _mock_corridors_universe():
 
 async def _solve_corridors(session, **kwargs):
     async with httpx.AsyncClient() as http:
-        return [e async for e in pathfinder.solve_bridge_bipartite(
-            session, TMDBClient(http), 1, 4, **kwargs)]
+        return [
+            e
+            async for e in pathfinder.solve_bridge_bipartite(
+                session, TMDBClient(http), 1, 4, **kwargs
+            )
+        ]
 
 
 def test_prefer_disjoint_paths_puts_distinct_corridors_first():
@@ -335,7 +399,9 @@ async def test_alternative_routes_are_distinct_corridors(config_dir, db_engine):
     result = next(e for e in events if e["type"] == "result")
     corridors = [[n.movie_id for n in p["path"]] for p in [result, *result["alternate_paths"]]]
     assert [1, 2, 4] in corridors and [1, 3, 4] in corridors
-    assert corridors[1][1] != corridors[0][1]  # the first alternative avoids the primary's middle film
+    assert (
+        corridors[1][1] != corridors[0][1]
+    )  # the first alternative avoids the primary's middle film
 
 
 async def test_excluding_the_intermediates_forces_a_different_corridor(config_dir, db_engine):
@@ -360,8 +426,10 @@ async def test_excluding_every_corridor_is_exhausted(config_dir, db_engine):
 def _stream_result(client, **params):
     import json
 
-    resp = client.get("/api/engine/bridge/stream", params={
-        "from_movie_id": 1, "to_movie_id": 4, "max_depth": 4, **params})
+    resp = client.get(
+        "/api/engine/bridge/stream",
+        params={"from_movie_id": 1, "to_movie_id": 4, "max_depth": 4, **params},
+    )
     assert resp.status_code == 200
     for block in resp.text.split("\n\n"):
         if block.startswith("event: result"):
@@ -384,8 +452,10 @@ def test_stream_never_excludes_the_endpoints(client):
 
 
 def test_stream_rejects_an_oversized_exclusion_list(client):
-    resp = client.get("/api/engine/bridge/stream", params={
-        "from_movie_id": 1, "to_movie_id": 4, "exclude_movie_ids": list(range(500))})
+    resp = client.get(
+        "/api/engine/bridge/stream",
+        params={"from_movie_id": 1, "to_movie_id": 4, "exclude_movie_ids": list(range(500))},
+    )
     assert resp.status_code == 422
 
 
@@ -396,20 +466,38 @@ def _mock_broad_universe():
     # A=1 stars X=100 and P=300; C=3 stars Y=200 and Q=400; B=2 is the current node (X, Y).
     _mock_movie(1, "A", cast=[_cast(100, "X", 0), _cast(300, "P", 1)])
     _mock_movie(3, "C", cast=[_cast(200, "Y", 0), _cast(400, "Q", 1)])
-    _mock_person(100, [_credit(1, "A"), _credit(2, "B"), _credit(4, "Same Cast", popularity=9.0),
-                       _credit(7, "X And Q", popularity=3.0)])
+    _mock_person(
+        100,
+        [
+            _credit(1, "A"),
+            _credit(2, "B"),
+            _credit(4, "Same Cast", popularity=9.0),
+            _credit(7, "X And Q", popularity=3.0),
+        ],
+    )
     _mock_person(200, [_credit(2, "B"), _credit(3, "C"), _credit(4, "Same Cast", popularity=9.0)])
-    _mock_person(300, [_credit(1, "A"), _credit(6, "P And Q", popularity=7.0),
-                       _credit(8, "Only P", popularity=50.0)])
-    _mock_person(400, [_credit(3, "C"), _credit(6, "P And Q", popularity=7.0),
-                       _credit(7, "X And Q", popularity=3.0)])
+    _mock_person(
+        300,
+        [
+            _credit(1, "A"),
+            _credit(6, "P And Q", popularity=7.0),
+            _credit(8, "Only P", popularity=50.0),
+        ],
+    )
+    _mock_person(
+        400,
+        [
+            _credit(3, "C"),
+            _credit(6, "P And Q", popularity=7.0),
+            _credit(7, "X And Q", popularity=3.0),
+        ],
+    )
 
 
 def test_broad_detour_links_a_and_c_through_different_cast(client):
     with respx.mock:
         _mock_broad_universe()
-        resp = client.get(
-            "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "broad"})
+        resp = client.get("/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "broad"})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -427,8 +515,10 @@ def test_broad_detour_links_a_and_c_through_different_cast(client):
 def test_broad_detour_does_not_need_the_path_actors(client):
     with respx.mock:
         _mock_broad_universe()
-        resp = client.get("/api/engine/bridge/swap-node", params={
-            "movie_id": 2, "from_movie_id": 1, "to_movie_id": 3, "mode": "broad"})
+        resp = client.get(
+            "/api/engine/bridge/swap-node",
+            params={"movie_id": 2, "from_movie_id": 1, "to_movie_id": 3, "mode": "broad"},
+        )
 
     assert resp.status_code == 200
     assert [c["node"]["movie_id"] for c in resp.json()["candidates"]] == [4, 6, 7]
@@ -437,10 +527,10 @@ def test_broad_detour_does_not_need_the_path_actors(client):
 def test_broad_detour_tolerates_a_partial_filmography_pool(client):
     with respx.mock:
         _mock_broad_universe()
-        respx.get(f"{TMDB_BASE}/person/400/movie_credits").mock(return_value=httpx.Response(200, json={
-            "id": 400, "cast": []}))
-        resp = client.get(
-            "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "broad"})
+        respx.get(f"{TMDB_BASE}/person/400/movie_credits").mock(
+            return_value=httpx.Response(200, json={"id": 400, "cast": []})
+        )
+        resp = client.get("/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "broad"})
     assert resp.status_code == 200
     assert resp.json()["candidates"] == []
 
@@ -448,5 +538,9 @@ def test_broad_detour_tolerates_a_partial_filmography_pool(client):
 def test_same_mode_still_requires_both_actors_and_rejects_unknown_modes(client):
     params = {"movie_id": 2, "from_movie_id": 1, "to_movie_id": 3}
     assert client.get("/api/engine/bridge/swap-node", params=params).status_code == 422
-    assert client.get(
-        "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "wild"}).status_code == 422
+    assert (
+        client.get(
+            "/api/engine/bridge/swap-node", params={**SWAP_PARAMS, "mode": "wild"}
+        ).status_code
+        == 422
+    )

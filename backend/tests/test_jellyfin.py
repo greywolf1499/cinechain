@@ -83,8 +83,7 @@ async def test_unconfigured_jellyfin_makes_zero_http_calls():
 
 def test_normalize_title_strips_punctuation_and_case():
     assert _normalize_title("Se7en") == _normalize_title("SE7EN")
-    assert _normalize_title("The Matrix: Reloaded") == _normalize_title(
-        "the matrix reloaded")
+    assert _normalize_title("The Matrix: Reloaded") == _normalize_title("the matrix reloaded")
     assert _normalize_title("Spider-Man") == _normalize_title("spiderman")
 
 
@@ -95,10 +94,7 @@ async def test_title_year_fallback_matches_when_provider_id_missing(config_dir):
 
     SQLModel.metadata.create_all(app_engine)
     with Session(app_engine) as session:
-        session.add(
-            CachedMovie(tmdb_id=603, title="The Matrix",
-                        release_date="1999-03-30")
-        )
+        session.add(CachedMovie(tmdb_id=603, title="The Matrix", release_date="1999-03-30"))
         session.commit()
 
         with respx.mock:
@@ -122,8 +118,7 @@ async def test_title_year_fallback_matches_when_provider_id_missing(config_dir):
                 ]
             )
             async with httpx.AsyncClient() as client:
-                jellyfin = JellyfinClient(
-                    client, settings=_configured_settings())
+                jellyfin = JellyfinClient(client, settings=_configured_settings())
                 results = await jellyfin.lookup_movies([603], session=session)
 
     assert results[603].on_server is True
@@ -135,10 +130,7 @@ async def test_title_year_fallback_rejects_wrong_year(config_dir):
 
     SQLModel.metadata.create_all(app_engine)
     with Session(app_engine) as session:
-        session.add(
-            CachedMovie(tmdb_id=603, title="The Matrix",
-                        release_date="1999-03-30")
-        )
+        session.add(CachedMovie(tmdb_id=603, title="The Matrix", release_date="1999-03-30"))
         session.commit()
 
         with respx.mock:
@@ -161,8 +153,7 @@ async def test_title_year_fallback_rejects_wrong_year(config_dir):
                 ]
             )
             async with httpx.AsyncClient() as client:
-                jellyfin = JellyfinClient(
-                    client, settings=_configured_settings())
+                jellyfin = JellyfinClient(client, settings=_configured_settings())
                 results = await jellyfin.lookup_movies([603], session=session)
 
     assert results[603].on_server is False
@@ -173,8 +164,16 @@ async def test_test_lookup_by_tmdb_id():
         respx.get(f"{JELLYFIN_BASE}/Items").mock(
             return_value=httpx.Response(
                 200,
-                json={"Items": [{"Id": "abc123", "Name": "The Matrix",
-                                 "ProductionYear": 1999, "ProviderIds": {"Tmdb": "603"}}]},
+                json={
+                    "Items": [
+                        {
+                            "Id": "abc123",
+                            "Name": "The Matrix",
+                            "ProductionYear": 1999,
+                            "ProviderIds": {"Tmdb": "603"},
+                        }
+                    ]
+                },
             )
         )
         async with httpx.AsyncClient() as client:
@@ -189,7 +188,8 @@ async def test_test_lookup_by_title():
     with respx.mock:
         respx.get(f"{JELLYFIN_BASE}/Items").mock(
             return_value=httpx.Response(
-                200, json={"Items": [{"Id": "abc123", "Name": "The Matrix", "ProductionYear": 1999}]}
+                200,
+                json={"Items": [{"Id": "abc123", "Name": "The Matrix", "ProductionYear": 1999}]},
             )
         )
         async with httpx.AsyncClient() as client:
@@ -230,11 +230,9 @@ def client(config_dir):
 def _register_and_login(client, username="alice"):
     client.post(
         "/api/auth/register",
-        json={"username": username, "password": "password123",
-              "display_name": username.title()},
+        json={"username": username, "password": "password123", "display_name": username.title()},
     )
-    client.post("/api/auth/login",
-                json={"username": username, "password": "password123"})
+    client.post("/api/auth/login", json={"username": username, "password": "password123"})
 
 
 def _override_jellyfin(settings: Settings):
@@ -246,8 +244,7 @@ def _override_jellyfin(settings: Settings):
 
 def test_status_reports_unreachable_and_suggestions_still_200(client):
     _register_and_login(client)
-    run_id = client.post(
-        "/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
 
     _override_jellyfin(_configured_settings())
     try:
@@ -291,8 +288,7 @@ def test_jellyfin_lookup_route(client):
                     200, json={"Items": [{"Id": "abc123", "ProviderIds": {"Tmdb": "603"}}]}
                 )
             )
-            resp = client.post(
-                "/api/integrations/jellyfin/lookup", json={"tmdb_ids": [603]})
+            resp = client.post("/api/integrations/jellyfin/lookup", json={"tmdb_ids": [603]})
     finally:
         app.dependency_overrides.pop(get_jellyfin_client, None)
 
@@ -306,11 +302,9 @@ def test_jellyfin_test_lookup_requires_admin(client):
         "/api/auth/register",
         json={"username": "bob", "password": "password123", "display_name": "Bob"},
     )
-    client.post("/api/auth/login",
-                json={"username": "bob", "password": "password123"})
+    client.post("/api/auth/login", json={"username": "bob", "password": "password123"})
 
-    resp = client.post("/api/integrations/jellyfin/test-lookup",
-                       json={"query": "The Matrix"})
+    resp = client.post("/api/integrations/jellyfin/test-lookup", json={"query": "The Matrix"})
     assert resp.status_code == 403
 
 
@@ -322,12 +316,21 @@ def test_jellyfin_test_lookup_route_returns_raw_matches(client):
             respx.get(f"{JELLYFIN_BASE}/Items").mock(
                 return_value=httpx.Response(
                     200,
-                    json={"Items": [{"Id": "abc123", "Name": "The Matrix",
-                                     "ProductionYear": 1999, "ProviderIds": {"Tmdb": "603"}}]},
+                    json={
+                        "Items": [
+                            {
+                                "Id": "abc123",
+                                "Name": "The Matrix",
+                                "ProductionYear": 1999,
+                                "ProviderIds": {"Tmdb": "603"},
+                            }
+                        ]
+                    },
                 )
             )
             resp = client.post(
-                "/api/integrations/jellyfin/test-lookup", json={"query": "The Matrix"})
+                "/api/integrations/jellyfin/test-lookup", json={"query": "The Matrix"}
+            )
     finally:
         app.dependency_overrides.pop(get_jellyfin_client, None)
 
@@ -340,7 +343,8 @@ def test_jellyfin_test_lookup_route_returns_raw_matches(client):
 async def test_lookup_sends_all_supported_auth_headers():
     with respx.mock:
         route = respx.get(f"{JELLYFIN_BASE}/Items").mock(
-            return_value=httpx.Response(200, json={"Items": []}))
+            return_value=httpx.Response(200, json={"Items": []})
+        )
         async with httpx.AsyncClient() as client:
             jellyfin = JellyfinClient(client, settings=_configured_settings())
             await jellyfin.test_lookup("603")

@@ -44,13 +44,15 @@ class CanonIslandEngine(CineChainEngine):
     def _allowed_subset(self, list_id: str, movie_ids: list[int]) -> set[int]:
         allowed: set[int] = set()
         for start in range(0, len(movie_ids), _SQLITE_CHUNK):
-            chunk = movie_ids[start:start + _SQLITE_CHUNK]
-            allowed.update(self.session.exec(
-                select(CanonMovieBadge.movie_id).where(
-                    CanonMovieBadge.curated_list_id == list_id,
-                    col(CanonMovieBadge.movie_id).in_(chunk),
-                )
-            ).all())
+            chunk = movie_ids[start : start + _SQLITE_CHUNK]
+            allowed.update(
+                self.session.exec(
+                    select(CanonMovieBadge.movie_id).where(
+                        CanonMovieBadge.curated_list_id == list_id,
+                        col(CanonMovieBadge.movie_id).in_(chunk),
+                    )
+                ).all()
+            )
         return allowed
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
@@ -58,13 +60,15 @@ class CanonIslandEngine(CineChainEngine):
         curated = self.session.get(CuratedList, list_id) if list_id else None
         if curated is None:
             return ValidationResult(
-                valid=False, blocked=True,
-                reason="This run has no valid canon list configured")
+                valid=False, blocked=True, reason="This run has no valid canon list configured"
+            )
         if movie_id in self._allowed_subset(curated.id, [movie_id]):
             return ValidationResult(valid=True)
         return ValidationResult(
-            valid=False, blocked=True,
-            reason=f"Not on the island: this film isn't in {curated.title}")
+            valid=False,
+            blocked=True,
+            reason=f"Not on the island: this film isn't in {curated.title}",
+        )
 
     async def validate_primary(
         self,
@@ -78,8 +82,7 @@ class CanonIslandEngine(CineChainEngine):
             blocked = await self.validate_candidate(to_movie_id, rules)
             if not blocked.valid:
                 return blocked
-        return await super().validate_primary(
-            from_movie_id, to_movie_id, cast_limit=cast_limit)
+        return await super().validate_primary(from_movie_id, to_movie_id, cast_limit=cast_limit)
 
     async def get_suggestions(
         self,
@@ -88,8 +91,7 @@ class CanonIslandEngine(CineChainEngine):
         filters: SuggestionFilters,
         rules: dict | None = None,
     ) -> list[Suggestion]:
-        suggestions = await super().get_suggestions(
-            current_movie_id, exclude_movie_ids, filters)
+        suggestions = await super().get_suggestions(current_movie_id, exclude_movie_ids, filters)
         list_id = (rules or {}).get(ALLOWED_LIST_KEY)
         if not list_id:
             return suggestions

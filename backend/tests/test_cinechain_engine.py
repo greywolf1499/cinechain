@@ -56,20 +56,32 @@ def _credits_response(cast: list[dict]):
 
 async def test_valid_1hop_pair_returns_connections(config_dir):
     with _session(config_dir) as session, respx.mock:
-        respx.get(
-            f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Movie A"))
-        respx.get(
-            f"{TMDB_BASE}/movie/2").mock(return_value=_movie_response(2, "Movie B"))
+        respx.get(f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Movie A"))
+        respx.get(f"{TMDB_BASE}/movie/2").mock(return_value=_movie_response(2, "Movie B"))
         respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
             return_value=_credits_response(
-                [{"id": 10, "name": "Actor X", "profile_path": None,
-                    "character": "Hero", "order": 0}]
+                [
+                    {
+                        "id": 10,
+                        "name": "Actor X",
+                        "profile_path": None,
+                        "character": "Hero",
+                        "order": 0,
+                    }
+                ]
             )
         )
         respx.get(f"{TMDB_BASE}/movie/2/credits").mock(
             return_value=_credits_response(
-                [{"id": 10, "name": "Actor X", "profile_path": None,
-                    "character": "Villain", "order": 0}]
+                [
+                    {
+                        "id": 10,
+                        "name": "Actor X",
+                        "profile_path": None,
+                        "character": "Villain",
+                        "order": 0,
+                    }
+                ]
             )
         )
 
@@ -87,20 +99,32 @@ async def test_valid_1hop_pair_returns_connections(config_dir):
 
 async def test_non_connected_pair_returns_invalid(config_dir):
     with _session(config_dir) as session, respx.mock:
-        respx.get(
-            f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Movie A"))
-        respx.get(
-            f"{TMDB_BASE}/movie/2").mock(return_value=_movie_response(2, "Movie B"))
+        respx.get(f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Movie A"))
+        respx.get(f"{TMDB_BASE}/movie/2").mock(return_value=_movie_response(2, "Movie B"))
         respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
             return_value=_credits_response(
-                [{"id": 10, "name": "Actor X", "profile_path": None,
-                    "character": "Hero", "order": 0}]
+                [
+                    {
+                        "id": 10,
+                        "name": "Actor X",
+                        "profile_path": None,
+                        "character": "Hero",
+                        "order": 0,
+                    }
+                ]
             )
         )
         respx.get(f"{TMDB_BASE}/movie/2/credits").mock(
             return_value=_credits_response(
-                [{"id": 20, "name": "Actor Y", "profile_path": None,
-                    "character": "Villain", "order": 0}]
+                [
+                    {
+                        "id": 20,
+                        "name": "Actor Y",
+                        "profile_path": None,
+                        "character": "Villain",
+                        "order": 0,
+                    }
+                ]
             )
         )
 
@@ -114,12 +138,18 @@ async def test_non_connected_pair_returns_invalid(config_dir):
 
 async def test_suggestions_exclude_already_watched(config_dir):
     with _session(config_dir) as session, respx.mock:
-        respx.get(
-            f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Movie A"))
+        respx.get(f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Movie A"))
         respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
             return_value=_credits_response(
-                [{"id": 10, "name": "Actor X", "profile_path": None,
-                    "character": "Hero", "order": 0}]
+                [
+                    {
+                        "id": 10,
+                        "name": "Actor X",
+                        "profile_path": None,
+                        "character": "Hero",
+                        "order": 0,
+                    }
+                ]
             )
         )
         respx.get(f"{TMDB_BASE}/person/10/movie_credits").mock(
@@ -180,15 +210,24 @@ def test_unknown_engine_raises_400():
 
 async def test_discover_candidates_pools_across_cast_and_tracks_all_connections(config_dir):
     with _session(config_dir) as session, respx.mock:
-        respx.get(
-            f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Frontier Film"))
+        respx.get(f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Frontier Film"))
         respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
             return_value=_credits_response(
                 [
-                    {"id": 10, "name": "Actor X", "profile_path": None,
-                        "character": "Hero", "order": 0},
-                    {"id": 20, "name": "Actor Y", "profile_path": None,
-                        "character": "Sidekick", "order": 1},
+                    {
+                        "id": 10,
+                        "name": "Actor X",
+                        "profile_path": None,
+                        "character": "Hero",
+                        "order": 0,
+                    },
+                    {
+                        "id": 20,
+                        "name": "Actor Y",
+                        "profile_path": None,
+                        "character": "Sidekick",
+                        "order": 1,
+                    },
                 ]
             )
         )
@@ -198,12 +237,26 @@ async def test_discover_candidates_pools_across_cast_and_tracks_all_connections(
                 json={
                     "id": 10,
                     "cast": [
-                        {"id": 2, "title": "Solo Film X", "release_date": "2001-01-01",
-                            "poster_path": None, "character": "X in Solo", "genre_ids": [],
-                            "original_language": "en", "popularity": 5.0},
-                        {"id": 4, "title": "Reunion Film", "release_date": "2010-01-01",
-                            "poster_path": None, "character": "X in Reunion", "genre_ids": [],
-                            "original_language": "en", "popularity": 9.5},
+                        {
+                            "id": 2,
+                            "title": "Solo Film X",
+                            "release_date": "2001-01-01",
+                            "poster_path": None,
+                            "character": "X in Solo",
+                            "genre_ids": [],
+                            "original_language": "en",
+                            "popularity": 5.0,
+                        },
+                        {
+                            "id": 4,
+                            "title": "Reunion Film",
+                            "release_date": "2010-01-01",
+                            "poster_path": None,
+                            "character": "X in Reunion",
+                            "genre_ids": [],
+                            "original_language": "en",
+                            "popularity": 9.5,
+                        },
                     ],
                 },
             )
@@ -214,12 +267,24 @@ async def test_discover_candidates_pools_across_cast_and_tracks_all_connections(
                 json={
                     "id": 20,
                     "cast": [
-                        {"id": 3, "title": "Solo Film Y", "release_date": "2003-01-01",
-                            "poster_path": None, "character": "Y in Solo", "genre_ids": [],
-                            "original_language": "en"},
-                        {"id": 4, "title": "Reunion Film", "release_date": "2010-01-01",
-                            "poster_path": None, "character": "Y in Reunion", "genre_ids": [],
-                            "original_language": "en"},
+                        {
+                            "id": 3,
+                            "title": "Solo Film Y",
+                            "release_date": "2003-01-01",
+                            "poster_path": None,
+                            "character": "Y in Solo",
+                            "genre_ids": [],
+                            "original_language": "en",
+                        },
+                        {
+                            "id": 4,
+                            "title": "Reunion Film",
+                            "release_date": "2010-01-01",
+                            "poster_path": None,
+                            "character": "Y in Reunion",
+                            "genre_ids": [],
+                            "original_language": "en",
+                        },
                     ],
                 },
             )
@@ -312,44 +377,51 @@ def client(config_dir):
 def _register_and_login(client, username="alice"):
     client.post(
         "/api/auth/register",
-        json={"username": username, "password": "password123",
-              "display_name": username.title()},
+        json={"username": username, "password": "password123", "display_name": username.title()},
     )
-    client.post("/api/auth/login",
-                json={"username": username, "password": "password123"})
+    client.post("/api/auth/login", json={"username": username, "password": "password123"})
 
 
 def test_invalid_step_returns_409_but_force_overrides(client):
     _register_and_login(client)
-    run_id = client.post(
-        "/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
+    run_id = client.post("/api/runs", json={"name": "Run", "participant_user_ids": []}).json()["id"]
 
     with respx.mock:
-        respx.get(
-            f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Movie A"))
+        respx.get(f"{TMDB_BASE}/movie/1").mock(return_value=_movie_response(1, "Movie A"))
         respx.get(f"{TMDB_BASE}/movie/1/credits").mock(
             return_value=_credits_response(
-                [{"id": 10, "name": "Actor X", "profile_path": None,
-                    "character": "Hero", "order": 0}]
+                [
+                    {
+                        "id": 10,
+                        "name": "Actor X",
+                        "profile_path": None,
+                        "character": "Hero",
+                        "order": 0,
+                    }
+                ]
             )
         )
         first = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 1})
         assert first.status_code == 201
 
-        respx.get(
-            f"{TMDB_BASE}/movie/2").mock(return_value=_movie_response(2, "Movie B"))
+        respx.get(f"{TMDB_BASE}/movie/2").mock(return_value=_movie_response(2, "Movie B"))
         respx.get(f"{TMDB_BASE}/movie/2/credits").mock(
             return_value=_credits_response(
-                [{"id": 20, "name": "Actor Y", "profile_path": None,
-                    "character": "Villain", "order": 0}]
+                [
+                    {
+                        "id": 20,
+                        "name": "Actor Y",
+                        "profile_path": None,
+                        "character": "Villain",
+                        "order": 0,
+                    }
+                ]
             )
         )
 
-        rejected = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 2})
+        rejected = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 2})
         assert rejected.status_code == 409
         assert rejected.json()["detail"]["valid"] is False
 
-        forced = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 2, "force": True})
+        forced = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 2, "force": True})
         assert forced.status_code == 201

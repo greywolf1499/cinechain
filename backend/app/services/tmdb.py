@@ -151,8 +151,7 @@ class TMDBClient:
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{self._settings.tmdb_api_base}{path}"
-        api_key = self._overrides.get(
-            "tmdb_api_key") or self._settings.tmdb_api_key
+        api_key = self._overrides.get("tmdb_api_key") or self._settings.tmdb_api_key
         headers = {"Authorization": f"Bearer {api_key}"}
         backoff = 0.5
         hit_429 = False
@@ -181,8 +180,9 @@ class TMDBClient:
                 hit_429 = hit_429 or response.status_code == 429
 
             self._consecutive_429s = (
-                min(self._consecutive_429s + 1,
-                    10) if hit_429 else max(self._consecutive_429s - 1, 0)
+                min(self._consecutive_429s + 1, 10)
+                if hit_429
+                else max(self._consecutive_429s - 1, 0)
             )
 
         if response.status_code >= 400:
@@ -245,7 +245,9 @@ class TMDBClient:
         """`/discover/movie`, most popular first, as credit-shaped stubs. `params` are raw
         TMDB filters (`with_origin_country`, `primary_release_date.gte`, `with_genres`...)."""
         query: dict[str, Any] = {
-            "sort_by": "popularity.desc", "include_adult": "false", "include_video": "false",
+            "sort_by": "popularity.desc",
+            "include_adult": "false",
+            "include_video": "false",
             **params,
         }
         stubs: list[TMDBPersonCredit] = []
@@ -306,9 +308,11 @@ class TMDBClient:
         for member in data.get("crew", []):
             if member.get("job") == "Director" and member["id"] not in seen:
                 seen.add(member["id"])
-                directors.append(TMDBDirector(
-                    id=member["id"], name=member.get("name", ""),
-                    gender=member.get("gender", 0)))
+                directors.append(
+                    TMDBDirector(
+                        id=member["id"], name=member.get("name", ""), gender=member.get("gender", 0)
+                    )
+                )
         return directors
 
     async def get_movie_crew(self, tmdb_id: int) -> list[TMDBCrewMember]:
@@ -322,10 +326,15 @@ class TMDBClient:
             if job not in CRAFT_JOBS or (member["id"], job) in seen:
                 continue
             seen.add((member["id"], job))
-            crew.append(TMDBCrewMember(
-                id=member["id"], name=member.get("name", ""), job=job,
-                department=member.get("department") or CRAFT_JOBS[job][1],
-                profile_path=member.get("profile_path")))
+            crew.append(
+                TMDBCrewMember(
+                    id=member["id"],
+                    name=member.get("name", ""),
+                    job=job,
+                    department=member.get("department") or CRAFT_JOBS[job][1],
+                    profile_path=member.get("profile_path"),
+                )
+            )
         return crew
 
     async def get_person_craft_credits(
@@ -341,9 +350,13 @@ class TMDBClient:
             if job not in CRAFT_JOBS or (entry["id"], job) in seen:
                 continue
             seen.add((entry["id"], job))
-            crew.append(TMDBCraftCredit(
-                **_normalize_person_credit(entry), job=job,
-                department=entry.get("department") or CRAFT_JOBS[job][1]))
+            crew.append(
+                TMDBCraftCredit(
+                    **_normalize_person_credit(entry),
+                    job=job,
+                    department=entry.get("department") or CRAFT_JOBS[job][1],
+                )
+            )
         return cast, crew
 
     async def get_person_movie_credits(self, person_id: int) -> list[TMDBPersonCredit]:

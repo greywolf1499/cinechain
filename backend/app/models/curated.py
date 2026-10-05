@@ -36,8 +36,7 @@ class CuratedList(SQLModel, table=True):
     id: str = Field(default_factory=new_id, primary_key=True)
     # Null for custom (non-preset) imports.
     preset_key: str | None = Field(default=None, index=True)
-    source_account_id: str | None = Field(
-        default=None, foreign_key="curated_source_accounts.id")
+    source_account_id: str | None = Field(default=None, foreign_key="curated_source_accounts.id")
     title: str
     url: str
     badge_prefix: str
@@ -66,8 +65,7 @@ class CanonMovieBadge(SQLModel, table=True):
     __tablename__ = "canon_movie_badges"
 
     id: str = Field(default_factory=new_id, primary_key=True)
-    curated_list_id: str = Field(
-        foreign_key="curated_lists.id", index=True)
+    curated_list_id: str = Field(foreign_key="curated_lists.id", index=True)
     movie_id: int = Field(index=True)  # TMDB movie id
     badge_label: str
     rank: int | None = None

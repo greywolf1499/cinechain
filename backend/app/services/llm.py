@@ -185,8 +185,7 @@ def _schedule_unload(keep_alive_seconds: int) -> None:
         return
     if _unload_timer is not None:
         _unload_timer.cancel()
-    _unload_timer = threading.Timer(
-        keep_alive_seconds, _unload_if_idle, args=(keep_alive_seconds,))
+    _unload_timer = threading.Timer(keep_alive_seconds, _unload_if_idle, args=(keep_alive_seconds,))
     _unload_timer.daemon = True
     _unload_timer.start()
 
@@ -202,11 +201,16 @@ def local_model_status() -> dict[str, Any]:
     if not path.exists() and legacy.exists():  # reuse a download from before the fixed path
         legacy.replace(path)
     exists = path.is_file()
-    return {"downloaded": exists, "size_bytes": path.stat().st_size if exists else 0,
-            "path": str(path)}
+    return {
+        "downloaded": exists,
+        "size_bytes": path.stat().st_size if exists else 0,
+        "path": str(path),
+    }
 
 
-def _download(url: str, destination: Path, progress: Callable[[int, int], None] | None = None) -> None:
+def _download(
+    url: str, destination: Path, progress: Callable[[int, int], None] | None = None
+) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(destination.suffix + ".part")
     try:
@@ -247,12 +251,19 @@ def _generate_local(config: LlmConfig, system: str, prompt: str, max_tokens: int
                 llama = _import_llama()
                 path = ensure_model_file(config)
                 _local_model = llama(
-                    model_path=str(path), n_ctx=CONTEXT_TOKENS,
-                    n_threads=max(1, min(4, os.cpu_count() or 1)), n_gpu_layers=0,
-                    use_mlock=False, verbose=False)
+                    model_path=str(path),
+                    n_ctx=CONTEXT_TOKENS,
+                    n_threads=max(1, min(4, os.cpu_count() or 1)),
+                    n_gpu_layers=0,
+                    use_mlock=False,
+                    verbose=False,
+                )
             reply = _local_model.create_chat_completion(
-                messages=_messages(config, system, prompt), max_tokens=max_tokens,
-                temperature=0.8, top_p=0.9)
+                messages=_messages(config, system, prompt),
+                max_tokens=max_tokens,
+                temperature=0.8,
+                top_p=0.9,
+            )
             text = reply["choices"][0]["message"]["content"]
         except LlmUnavailable:
             raise
@@ -302,14 +313,29 @@ async def _generate_remote(config: LlmConfig, system: str, prompt: str, max_toke
     messages = _messages(config, system, prompt)
     async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_SECONDS) as client:
         if config.provider == PROVIDER_OLLAMA:
-            response = await client.post(ollama_url(config), headers=headers, json={
-                "model": config.effective_model, "messages": messages, "stream": False,
-                "think": False, "options": {"temperature": 0.8, "num_predict": max_tokens}})
+            response = await client.post(
+                ollama_url(config),
+                headers=headers,
+                json={
+                    "model": config.effective_model,
+                    "messages": messages,
+                    "stream": False,
+                    "think": False,
+                    "options": {"temperature": 0.8, "num_predict": max_tokens},
+                },
+            )
             response.raise_for_status()
             return response.json()["message"]["content"]
-        response = await client.post(openai_url(config), headers=headers, json={
-            "model": config.effective_model, "messages": messages,
-            "max_tokens": max_tokens, "temperature": 0.8})
+        response = await client.post(
+            openai_url(config),
+            headers=headers,
+            json={
+                "model": config.effective_model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": 0.8,
+            },
+        )
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
 
@@ -329,10 +355,13 @@ async def generate(config: LlmConfig, system: str, prompt: str, max_tokens: int 
     """One short completion. Raises `LlmUnavailable` for every failure (including `off`)."""
     if not config.enabled:
         raise LlmUnavailable(
-            "The generative model is off - enable it under Settings > Integrations > AI & Embeddings.")
+            "The generative model is off - enable it under Settings > Integrations > AI & Embeddings."
+        )
     try:
         if config.provider == PROVIDER_LOCAL:
-            raw = await anyio.to_thread.run_sync(_generate_local, config, system, prompt, max_tokens)
+            raw = await anyio.to_thread.run_sync(
+                _generate_local, config, system, prompt, max_tokens
+            )
         else:
             raw = await _generate_remote(config, system, prompt, max_tokens)
     except LlmUnavailable:
@@ -340,7 +369,8 @@ async def generate(config: LlmConfig, system: str, prompt: str, max_tokens: int 
     except httpx.HTTPStatusError as exc:
         raise LlmUnavailable(
             f"{config.provider} chat failed (HTTP {exc.response.status_code}): "
-            f"{_error_text(exc.response)}") from exc
+            f"{_error_text(exc.response)}"
+        ) from exc
     except (httpx.HTTPError, TimeoutError, KeyError, IndexError, TypeError, ValueError) as exc:
         raise LlmUnavailable(f"{config.provider} chat failed: {exc or type(exc).__name__}") from exc
     text = clean_output(raw)
@@ -352,14 +382,21 @@ async def generate(config: LlmConfig, system: str, prompt: str, max_tokens: int 
 async def check_connection(config: LlmConfig) -> dict:
     """A tiny real generation for the Settings page: {ok, latency_ms, output, provider, model, detail}."""
     result: dict = {
-        "ok": False, "latency_ms": None, "output": None,
-        "provider": config.provider, "model": config.effective_model, "detail": None,
+        "ok": False,
+        "latency_ms": None,
+        "output": None,
+        "provider": config.provider,
+        "model": config.effective_model,
+        "detail": None,
     }
     started = time.perf_counter()
     try:
         output = await generate(
-            config, "You are a concise assistant.",
-            "Reply with one short, upbeat sentence about movie night.", max_tokens=40)
+            config,
+            "You are a concise assistant.",
+            "Reply with one short, upbeat sentence about movie night.",
+            max_tokens=40,
+        )
     except LlmUnavailable as exc:
         result["detail"] = str(exc)
         return result
@@ -409,7 +446,10 @@ def _blurb(movie: CachedMovie) -> str:
 
 
 async def pitch(
-    config: LlmConfig, previous: CachedMovie, candidate: CachedMovie, link: str | None = None,
+    config: LlmConfig,
+    previous: CachedMovie,
+    candidate: CachedMovie,
+    link: str | None = None,
     critic: bool = False,
 ) -> str:
     """Why `candidate` is a great next film after `previous`, in one cinephile sentence - or,
@@ -421,9 +461,11 @@ async def pitch(
     connection = f"\nThe two films are linked by: {link}." if link else ""
     prompt = (
         f"Previous film - {_blurb(previous)}\nNext film - {_blurb(candidate)}{connection}\n"
-        + ("Warn about the transition from the previous film to the next one in one sentence."
-           if critic else
-           "Pitch the transition from the previous film to the next one in one sentence.")
+        + (
+            "Warn about the transition from the previous film to the next one in one sentence."
+            if critic
+            else "Pitch the transition from the previous film to the next one in one sentence."
+        )
     )
     system = CRITIC_SYSTEM if critic else PITCH_SYSTEM
     return _remember(key, await generate(config, system, prompt, max_tokens=80))
@@ -441,10 +483,7 @@ async def teaser(config: LlmConfig, movie: CachedMovie) -> str:
     key = f"{config.fingerprint}|teaser|{movie.tmdb_id}"
     if key in _cache:
         return _cache[key]
-    prompt = (
-        f"{_blurb(movie)}\n"
-        "Write the cryptic one-sentence teaser. Do not use the film's title."
-    )
+    prompt = f"{_blurb(movie)}\nWrite the cryptic one-sentence teaser. Do not use the film's title."
     text = mask_title(await generate(config, TEASER_SYSTEM, prompt, max_tokens=64), movie.title)
     return _remember(key, text)
 
@@ -494,8 +533,12 @@ def _env_config() -> LlmConfig:
     base = get_settings()
     provider = base.llm_provider if base.llm_provider in PROVIDERS else PROVIDER_OFF
     return LlmConfig(
-        provider=provider, base_url=base.llm_base_url, api_key=base.llm_api_key,
-        model=base.llm_model, keep_alive_seconds=base.llm_keep_alive_seconds)
+        provider=provider,
+        base_url=base.llm_base_url,
+        api_key=base.llm_api_key,
+        model=base.llm_model,
+        keep_alive_seconds=base.llm_keep_alive_seconds,
+    )
 
 
 async def extract_tropes(overview: str, config: LlmConfig | None = None) -> list[str]:

@@ -99,8 +99,10 @@ async def search_movies(
     q: str = Query(..., min_length=1),
     page: int = Query(default=1, ge=1),
     sort_by: str | None = Query(
-        default=None, pattern="^underdog$",
-        description="underdog = least popular first, dropping dead entries (popularity < 1.0)"),
+        default=None,
+        pattern="^underdog$",
+        description="underdog = least popular first, dropping dead entries (popularity < 1.0)",
+    ),
     tmdb: TMDBClient = Depends(get_tmdb_client),
     _current_user: User = Depends(get_current_user),
 ) -> MovieSearchResponse:
@@ -111,7 +113,8 @@ async def search_movies(
     if sort_by == pool_options.UNDERDOG:
         results = sorted(
             (r for r in results if pool_options.is_underdog(r.popularity)),
-            key=lambda r: (r.popularity, r.title))
+            key=lambda r: (r.popularity, r.title),
+        )
     return MovieSearchResponse(
         results=results,
         page=raw.get("page", page),
@@ -123,7 +126,8 @@ async def search_movies(
 async def search_people(
     q: str = Query(..., min_length=1),
     department: str | None = Query(
-        None, description="Only people known for this TMDB department, e.g. Directing"),
+        None, description="Only people known for this TMDB department, e.g. Directing"
+    ),
     tmdb: TMDBClient = Depends(get_tmdb_client),
     _current_user: User = Depends(get_current_user),
 ) -> list[PersonSummary]:
@@ -132,10 +136,14 @@ async def search_people(
     raw = await tmdb.search_people(q)
     people = [
         PersonSummary(
-            person_id=entry["id"], name=entry.get("name") or "",
+            person_id=entry["id"],
+            name=entry.get("name") or "",
             profile_path=entry.get("profile_path"),
             known_for_department=entry.get("known_for_department"),
-            known_for=[k.get("title") or k.get("name") or "" for k in entry.get("known_for", [])][:3])
+            known_for=[k.get("title") or k.get("name") or "" for k in entry.get("known_for", [])][
+                :3
+            ],
+        )
         for entry in raw.get("results", [])
         if department is None or entry.get("known_for_department") == department
     ]
@@ -165,7 +173,9 @@ def get_seed_suggestion(
     suggestion = seed_suggestions.suggest_seed(session, skipped, game_type)
     if suggestion is None:
         return None
-    return SeedSuggestionOut(**_movie_to_summary(suggestion.movie).model_dump(), reason=suggestion.reason)
+    return SeedSuggestionOut(
+        **_movie_to_summary(suggestion.movie).model_dump(), reason=suggestion.reason
+    )
 
 
 @router.get("/movies/{tmdb_id}", response_model=MovieDetail)
@@ -216,7 +226,9 @@ async def extract_movie_tropes(
     try:
         tropes = await movie_features.extract_and_store_tropes(session, movie, config)
     except llm.LlmUnavailable as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
     return TropeExtraction(tmdb_id=tmdb_id, tropes=tropes, cached=False)
 
 
@@ -238,10 +250,12 @@ async def update_narrative_era(
     label = (payload.narrative_era_label or "").strip()
     if payload.narrative_year is None and not label:
         year, era = await historical_era.ensure_narrative_era(
-            session, tmdb, movie, llm.load_config(session), force=True)
+            session, tmdb, movie, llm.load_config(session), force=True
+        )
         source = "resolved" if movie.narrative_year == year else "default"
         return NarrativeEra(
-            tmdb_id=tmdb_id, narrative_year=year, narrative_era_label=era, source=source)
+            tmdb_id=tmdb_id, narrative_year=year, narrative_era_label=era, source=source
+        )
     year = payload.narrative_year
     if year is None:
         year = historical_era.effective_era(movie)[0]
@@ -249,8 +263,11 @@ async def update_narrative_era(
         label = historical_era.era_label_for_year(year, parse_release_year(movie.release_date))
     historical_era.set_narrative_era(session, movie, year, label)
     return NarrativeEra(
-        tmdb_id=tmdb_id, narrative_year=year, narrative_era_label=movie.narrative_era_label or label,
-        source="manual")
+        tmdb_id=tmdb_id,
+        narrative_year=year,
+        narrative_era_label=movie.narrative_era_label or label,
+        source="manual",
+    )
 
 
 @router.get("/movies/{tmdb_id}/ratings", response_model=MovieRatings | None)
@@ -317,9 +334,13 @@ async def get_movie_crew(
     crew = await cache_repo.get_movie_crew(session, tmdb, tmdb_id)
     return [
         CrewMember(
-            person_id=row.person_id, name=row.person_name, job=row.job,
-            department=row.department, role=role_for_job(row.job) or "",
-            profile_path=row.profile_path)
+            person_id=row.person_id,
+            name=row.person_name,
+            job=row.job,
+            department=row.department,
+            role=role_for_job(row.job) or "",
+            profile_path=row.profile_path,
+        )
         for row in crew
     ]
 
@@ -335,6 +356,5 @@ async def get_person_credits(
     _current_user: User = Depends(get_current_user),
 ) -> list[MovieSummary]:
     movies = await cache_repo.get_actor_credits(session, tmdb, person_id)
-    filters = SuggestionFilters(
-        country=country, decade=decade, genre_id=genre_id)
+    filters = SuggestionFilters(country=country, decade=decade, genre_id=genre_id)
     return [_movie_to_summary(movie) for movie in movies if passes_filters(movie, filters)]

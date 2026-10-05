@@ -46,17 +46,58 @@ HYDRATE_SECONDS = 90.0
 HYDRATE_BATCH = 20
 
 COUNTRY_NAMES = {
-    "AR": "Argentina", "AT": "Austria", "AU": "Australia", "BE": "Belgium", "BR": "Brazil",
-    "CA": "Canada", "CH": "Switzerland", "CL": "Chile", "CN": "China", "CO": "Colombia",
-    "CU": "Cuba", "CZ": "Czechia", "DE": "Germany", "DK": "Denmark", "EG": "Egypt",
-    "ES": "Spain", "FI": "Finland", "FR": "France", "GB": "United Kingdom", "GR": "Greece",
-    "HK": "Hong Kong", "HU": "Hungary", "IE": "Ireland", "IL": "Israel", "IN": "India",
-    "IR": "Iran", "IS": "Iceland", "IT": "Italy", "JP": "Japan", "KR": "South Korea",
-    "MX": "Mexico", "NL": "Netherlands", "NO": "Norway", "NZ": "New Zealand", "PH": "Philippines",
-    "PL": "Poland", "PT": "Portugal", "RO": "Romania", "RS": "Serbia", "RU": "Russia",
-    "SE": "Sweden", "SN": "Senegal", "SU": "Soviet Union", "TH": "Thailand", "TR": "Turkey",
-    "TW": "Taiwan", "UA": "Ukraine", "US": "United States", "VN": "Vietnam", "XC": "Czechoslovakia",
-    "YU": "Yugoslavia", "ZA": "South Africa",
+    "AR": "Argentina",
+    "AT": "Austria",
+    "AU": "Australia",
+    "BE": "Belgium",
+    "BR": "Brazil",
+    "CA": "Canada",
+    "CH": "Switzerland",
+    "CL": "Chile",
+    "CN": "China",
+    "CO": "Colombia",
+    "CU": "Cuba",
+    "CZ": "Czechia",
+    "DE": "Germany",
+    "DK": "Denmark",
+    "EG": "Egypt",
+    "ES": "Spain",
+    "FI": "Finland",
+    "FR": "France",
+    "GB": "United Kingdom",
+    "GR": "Greece",
+    "HK": "Hong Kong",
+    "HU": "Hungary",
+    "IE": "Ireland",
+    "IL": "Israel",
+    "IN": "India",
+    "IR": "Iran",
+    "IS": "Iceland",
+    "IT": "Italy",
+    "JP": "Japan",
+    "KR": "South Korea",
+    "MX": "Mexico",
+    "NL": "Netherlands",
+    "NO": "Norway",
+    "NZ": "New Zealand",
+    "PH": "Philippines",
+    "PL": "Poland",
+    "PT": "Portugal",
+    "RO": "Romania",
+    "RS": "Serbia",
+    "RU": "Russia",
+    "SE": "Sweden",
+    "SN": "Senegal",
+    "SU": "Soviet Union",
+    "TH": "Thailand",
+    "TR": "Turkey",
+    "TW": "Taiwan",
+    "UA": "Ukraine",
+    "US": "United States",
+    "VN": "Vietnam",
+    "XC": "Czechoslovakia",
+    "YU": "Yugoslavia",
+    "ZA": "South Africa",
 }
 
 
@@ -89,10 +130,14 @@ class RegionalDeepDiveEngine(TrackerEngine):
             problems.append(f"{COUNTRY_KEY} must be a 2-letter country code (e.g. JP)")
         latest = datetime.now(UTC).year // 10 * 10
         if decade is not None and (
-            isinstance(decade, bool) or not isinstance(decade, int)
-            or decade % 10 or not MIN_DECADE <= decade <= latest
+            isinstance(decade, bool)
+            or not isinstance(decade, int)
+            or decade % 10
+            or not MIN_DECADE <= decade <= latest
         ):
-            problems.append(f"{DECADE_KEY} must be a decade start between {MIN_DECADE} and {latest}")
+            problems.append(
+                f"{DECADE_KEY} must be a decade start between {MIN_DECADE} and {latest}"
+            )
         if country is None and decade is None:
             problems.append(f"Pick a {COUNTRY_KEY} and/or a {DECADE_KEY} to slice the list by")
         return problems
@@ -128,24 +173,38 @@ class RegionalDeepDiveEngine(TrackerEngine):
             if decade is not None and _decade_of(movie.release_date) != decade:
                 continue
             seen.add(movie.tmdb_id)
-            films.append({
-                "movie_id": movie.tmdb_id, "title": movie.title,
-                "year": parse_release_year(movie.release_date), "poster_path": movie.poster_path,
-                "runtime": movie.runtime, "badge_label": badge.badge_label, "rank": badge.rank})
+            films.append(
+                {
+                    "movie_id": movie.tmdb_id,
+                    "title": movie.title,
+                    "year": parse_release_year(movie.release_date),
+                    "poster_path": movie.poster_path,
+                    "runtime": movie.runtime,
+                    "badge_label": badge.badge_label,
+                    "rank": badge.rank,
+                }
+            )
         if not films:
             raise RunSetupError(
                 f"No films on {curated.title} match that "
                 f"{' / '.join(p for p in (country_name(country), f'{decade}s' if decade else None) if p)}"
-                " slice")
+                " slice"
+            )
         films.sort(key=lambda f: (f["rank"] is None, f["rank"] or 0, f["title"]))
         inputs = {LIST_ID_KEY, COUNTRY_KEY, DECADE_KEY}
         return {
             **{k: v for k, v in rules.items() if k not in inputs},
             EXPEDITION_KEY: {
-                "list_id": curated.id, "list_title": curated.title,
-                "badge_prefix": curated.badge_prefix, "badge_color": curated.badge_color,
-                "country": country, "country_name": country_name(country), "decade": decade,
-                "movie_ids": [f["movie_id"] for f in films], "films": films},
+                "list_id": curated.id,
+                "list_title": curated.title,
+                "badge_prefix": curated.badge_prefix,
+                "badge_color": curated.badge_color,
+                "country": country,
+                "country_name": country_name(country),
+                "decade": decade,
+                "movie_ids": [f["movie_id"] for f in films],
+                "films": films,
+            },
         }
 
     async def _hydrate(self, movie_ids: list[int], country: str | None, decade: int | None) -> None:
@@ -164,14 +223,19 @@ class RegionalDeepDiveEngine(TrackerEngine):
                 missing.append(movie_id)
         deadline = time.monotonic() + HYDRATE_SECONDS
         for start in range(0, len(missing), HYDRATE_BATCH):
-            batch = missing[start:start + HYDRATE_BATCH]
-            results = await asyncio.gather(*(
-                fetch_with_backoff(lambda movie_id=m: self.tmdb.get_movie(movie_id), deadline)
-                for m in batch), return_exceptions=True)
+            batch = missing[start : start + HYDRATE_BATCH]
+            results = await asyncio.gather(
+                *(
+                    fetch_with_backoff(lambda movie_id=m: self.tmdb.get_movie(movie_id), deadline)
+                    for m in batch
+                ),
+                return_exceptions=True,
+            )
             for result in results:
                 if isinstance(result, DeadlineReached):
                     raise RunSetupError(
-                        "Still indexing this list's films from TMDB - try again in a minute", 503)
+                        "Still indexing this list's films from TMDB - try again in a minute", 503
+                    )
                 if isinstance(result, TMDBError) or result is None:
                     continue  # unfetchable film: it can't be placed in a slice
                 if isinstance(result, BaseException):
@@ -191,9 +255,11 @@ class RegionalDeepDiveEngine(TrackerEngine):
         row = self.session.get(CachedMovie, movie_id)
         title = row.title if row is not None else f"Film {movie_id}"
         return ValidationResult(
-            valid=False, blocked=True,
+            valid=False,
+            blocked=True,
             reason=f"Off the expedition: {title} isn't on the {expedition.get('list_title', 'list')} "
-                   "checklist for this slice")
+            "checklist for this slice",
+        )
 
     def evaluate_run_outcome(self, run: Run, steps: list[RunStep]) -> RunOutcome | None:
         if run.engine_version <= LEGACY_ENGINE_VERSION or run.status != RUN_STATUS_ACTIVE:
@@ -202,10 +268,13 @@ class RegionalDeepDiveEngine(TrackerEngine):
         checklist = set(self._checklist(run.rules_config))
         if checklist and checklist <= {step.movie_id for step in steps}:
             region = (
-                expedition.get("country_name") or expedition.get("country")
-                or (f"{expedition['decade']}s" if expedition.get("decade") else "this slice of"))
+                expedition.get("country_name")
+                or expedition.get("country")
+                or (f"{expedition['decade']}s" if expedition.get("decade") else "this slice of")
+            )
             return RunOutcome(
                 RUN_STATUS_COMPLETED,
                 f"Expedition Complete: Conquered {region} cinema on "
-                f"{expedition.get('list_title', 'the list')}!")
+                f"{expedition.get('list_title', 'the list')}!",
+            )
         return super().evaluate_run_outcome(run, steps)

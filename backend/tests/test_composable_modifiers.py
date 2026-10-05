@@ -34,46 +34,97 @@ def client(db_engine):
             "/api/auth/register",
             json={"username": "alice", "password": "password123", "display_name": "Alice"},
         )
-        test_client.post(
-            "/api/auth/login", json={"username": "alice", "password": "password123"})
+        test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
 
 
 def film(title, year, country="US", runtime=100, cast=(100,)):
-    return {"title": title, "year": year, "country": country, "runtime": runtime, "cast": list(cast)}
+    return {
+        "title": title,
+        "year": year,
+        "country": country,
+        "runtime": runtime,
+        "cast": list(cast),
+    }
 
 
 def mock_universe(universe):
     for movie_id, m in universe.items():
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "title": m["title"], "release_date": f"{m['year']}-06-01",
-            "poster_path": None, "overview": "", "origin_country": [m["country"]],
-            "original_language": "en", "runtime": m["runtime"], "genres": [],
-            "popularity": 100 - movie_id, "status": "Released",
-        }))
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(return_value=httpx.Response(200, json={
-            "id": movie_id,
-            "cast": [{"id": a, "name": f"Person {a}", "profile_path": None,
-                      "character": f"Role {a}", "order": i} for i, a in enumerate(m["cast"])],
-            "crew": [],
-        }))
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "title": m["title"],
+                    "release_date": f"{m['year']}-06-01",
+                    "poster_path": None,
+                    "overview": "",
+                    "origin_country": [m["country"]],
+                    "original_language": "en",
+                    "runtime": m["runtime"],
+                    "genres": [],
+                    "popularity": 100 - movie_id,
+                    "status": "Released",
+                },
+            )
+        )
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "cast": [
+                        {
+                            "id": a,
+                            "name": f"Person {a}",
+                            "profile_path": None,
+                            "character": f"Role {a}",
+                            "order": i,
+                        }
+                        for i, a in enumerate(m["cast"])
+                    ],
+                    "crew": [],
+                },
+            )
+        )
     for person in {a for m in universe.values() for a in m["cast"]}:
         respx.get(f"{TMDB_BASE}/person/{person}/movie_credits").mock(
-            return_value=httpx.Response(200, json={
-                "id": person,
-                "cast": [{"id": i, "title": m["title"], "release_date": f"{m['year']}-06-01",
-                          "poster_path": None, "genre_ids": [], "original_language": "en",
-                          "popularity": 100 - i, "character": f"Role {person}"}
-                         for i, m in universe.items() if person in m["cast"]],
-                "crew": [],
-            }))
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": person,
+                    "cast": [
+                        {
+                            "id": i,
+                            "title": m["title"],
+                            "release_date": f"{m['year']}-06-01",
+                            "poster_path": None,
+                            "genre_ids": [],
+                            "original_language": "en",
+                            "popularity": 100 - i,
+                            "character": f"Role {person}",
+                        }
+                        for i, m in universe.items()
+                        if person in m["cast"]
+                    ],
+                    "crew": [],
+                },
+            )
+        )
 
 
 def create_run(client, game_type, expect=201, **rules):
-    payload = {"allow_repeats": "strict", "no_consecutive_actor": False, "min_runtime": 0,
-               "wildcards_budget": 2, **rules}
-    resp = client.post("/api/runs", json={"name": "Run", "game_type": game_type, "rules_config": payload})
+    payload = {
+        "allow_repeats": "strict",
+        "no_consecutive_actor": False,
+        "min_runtime": 0,
+        "wildcards_budget": 2,
+        **rules,
+    }
+    resp = client.post(
+        "/api/runs", json={"name": "Run", "game_type": game_type, "rules_config": payload}
+    )
     assert resp.status_code == expect, resp.text
     return resp.json()["id"] if expect == 201 else resp
 
@@ -202,8 +253,7 @@ def test_chrono_direction_on_cinechain_keeps_the_cast_link(client):
 
 
 def test_modifiers_stack(client):
-    run_id = create_run(
-        client, "chrono_climb", runtime_staircase="ascending", country_cooldown=2)
+    run_id = create_run(client, "chrono_climb", runtime_staircase="ascending", country_cooldown=2)
     universe = {
         1: film("A", 1990, "US", 100),
         2: film("B", 1991, "US", 90),  # newer but shorter
@@ -238,14 +288,17 @@ def test_chrono_climb_keeps_its_legacy_direction_key(client):
 # --- validation ---
 
 
-@pytest.mark.parametrize("rules", [
-    {"chrono_direction": "sideways"},
-    {"runtime_staircase": "up"},
-    {"country_cooldown": -1},
-    {"country_cooldown": 99},
-    {"country_cooldown": "3"},
-    {"country_cooldown": True},
-])
+@pytest.mark.parametrize(
+    "rules",
+    [
+        {"chrono_direction": "sideways"},
+        {"runtime_staircase": "up"},
+        {"country_cooldown": -1},
+        {"country_cooldown": 99},
+        {"country_cooldown": "3"},
+        {"country_cooldown": True},
+    ],
+)
 def test_invalid_modifier_values_are_rejected(client, rules):
     resp = create_run(client, "cinechain", expect=422, **rules)
     assert any(key in resp.json()["detail"] for key in rules)
@@ -253,7 +306,12 @@ def test_invalid_modifier_values_are_rejected(client, rules):
 
 def test_null_modifiers_mean_unset(client):
     run_id = create_run(
-        client, "world_passport", chrono_direction=None, runtime_staircase=None, country_cooldown=None)
+        client,
+        "world_passport",
+        chrono_direction=None,
+        runtime_staircase=None,
+        country_cooldown=None,
+    )
     with respx.mock:
         mock_universe(COUNTRIES)
         log(client, run_id, 1)
@@ -273,5 +331,6 @@ def test_rules_patch_can_toggle_modifiers(client):
     assert patch.json()["rules_config"]["runtime_staircase"] == "ascending"
     cleared = client.patch(f"/api/runs/{run_id}/rules", json={"runtime_staircase": None})
     assert cleared.json()["rules_config"]["runtime_staircase"] is None
-    assert client.patch(
-        f"/api/runs/{run_id}/rules", json={"country_cooldown": 50}).status_code == 422
+    assert (
+        client.patch(f"/api/runs/{run_id}/rules", json={"country_cooldown": 50}).status_code == 422
+    )

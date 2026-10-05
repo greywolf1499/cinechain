@@ -76,8 +76,7 @@ class RunStep(SQLModel, table=True):
     movie_poster_path: str | None = None
     movie_release_year: int | None = None
     movie_origin_country: str | None = None
-    transition_metadata: dict[str, Any] | None = Field(
-        default=None, sa_column=Column(JSON))
+    transition_metadata: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     user_notes: str | None = None
     status: str = Field(default="watched", index=True)  # watched | planned
     watched_at: datetime | None = None  # null while planned

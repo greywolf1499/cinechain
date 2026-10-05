@@ -107,7 +107,8 @@ LOCAL_PRESETS: dict[str, LocalPreset] = {
             badge="[~24MB] High-Precision Retrieval",
             description=(
                 "Snowflake's retrieval-tuned model: the sharpest plot matching for its size. "
-                "English-first."),
+                "English-first."
+            ),
             size_mb=24,
             model_url=_hf("Snowflake/snowflake-arctic-embed-xs", "onnx/model_int8.onnx"),
             tokenizer_url=_hf("Snowflake/snowflake-arctic-embed-xs", "tokenizer.json"),
@@ -123,7 +124,8 @@ LOCAL_PRESETS: dict[str, LocalPreset] = {
             badge="[~135MB] 100+ Languages",
             description=(
                 "The World Cinema preset: understands overviews in 100+ languages, so "
-                "non-English plots match properly. Bigger download."),
+                "non-English plots match properly. Bigger download."
+            ),
             size_mb=135,
             model_url=_hf("Xenova/multilingual-e5-small", "onnx/model_quantized.onnx"),
             tokenizer_url=_hf("Xenova/multilingual-e5-small", "tokenizer.json"),
@@ -150,6 +152,7 @@ DEFAULT_LOCAL_PRESET = "arctic-embed-xs"
 
 def get_preset(key: str | None) -> LocalPreset:
     return LOCAL_PRESETS.get(key or "", LOCAL_PRESETS[DEFAULT_LOCAL_PRESET])
+
 
 # One model in memory at a time, however many requests ask for embeddings.
 _inference_lock = threading.Lock()
@@ -216,16 +219,19 @@ def embed_texts(texts: list[str], preset: LocalPreset | None = None) -> list[np.
             tokenizer.enable_truncation(max_length=MAX_TOKENS)
             # pad to the longest text in the batch, with the tokenizer's own pad token
             pad_token = next(
-                (t for t in ("[PAD]", "<pad>") if tokenizer.token_to_id(t) is not None), "[PAD]")
+                (t for t in ("[PAD]", "<pad>") if tokenizer.token_to_id(t) is not None), "[PAD]"
+            )
             tokenizer.enable_padding(
-                pad_id=tokenizer.token_to_id(pad_token) or 0, pad_token=pad_token)
+                pad_id=tokenizer.token_to_id(pad_token) or 0, pad_token=pad_token
+            )
 
             options = ort.SessionOptions()
             options.intra_op_num_threads = 1
             options.enable_cpu_mem_arena = False
             options.enable_mem_pattern = False
             session = ort.InferenceSession(
-                str(model_path), sess_options=options, providers=["CPUExecutionProvider"])
+                str(model_path), sess_options=options, providers=["CPUExecutionProvider"]
+            )
 
             encodings = tokenizer.encode_batch([preset.text_prefix + text for text in texts])
             feeds = {
@@ -266,7 +272,8 @@ def normalize_similarity(cosine: float, fingerprint: str) -> float:
     """Cosine rescaled so a local preset's "unrelated" floor reads as 0 and identical as 1;
     other models (legacy MiniLM, Ollama, OpenAI) are used as they are."""
     floor = next(
-        (p.similarity_floor for p in LOCAL_PRESETS.values() if p.fingerprint == fingerprint), 0.0)
+        (p.similarity_floor for p in LOCAL_PRESETS.values() if p.fingerprint == fingerprint), 0.0
+    )
     if floor <= 0.0:
         return cosine
     return (cosine - floor) / (1.0 - floor)
@@ -336,7 +343,8 @@ def load_config(session: Session) -> EmbeddingConfig:
         api_key=overrides.get("embedding_api_key") or base.embedding_api_key,
         model=overrides.get("embedding_model") or base.embedding_model,
         local_preset=get_preset(
-            overrides.get("embedding_local_preset") or base.embedding_local_preset).key,
+            overrides.get("embedding_local_preset") or base.embedding_local_preset
+        ).key,
     )
 
 
@@ -370,7 +378,8 @@ async def _embed_ollama(config: EmbeddingConfig, texts: list[str]) -> list[np.nd
     async def one(client: httpx.AsyncClient, text: str) -> np.ndarray:
         async with gate:
             response = await client.post(
-                url, json={"model": config.effective_model, "prompt": text})
+                url, json={"model": config.effective_model, "prompt": text}
+            )
             response.raise_for_status()
             return _unit(response.json()["embedding"])
 
@@ -382,8 +391,10 @@ async def _embed_openai(config: EmbeddingConfig, texts: list[str]) -> list[np.nd
     headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
     async with httpx.AsyncClient(timeout=EXTERNAL_TIMEOUT_SECONDS) as client:
         response = await client.post(
-            openai_url(config), headers=headers,
-            json={"model": config.effective_model, "input": texts})
+            openai_url(config),
+            headers=headers,
+            json={"model": config.effective_model, "input": texts},
+        )
         response.raise_for_status()
         items = sorted(response.json()["data"], key=lambda item: item["index"])
     if len(items) != len(texts):
@@ -416,10 +427,12 @@ async def embed_external(config: EmbeddingConfig, texts: list[str]) -> list[np.n
     except httpx.HTTPStatusError as exc:
         raise EmbeddingUnavailable(
             f"{config.provider} embeddings failed (HTTP {exc.response.status_code}): "
-            f"{_error_text(exc.response)}") from exc
+            f"{_error_text(exc.response)}"
+        ) from exc
     except Exception as exc:  # a bad provider must never break a request
         raise EmbeddingUnavailable(
-            f"{config.provider} embeddings failed: {exc or type(exc).__name__}") from exc
+            f"{config.provider} embeddings failed: {exc or type(exc).__name__}"
+        ) from exc
 
 
 # External providers that just failed: fingerprint+URL -> monotonic time to retry after.
@@ -457,8 +470,12 @@ async def check_connection(config: EmbeddingConfig) -> dict:
     """Embeds a dummy sentence with `config` (no fallback, no suspension) for the Settings page:
     {ok, latency_ms, dimension, provider, model, detail}."""
     result: dict = {
-        "ok": False, "latency_ms": None, "dimension": None,
-        "provider": config.provider, "model": config.effective_model, "detail": None,
+        "ok": False,
+        "latency_ms": None,
+        "dimension": None,
+        "provider": config.provider,
+        "model": config.effective_model,
+        "detail": None,
     }
     started = time.perf_counter()
     try:
@@ -466,11 +483,14 @@ async def check_connection(config: EmbeddingConfig) -> dict:
             vectors = await embed_external(config, ["CineChain connection test"])
         else:
             vectors = await anyio.to_thread.run_sync(
-                embed_texts, ["CineChain connection test"], config.local)
+                embed_texts, ["CineChain connection test"], config.local
+            )
     except EmbeddingUnavailable as exc:
         result["detail"] = str(exc)
         return result
     result.update(
-        ok=True, latency_ms=round((time.perf_counter() - started) * 1000),
-        dimension=int(vectors[0].shape[0]))
+        ok=True,
+        latency_ms=round((time.perf_counter() - started) * 1000),
+        dimension=int(vectors[0].shape[0]),
+    )
     return result

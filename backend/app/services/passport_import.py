@@ -111,9 +111,13 @@ def validate_csv_header(path: Path) -> None:
         raise ValueError("The CSV file is empty.")
     names = {_norm_header(column) for column in header}
     if not names.intersection(_TITLE_HEADERS):
-        raise ValueError("The CSV needs a 'Name' (or 'Title') column - use the diary.csv from your Letterboxd export.")
+        raise ValueError(
+            "The CSV needs a 'Name' (or 'Title') column - use the diary.csv from your Letterboxd export."
+        )
     if not names.intersection(_WATCHED_HEADERS + _LOGGED_HEADERS):
-        raise ValueError("The CSV needs a 'Watched Date' (or 'Date') column - use the diary.csv from your Letterboxd export.")
+        raise ValueError(
+            "The CSV needs a 'Watched Date' (or 'Date') column - use the diary.csv from your Letterboxd export."
+        )
 
 
 def iter_csv_entries(path: Path) -> Iterator[DiaryEntry]:
@@ -124,7 +128,9 @@ def iter_csv_entries(path: Path) -> Iterator[DiaryEntry]:
             title = _pick(row, _TITLE_HEADERS)
             if not title:
                 continue
-            watched = parse_date(_pick(row, _WATCHED_HEADERS)) or parse_date(_pick(row, _LOGGED_HEADERS))
+            watched = parse_date(_pick(row, _WATCHED_HEADERS)) or parse_date(
+                _pick(row, _LOGGED_HEADERS)
+            )
             yield DiaryEntry(
                 title=title,
                 year=letterboxd.parse_year(_pick(row, _YEAR_HEADERS)),
@@ -164,7 +170,9 @@ def get_or_create_import_run(session: Session, user_id: str) -> Run:
     ).first()
     if run is not None:
         return run
-    run = Run(name=IMPORT_RUN_NAME, game_type=IMPORT_GAME_TYPE, status="completed", completed_at=utcnow())
+    run = Run(
+        name=IMPORT_RUN_NAME, game_type=IMPORT_GAME_TYPE, status="completed", completed_at=utcnow()
+    )
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -250,16 +258,25 @@ class DiaryImporter:
         async def resolve(entry: DiaryEntry) -> int | None:
             async with gate:
                 return await resolve_movie_id(
-                    self.tmdb, entry.title, entry.year, slug=entry.slug,
-                    on_pause=self._on_pause, per_call_seconds=PER_CALL_DEADLINE_SECONDS)
+                    self.tmdb,
+                    entry.title,
+                    entry.year,
+                    slug=entry.slug,
+                    on_pause=self._on_pause,
+                    per_call_seconds=PER_CALL_DEADLINE_SECONDS,
+                )
 
-        outcomes = await asyncio.gather(*(resolve(e) for e in pending.values()), return_exceptions=True)
+        outcomes = await asyncio.gather(
+            *(resolve(e) for e in pending.values()), return_exceptions=True
+        )
         for key, outcome in zip(pending, outcomes, strict=True):
             if isinstance(outcome, DeadlineReached):
                 self._failed_lookups[key] = "rate_limited"
                 continue
             if isinstance(outcome, TMDBError) and outcome.status_code in (401, 403):
-                raise ImportAborted("TMDB rejected the API key - check it under Settings > Integrations.")
+                raise ImportAborted(
+                    "TMDB rejected the API key - check it under Settings > Integrations."
+                )
             if isinstance(outcome, BaseException):
                 logger.warning("TMDB lookup failed for %s: %s", key, outcome)
                 self._failed_lookups[key] = "tmdb_error"
@@ -269,13 +286,18 @@ class DiaryImporter:
     async def _hydrate(self, session: Session, tmdb_id: int) -> Any | None:
         """Cached movie detail (+ directors, best effort) for `tmdb_id`."""
         movie = await fetch_with_backoff(
-            lambda: cache_repo.get_movie(session, self.tmdb, tmdb_id), self._deadline(), self._on_pause)
+            lambda: cache_repo.get_movie(session, self.tmdb, tmdb_id),
+            self._deadline(),
+            self._on_pause,
+        )
         if movie is None:
             return None
         try:
             await fetch_with_backoff(
                 lambda: cache_repo.get_movie_directors(session, self.tmdb, tmdb_id),
-                self._deadline(), self._on_pause)
+                self._deadline(),
+                self._on_pause,
+            )
         except (DeadlineReached, TMDBError):
             logger.info("Directors for %s will be backfilled later", tmdb_id)
         return movie
@@ -347,7 +369,9 @@ class DiaryImporter:
             return None
         except TMDBError as exc:
             if exc.status_code in (401, 403):
-                raise ImportAborted("TMDB rejected the API key - check it under Settings > Integrations.") from exc
+                raise ImportAborted(
+                    "TMDB rejected the API key - check it under Settings > Integrations."
+                ) from exc
             self._skip(entry, "tmdb_error")
             return None
         if movie is None:
@@ -374,7 +398,8 @@ class DiaryImporter:
         if self._stalls >= MAX_CONSECUTIVE_STALLS:
             raise ImportAborted(
                 "TMDB kept rate-limiting the import. Everything imported so far is saved - "
-                "run the import again later to continue.")
+                "run the import again later to continue."
+            )
 
 
 # ---------------------------------------------------------------- entrypoints

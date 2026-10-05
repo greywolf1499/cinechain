@@ -13,17 +13,33 @@ BLIND_FORK_KEY = "blind_fork"
 PENDING_FORK_KEY = "pending_fork"
 OFFER_SIZE = 3
 SERVER_OWNED_RULES = (
-    PENDING_FORK_KEY, "tug_scores", "tug_players", "tug_momentum", "tug_rules_version",
-    "tunnel_hints_remaining", "tunnel_distance", "tier_override", "lives_remaining",
+    PENDING_FORK_KEY,
+    "tug_scores",
+    "tug_players",
+    "tug_momentum",
+    "tug_rules_version",
+    "tunnel_hints_remaining",
+    "tunnel_distance",
+    "tier_override",
+    "lives_remaining",
     # Built by the March Madness / Method Actor / Auteur Marathon / Regional Deep Dive engines
     # when the run is created.
-    "bracket", "bracket_films", "actor", "filmography", "director", "expedition",
+    "bracket",
+    "bracket_films",
+    "actor",
+    "filmography",
+    "director",
+    "expedition",
     # Bounty Board state and Rotten Tomatoes Split scoreboard.
-    "active_bounties", "completed_bounties", "split_scores", "split_players",
+    "active_bounties",
+    "completed_bounties",
+    "split_scores",
+    "split_players",
     # The Chaos Button's one-step handicap is only ever rolled by the server.
     "active_chaos",
     # AI March Madness commentary and the Bounty Board's AI-generated bounty definitions.
-    "bracket_commentary", "custom_bounties",
+    "bracket_commentary",
+    "custom_bounties",
 )
 
 # `rules_config` keys the server derives; a client-supplied value would be a forged state
@@ -55,6 +71,7 @@ def new_offer(
         "offered_at": utcnow().isoformat(),
     }
     if links:
-        offer["links"] = {str(movie_id): meta for movie_id, meta in links.items()
-                          if movie_id in movie_ids}
+        offer["links"] = {
+            str(movie_id): meta for movie_id, meta in links.items() if movie_id in movie_ids
+        }
     return offer

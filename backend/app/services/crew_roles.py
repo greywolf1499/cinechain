@@ -12,8 +12,7 @@ ROLE_DIRECTOR = "director"
 
 # Most specific craft first: when one person fills several roles on a film and the two films
 # share none of them, this decides which role represents them.
-ROLE_PRIORITY = (
-    ROLE_DIRECTOR, ROLE_COMPOSER, ROLE_CINEMATOGRAPHER, ROLE_WRITER, ROLE_ACTOR)
+ROLE_PRIORITY = (ROLE_DIRECTOR, ROLE_COMPOSER, ROLE_CINEMATOGRAPHER, ROLE_WRITER, ROLE_ACTOR)
 
 # TMDB job -> (role, department)
 CRAFT_JOBS: dict[str, tuple[str, str]] = {

@@ -48,8 +48,7 @@ class SeerrClient:
 
     @property
     def _url(self) -> str:
-        url = self._overrides.get(
-            "seerr_url") or self._settings.seerr_url or DEFAULT_URL
+        url = self._overrides.get("seerr_url") or self._settings.seerr_url or DEFAULT_URL
         return url.rstrip("/")
 
     @property
@@ -71,7 +70,9 @@ class SeerrClient:
         return int(raw) if raw and raw.isdigit() else None
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        return await request_json(self._client, method, f"{self._url}{path}", self._api_key, **kwargs)
+        return await request_json(
+            self._client, method, f"{self._url}{path}", self._api_key, **kwargs
+        )
 
     async def check_health(self) -> dict:
         if not self.enabled:
@@ -84,8 +85,10 @@ class SeerrClient:
         return [
             SeerrUser(
                 id=u["id"],
-                display_name=u.get("displayName") or u.get(
-                    "username") or u.get("email") or str(u["id"]),
+                display_name=u.get("displayName")
+                or u.get("username")
+                or u.get("email")
+                or str(u["id"]),
                 email=u.get("email"),
             )
             for u in (data or {}).get("results", [])
@@ -104,11 +107,11 @@ class SeerrClient:
                 is_4k=bool(service.get("is4k")),
                 active_profile_id=service.get("activeProfileId"),
                 active_directory=service.get("activeDirectory"),
-                profiles=[QualityProfile(id=p["id"], name=p["name"])
-                          for p in info.get("profiles", [])],
+                profiles=[
+                    QualityProfile(id=p["id"], name=p["name"]) for p in info.get("profiles", [])
+                ],
                 root_folders=[
-                    RootFolder(id=f.get("id"),
-                               path=f["path"], free_space=f.get("freeSpace"))
+                    RootFolder(id=f.get("id"), path=f["path"], free_space=f.get("freeSpace"))
                     for f in info.get("rootFolders", [])
                 ],
             )

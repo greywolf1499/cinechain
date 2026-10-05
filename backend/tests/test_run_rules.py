@@ -34,11 +34,9 @@ def client(config_dir):
 def _register_and_login(client, username="alice"):
     client.post(
         "/api/auth/register",
-        json={"username": username, "password": "password123",
-              "display_name": username.title()},
+        json={"username": username, "password": "password123", "display_name": username.title()},
     )
-    client.post("/api/auth/login",
-                json={"username": username, "password": "password123"})
+    client.post("/api/auth/login", json={"username": username, "password": "password123"})
 
 
 def _mock_movie(tmdb_id: int, title: str, runtime: int = 100, release_date: str = "1999-03-30"):
@@ -88,25 +86,21 @@ def test_run_defaults_to_standard_rules(client):
 
 def test_strict_repeat_rejected_without_force(client):
     _register_and_login(client)
-    run_id = _create_run(
-        client, {"allow_repeats": "strict", "wildcards_budget": 2})
+    run_id = _create_run(client, {"allow_repeats": "strict", "wildcards_budget": 2})
     with respx.mock:
         _mock_movie(603, "The Matrix")
         _mock_credits(603, [])
-        first = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 603})
+        first = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
         assert first.status_code == 201
 
-        again = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 603})
+        again = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
         assert again.status_code == 409
         assert "already watched" in again.json()["detail"]["reason"].lower()
 
 
 def test_penalty_repeat_flags_metadata_instead_of_rejecting(client):
     _register_and_login(client)
-    run_id = _create_run(
-        client, {"allow_repeats": "penalty", "wildcards_budget": 2})
+    run_id = _create_run(client, {"allow_repeats": "penalty", "wildcards_budget": 2})
     with respx.mock:
         _mock_movie(603, "The Matrix")
         # Non-empty cast: a movie always shares its own cast with itself, so
@@ -114,8 +108,7 @@ def test_penalty_repeat_flags_metadata_instead_of_rejecting(client):
         # (under test here) is exercised.
         _mock_credits(603, [_cast_member(100, "Keanu Reeves")])
         client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
-        again = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 603})
+        again = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603})
 
     assert again.status_code == 201
     assert again.json()["transition_metadata"]["repeat_penalty"] is True
@@ -123,22 +116,19 @@ def test_penalty_repeat_flags_metadata_instead_of_rejecting(client):
 
 def test_no_consecutive_actor_rule_rejects_same_connector_twice(client):
     _register_and_login(client)
-    run_id = _create_run(
-        client, {"no_consecutive_actor": True, "wildcards_budget": 2})
+    run_id = _create_run(client, {"no_consecutive_actor": True, "wildcards_budget": 2})
     with respx.mock:
         _mock_movie(1, "Movie A")
         _mock_movie(2, "Movie B")
         _mock_movie(3, "Movie C")
         _mock_credits(1, [_cast_member(100, "Actor X")])
-        _mock_credits(2, [_cast_member(100, "Actor X"),
-                      _cast_member(200, "Actor Y")])
+        _mock_credits(2, [_cast_member(100, "Actor X"), _cast_member(200, "Actor Y")])
         _mock_credits(3, [_cast_member(100, "Actor X")])
 
         client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 1})
         step2 = client.post(
             f"/api/runs/{run_id}/steps",
-            json={"movie_id": 2, "transition_metadata": {
-                "actor_id": 100, "actor_name": "Actor X"}},
+            json={"movie_id": 2, "transition_metadata": {"actor_id": 100, "actor_name": "Actor X"}},
         )
         assert step2.status_code == 201
 
@@ -146,8 +136,7 @@ def test_no_consecutive_actor_rule_rejects_same_connector_twice(client):
         # used to connect movie 1 -> movie 2, which is disallowed back-to-back.
         step3 = client.post(
             f"/api/runs/{run_id}/steps",
-            json={"movie_id": 3, "transition_metadata": {
-                "actor_id": 100, "actor_name": "Actor X"}},
+            json={"movie_id": 3, "transition_metadata": {"actor_id": 100, "actor_name": "Actor X"}},
         )
         assert step3.status_code == 409
         assert "consecutive" in step3.json()["detail"]["reason"].lower()
@@ -173,18 +162,14 @@ def test_force_spends_wildcard_budget_and_runs_out(client):
         _mock_credits(50, [])
         _mock_credits(51, [])
 
-        first = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 50, "force": True}
-        )
+        first = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 50, "force": True})
         assert first.status_code == 201
         assert first.json()["transition_metadata"]["wildcard_used"] is True
 
         run = client.get(f"/api/runs/{run_id}").json()
         assert run["rules_config"]["wildcards_budget"] == 0
 
-        second = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 51, "force": True}
-        )
+        second = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 51, "force": True})
         assert second.status_code == 409
         assert "wildcard" in second.json()["detail"]["reason"].lower()
 
@@ -194,8 +179,7 @@ def test_unlimited_wildcards_never_exhausted(client):
     run_id = _create_run(client, {"min_runtime": 40, "wildcards_budget": -1})
     with respx.mock:
         _mock_movie(50, "Short Film", runtime=20)
-        resp = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 50, "force": True})
+        resp = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 50, "force": True})
 
     assert resp.status_code == 201
     run = client.get(f"/api/runs/{run_id}").json()
@@ -207,9 +191,7 @@ def test_planned_step_has_null_watched_at(client):
     run_id = _create_run(client)
     with respx.mock:
         _mock_movie(603, "The Matrix")
-        resp = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 603, "status": "planned"}
-        )
+        resp = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603, "status": "planned"})
 
     assert resp.status_code == 201
     body = resp.json()
@@ -239,8 +221,7 @@ def test_mark_watched_promotes_planned_step(client):
 
     resp = client.patch(
         f"/api/runs/{run_id}/steps/{step['id']}/mark-watched",
-        json={"watched_at": "2026-01-15T00:00:00",
-              "user_notes": "Finally watched it!"},
+        json={"watched_at": "2026-01-15T00:00:00", "user_notes": "Finally watched it!"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -254,9 +235,7 @@ def test_mark_watched_rejects_already_watched_step(client):
     run_id = _create_run(client)
     with respx.mock:
         _mock_movie(603, "The Matrix")
-        step = client.post(
-            f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
+        step = client.post(f"/api/runs/{run_id}/steps", json={"movie_id": 603}).json()
 
-    resp = client.patch(
-        f"/api/runs/{run_id}/steps/{step['id']}/mark-watched", json={})
+    resp = client.patch(f"/api/runs/{run_id}/steps/{step['id']}/mark-watched", json={})
     assert resp.status_code == 409

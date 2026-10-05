@@ -119,7 +119,9 @@ def _rating_of(movie: CachedMovie, imdb: CachedMovieRating | None) -> float | No
     return movie.vote_average if movie.vote_average else None
 
 
-async def _load_movies(session: Session, tmdb: TMDBClient, ids: list[int]) -> dict[int, CachedMovie]:
+async def _load_movies(
+    session: Session, tmdb: TMDBClient, ids: list[int]
+) -> dict[int, CachedMovie]:
     """Every id from the cache, fetching what is missing (or cached without a runtime)."""
     movies: dict[int, CachedMovie] = {}
     for movie_id in ids:
@@ -130,7 +132,8 @@ async def _load_movies(session: Session, tmdb: TMDBClient, ids: list[int]) -> di
             elif cached.runtime is None:
                 try:
                     movies[movie_id] = await cache_repo.get_movie(
-                        session, tmdb, movie_id, refresh=True)
+                        session, tmdb, movie_id, refresh=True
+                    )
                 except TMDBError:
                     session.rollback()
                     movies[movie_id] = cached  # unknown runtime just scores as neutral
@@ -138,27 +141,37 @@ async def _load_movies(session: Session, tmdb: TMDBClient, ids: list[int]) -> di
                 movies[movie_id] = cached
         except TMDBNotFoundError as exc:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Film {movie_id} not found") from exc
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Film {movie_id} not found"
+            ) from exc
         except TMDBError as exc:
             logger.warning("Marathon router couldn't load film %s", movie_id, exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Couldn't load film {movie_id} from TMDB: {exc}") from exc
+                detail=f"Couldn't load film {movie_id} from TMDB: {exc}",
+            ) from exc
     return movies
 
 
-def _router_films(session: Session, movies: dict[int, CachedMovie], ids: list[int]) -> list[mr.RouterFilm]:
+def _router_films(
+    session: Session, movies: dict[int, CachedMovie], ids: list[int]
+) -> list[mr.RouterFilm]:
     ratings = {
-        r.movie_id: r for r in session.exec(
-            select(CachedMovieRating).where(col(CachedMovieRating.movie_id).in_(ids))).all()}
+        r.movie_id: r
+        for r in session.exec(
+            select(CachedMovieRating).where(col(CachedMovieRating.movie_id).in_(ids))
+        ).all()
+    }
     return [
         mr.RouterFilm(
-            movie_id=movie_id, title=movies[movie_id].title,
+            movie_id=movie_id,
+            title=movies[movie_id].title,
             genres=tuple(movies[movie_id].genre_ids or ()),
             year=parse_release_year(movies[movie_id].release_date),
             runtime=movies[movie_id].runtime or None,
-            rating=_rating_of(movies[movie_id], ratings.get(movie_id)))
-        for movie_id in ids]
+            rating=_rating_of(movies[movie_id], ratings.get(movie_id)),
+        )
+        for movie_id in ids
+    ]
 
 
 def _genre_names(session: Session) -> dict[int, str]:
@@ -176,11 +189,13 @@ async def optimize_marathon(
     if len(payload.movie_ids) < 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Add at least 2 movies to optimize a marathon order")
+            detail="Add at least 2 movies to optimize a marathon order",
+        )
     if len(payload.movie_ids) < mr.MIN_FILMS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"The router needs at least {mr.MIN_FILMS} films to find a smoother order")
+            detail=f"The router needs at least {mr.MIN_FILMS} films to find a smoother order",
+        )
     defaults = mr.Weights()
     try:
         weights = mr.Weights(
@@ -191,7 +206,8 @@ async def optimize_marathon(
         ).normalised()
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
 
     movies = await _load_movies(session, tmdb, payload.movie_ids)
     films = _router_films(session, movies, payload.movie_ids)
@@ -209,25 +225,42 @@ async def optimize_marathon(
         improvement_percentage=result.improvement_percentage,
         transitions=[
             TransitionOut(
-                from_movie_id=t.from_movie_id, to_movie_id=t.to_movie_id, cost=t.cost,
-                label=t.label, summary=t.summary,
+                from_movie_id=t.from_movie_id,
+                to_movie_id=t.to_movie_id,
+                cost=t.cost,
+                label=t.label,
+                summary=t.summary,
                 deltas=DeltasOut(
-                    genre=round(t.deltas.genre, 3), year=round(t.deltas.year, 3),
-                    runtime=round(t.deltas.runtime, 3), rating=round(t.deltas.rating, 3)))
-            for t in result.transitions],
+                    genre=round(t.deltas.genre, 3),
+                    year=round(t.deltas.year, 3),
+                    runtime=round(t.deltas.runtime, 3),
+                    rating=round(t.deltas.rating, 3),
+                ),
+            )
+            for t in result.transitions
+        ],
         films=[
             RouterFilmOut(
-                movie_id=movie_id, title=by_id[movie_id].title, year=by_id[movie_id].year,
-                poster_path=movies[movie_id].poster_path, overview=movies[movie_id].overview,
-                runtime=by_id[movie_id].runtime, rating=by_id[movie_id].rating,
-                genres=[names[g] for g in by_id[movie_id].genres if g in names])
-            for movie_id in result.ordered_movie_ids],
+                movie_id=movie_id,
+                title=by_id[movie_id].title,
+                year=by_id[movie_id].year,
+                poster_path=movies[movie_id].poster_path,
+                overview=movies[movie_id].overview,
+                runtime=by_id[movie_id].runtime,
+                rating=by_id[movie_id].rating,
+                genres=[names[g] for g in by_id[movie_id].genres if g in names],
+            )
+            for movie_id in result.ordered_movie_ids
+        ],
         method=result.method,
         weights=WeightsOut(
-            weight_genre=round(result.weights.genre, 4), weight_year=round(result.weights.year, 4),
+            weight_genre=round(result.weights.genre, 4),
+            weight_year=round(result.weights.year, 4),
             weight_runtime=round(result.weights.runtime, 4),
-            weight_rating=round(result.weights.rating, 4)),
-        calculation_ms=round(elapsed_ms, 1))
+            weight_rating=round(result.weights.rating, 4),
+        ),
+        calculation_ms=round(elapsed_ms, 1),
+    )
 
 
 @router.post("/convert-to-run", response_model=RunDetail, status_code=status.HTTP_201_CREATED)
@@ -243,7 +276,8 @@ async def convert_to_run(
     transitions = mr.build_transitions(films, mr.Weights(), _genre_names(session))
 
     run = Run(
-        name=payload.run_name, game_type=ROUTER_GAME_TYPE, rules_config=dict(DEFAULT_RULES_CONFIG))
+        name=payload.run_name, game_type=ROUTER_GAME_TYPE, rules_config=dict(DEFAULT_RULES_CONFIG)
+    )
     session.add(run)
     session.flush()
     session.add(RunParticipant(run_id=run.id, user_id=current_user.id, role="owner"))
@@ -253,12 +287,18 @@ async def convert_to_run(
         if index > 0:
             hop = transitions[index - 1]
             metadata = {ROUTER_METADATA_KEY: {"whiplash": hop.cost, "label": hop.label}}
-        session.add(RunStep(
-            run_id=run.id, logged_by_user_id=current_user.id, status="planned", watched_at=None,
-            transition_metadata=metadata,
-            # Distinct, ordered timestamps: runs read their steps back by `logged_at`.
-            logged_at=base + timedelta(milliseconds=index),
-            **_step_fields_from_movie(movies[movie_id])))
+        session.add(
+            RunStep(
+                run_id=run.id,
+                logged_by_user_id=current_user.id,
+                status="planned",
+                watched_at=None,
+                transition_metadata=metadata,
+                # Distinct, ordered timestamps: runs read their steps back by `logged_at`.
+                logged_at=base + timedelta(milliseconds=index),
+                **_step_fields_from_movie(movies[movie_id]),
+            )
+        )
     session.commit()
     session.refresh(run)
     return _to_run_detail(session, run)

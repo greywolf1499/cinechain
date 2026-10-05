@@ -16,8 +16,7 @@ from app.schemas.integrations import JellyfinItemSummary
 
 
 class MediaServerClient(Protocol):
-    async def lookup_movies(
-        self, tmdb_ids: list[int]) -> dict[int, JellyfinItemSummary]: ...
+    async def lookup_movies(self, tmdb_ids: list[int]) -> dict[int, JellyfinItemSummary]: ...
 
     async def check_health(self) -> dict: ...
 
@@ -56,7 +55,8 @@ async def request_json(
     """One authenticated call; returns parsed JSON (None for an empty body)."""
     try:
         response = await client.request(
-            method, url, headers={"X-Api-Key": api_key}, timeout=10.0, **kwargs)
+            method, url, headers={"X-Api-Key": api_key}, timeout=10.0, **kwargs
+        )
     except httpx.HTTPError as exc:
         raise IntegrationError(f"Service unreachable: {exc}", 502) from exc
 
@@ -66,8 +66,7 @@ async def request_json(
         try:
             return response.json()
         except ValueError as exc:
-            raise IntegrationError(
-                "Service returned a non-JSON response", 502) from exc
+            raise IntegrationError("Service returned a non-JSON response", 502) from exc
 
     detail = _error_detail(response)
     if response.status_code in (401, 403):

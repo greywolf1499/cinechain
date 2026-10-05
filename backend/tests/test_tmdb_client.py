@@ -14,8 +14,7 @@ async def test_retries_on_429_then_succeeds():
         route = respx.get(f"{TMDB_BASE}/movie/1").mock(
             side_effect=[
                 httpx.Response(429, headers={"Retry-After": "0"}, json={}),
-                httpx.Response(
-                    200, json={"id": 1, "title": "Retried Movie", "genres": []}),
+                httpx.Response(200, json={"id": 1, "title": "Retried Movie", "genres": []}),
             ]
         )
         async with httpx.AsyncClient() as client:
@@ -29,8 +28,7 @@ async def test_retries_on_429_then_succeeds():
 async def test_gives_up_after_exhausting_retries():
     with respx.mock:
         route = respx.get(f"{TMDB_BASE}/movie/2").mock(
-            return_value=httpx.Response(
-                500, headers={"Retry-After": "0"}, json={})
+            return_value=httpx.Response(500, headers={"Retry-After": "0"}, json={})
         )
         async with httpx.AsyncClient() as client:
             tmdb = TMDBClient(client, max_retries=3)
@@ -45,7 +43,8 @@ async def test_requests_are_paced_by_global_rate_limit():
 
     with respx.mock:
         respx.get(f"{TMDB_BASE}/movie/3").mock(
-            return_value=httpx.Response(200, json={"id": 3, "title": "T", "genres": []}))
+            return_value=httpx.Response(200, json={"id": 3, "title": "T", "genres": []})
+        )
         async with httpx.AsyncClient() as client:
             tmdb = TMDBClient(client, max_requests_per_second=50.0)
             start = time.monotonic()
@@ -61,7 +60,8 @@ async def test_persistent_429_raises_rate_limit_error_with_retry_after():
 
     with respx.mock:
         respx.get(f"{TMDB_BASE}/movie/4").mock(
-            return_value=httpx.Response(429, headers={"Retry-After": "0"}, json={}))
+            return_value=httpx.Response(429, headers={"Retry-After": "0"}, json={})
+        )
         async with httpx.AsyncClient() as client:
             tmdb = TMDBClient(client, max_retries=2)
             with pytest.raises(TMDBRateLimitError) as excinfo:
@@ -72,8 +72,18 @@ async def test_persistent_429_raises_rate_limit_error_with_retry_after():
 
 async def test_get_movie_extracts_overview_and_tagline():
     with respx.mock:
-        respx.get(f"{TMDB_BASE}/movie/5").mock(return_value=httpx.Response(
-            200, json={"id": 5, "title": "T", "overview": "A plot.", "tagline": "Hook line", "genres": []}))
+        respx.get(f"{TMDB_BASE}/movie/5").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 5,
+                    "title": "T",
+                    "overview": "A plot.",
+                    "tagline": "Hook line",
+                    "genres": [],
+                },
+            )
+        )
         async with httpx.AsyncClient() as client:
             movie = await TMDBClient(client).get_movie(5)
 

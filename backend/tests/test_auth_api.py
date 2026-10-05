@@ -37,8 +37,7 @@ def client(config_dir):
 def _register(client, username="alice", password="password123", display_name="Alice"):
     return client.post(
         "/api/auth/register",
-        json={"username": username, "password": password,
-              "display_name": display_name},
+        json={"username": username, "password": password, "display_name": display_name},
     )
 
 
@@ -195,8 +194,11 @@ def test_me_renews_an_aging_session_cookie(client):
     _register(client)
     user_id = _login(client).json()["id"]
     old = int(time.time()) - 8 * 24 * 3600
-    stale = jwt.encode({"sub": user_id, "iat": old, "exp": old + 30 * 24 * 3600},
-                       _get_secret_key(get_settings()), algorithm="HS256")
+    stale = jwt.encode(
+        {"sub": user_id, "iat": old, "exp": old + 30 * 24 * 3600},
+        _get_secret_key(get_settings()),
+        algorithm="HS256",
+    )
     client.cookies.clear()
 
     resp = client.get("/api/auth/me", headers={"Cookie": f"cinechain_session={stale}"})

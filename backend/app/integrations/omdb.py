@@ -43,8 +43,7 @@ class OMDbClient:
         endpoint, so this is always a single request per movie."""
         if not self.enabled or not title:
             return None
-        params: dict[str, str] = {
-            "apikey": self._api_key, "t": title, "type": "movie"}
+        params: dict[str, str] = {"apikey": self._api_key, "t": title, "type": "movie"}
         if year:
             params["y"] = str(year)
         try:

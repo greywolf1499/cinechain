@@ -32,8 +32,10 @@ def needs_chaser(runtime: int | None, genre_ids: Sequence[int] | None) -> bool:
 def is_chaser(runtime: int | None, genre_ids: Sequence[int] | None) -> bool:
     """Quick and lighthearted: at most 95 minutes and Comedy or Animation. Unknown never qualifies."""
     return (
-        bool(runtime) and runtime <= CHASER_MAX_RUNTIME  # type: ignore[operator]
-        and bool(CHASER_GENRES & set(genre_ids or ())))
+        bool(runtime)
+        and runtime <= CHASER_MAX_RUNTIME  # type: ignore[operator]
+        and bool(CHASER_GENRES & set(genre_ids or ()))
+    )
 
 
 def is_underdog(popularity: float | None) -> bool:
@@ -41,8 +43,12 @@ def is_underdog(popularity: float | None) -> bool:
 
 
 async def shape_pool(
-    session: Session, tmdb: TMDBClient, movie_ids: Sequence[int], *,
-    chaser: bool = False, sort_by: str | None = None,
+    session: Session,
+    tmdb: TMDBClient,
+    movie_ids: Sequence[int],
+    *,
+    chaser: bool = False,
+    sort_by: str | None = None,
 ) -> list[int]:
     """`movie_ids` narrowed and ordered for the options: `chaser` keeps only palate cleansers
     (fetching the runtime of lighthearted films whose detail isn't cached), `sort_by="underdog"`
@@ -53,8 +59,10 @@ async def shape_pool(
     if sort_by == UNDERDOG:
         rows = {i: session.get(CachedMovie, i) for i in ids}
         ranked = [
-            (rows[i].popularity, rows[i].title, i) for i in ids
-            if rows[i] is not None and is_underdog(rows[i].popularity)]
+            (rows[i].popularity, rows[i].title, i)
+            for i in ids
+            if rows[i] is not None and is_underdog(rows[i].popularity)
+        ]
         ids = [i for _, _, i in sorted(ranked)]
     return ids
 
@@ -70,9 +78,15 @@ async def _chasers(session: Session, tmdb: TMDBClient, ids: list[int]) -> list[i
         if row.runtime is None and budget > 0:
             budget -= 1
             try:
-                row = await fetch_with_backoff(
-                    lambda movie_id=movie_id: cache_repo.get_movie(
-                        session, tmdb, movie_id, refresh=True), deadline) or row
+                row = (
+                    await fetch_with_backoff(
+                        lambda movie_id=movie_id: cache_repo.get_movie(
+                            session, tmdb, movie_id, refresh=True
+                        ),
+                        deadline,
+                    )
+                    or row
+                )
             except DeadlineReached:
                 budget = 0
             except TMDBError:

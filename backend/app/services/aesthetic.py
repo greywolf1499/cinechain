@@ -31,7 +31,7 @@ def extract_dominant_color(image_bytes: bytes) -> str | None:
     if not counts:
         return None
     _, index = max(counts)
-    red, green, blue = palette[index * 3: index * 3 + 3]
+    red, green, blue = palette[index * 3 : index * 3 + 3]
     return f"#{red:02x}{green:02x}{blue:02x}"
 
 

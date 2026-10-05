@@ -75,8 +75,7 @@ async def test_movie_and_cast_cached_after_first_fetch_zero_http_on_repeat(confi
             cast = await cache_repo.get_movie_cast(session, tmdb, 603)
             assert movie_route.call_count == 1
             assert credits_route.call_count == 1
-            assert [c["name"] for c in cast] == [
-                "Keanu Reeves", "Laurence Fishburne"]
+            assert [c["name"] for c in cast] == ["Keanu Reeves", "Laurence Fishburne"]
 
             # Second round: fully cached, must not touch the network.
             movie_again = await cache_repo.get_movie(session, tmdb, 603)
@@ -85,8 +84,7 @@ async def test_movie_and_cast_cached_after_first_fetch_zero_http_on_repeat(confi
         assert movie_route.call_count == 1
         assert credits_route.call_count == 1
         assert movie_again.title == "The Matrix"
-        assert [c["name"] for c in cast_again] == [
-            "Keanu Reeves", "Laurence Fishburne"]
+        assert [c["name"] for c in cast_again] == ["Keanu Reeves", "Laurence Fishburne"]
 
 
 async def test_obscure_regional_movie_ingested_without_filtering(config_dir):
@@ -142,7 +140,8 @@ async def test_require_detail_hydrates_cached_movie_stub(config_dir):
 
         async with httpx.AsyncClient() as client:
             movie = await cache_repo.get_movie(
-                session, TMDBClient(client), 603, require_detail=True)
+                session, TMDBClient(client), 603, require_detail=True
+            )
 
     assert movie.title == "The Matrix"
     assert json.loads(movie.origin_country) == ["US"]
@@ -160,7 +159,8 @@ async def test_require_detail_uses_cached_stub_when_tmdb_fails(config_dir):
 
         async with httpx.AsyncClient() as client:
             movie = await cache_repo.get_movie(
-                session, TMDBClient(client), 603, require_detail=True)
+                session, TMDBClient(client), 603, require_detail=True
+            )
 
     assert movie.title == "Matrix stub"
     assert movie.origin_country is None

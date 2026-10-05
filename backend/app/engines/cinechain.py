@@ -74,7 +74,8 @@ def compute_run_stats(steps: list[RunStep]) -> RunStats:
 
 def cast_credits(cast: Sequence[dict]) -> list[CastCredit]:
     return [
-        CastCredit(m["actor_id"], m["name"], m["character_name"], m["cast_order"]) for m in cast]
+        CastCredit(m["actor_id"], m["name"], m["character_name"], m["cast_order"]) for m in cast
+    ]
 
 
 class CineChainEngine(BaseChallengeEngine):
@@ -98,34 +99,43 @@ class CineChainEngine(BaseChallengeEngine):
     # A Character Hop (same character, different actors) is a valid link on its own.
     character_hop_links: ClassVar[bool] = True
 
-    def link_metadata(
-        self, result: ValidationResult, client_metadata: dict | None
-    ) -> dict | None:
+    def link_metadata(self, result: ValidationResult, client_metadata: dict | None) -> dict | None:
         meta = super().link_metadata(result, client_metadata)
         hop = next((c for c in result.connections if c.kind == "character"), None)
         if hop is not None and meta is not None and meta.get("actor_id") is None:
             # A character hop with nothing claimed by the client: record who played the character.
             meta.update(
-                actor_id=hop.actor_id, actor_name=hop.actor_name,
-                character_in_from=hop.character_in_from, character_in_to=hop.character_in_to)
+                actor_id=hop.actor_id,
+                actor_name=hop.actor_name,
+                character_in_from=hop.character_in_from,
+                character_in_to=hop.character_in_to,
+            )
         return meta
 
     async def golden_reunion(
-        self, from_movie_id: int, to_movie_id: int,
-        cast_from: Sequence[CastCredit], cast_to: Sequence[CastCredit],
+        self,
+        from_movie_id: int,
+        to_movie_id: int,
+        cast_from: Sequence[CastCredit],
+        cast_to: Sequence[CastCredit],
     ) -> dict | None:
         """The earlier film's director and one of its top-5 actors back together on the later
         film. A failed TMDB lookup just means no bonus - it never blocks a step."""
         try:
             directors_from = await cache_repo.get_movie_directors(
-                self.session, self.tmdb, from_movie_id)
+                self.session, self.tmdb, from_movie_id
+            )
             directors_to = await cache_repo.get_movie_directors(
-                self.session, self.tmdb, to_movie_id)
+                self.session, self.tmdb, to_movie_id
+            )
         except (TMDBError, httpx.HTTPError):
             return None
         return find_golden_reunion(
-            [Person(d.person_id, d.name) for d in directors_from], cast_from,
-            [Person(d.person_id, d.name) for d in directors_to], cast_to)
+            [Person(d.person_id, d.name) for d in directors_from],
+            cast_from,
+            [Person(d.person_id, d.name) for d in directors_to],
+            cast_to,
+        )
 
     async def validate_primary(
         self,
@@ -140,7 +150,9 @@ class CineChainEngine(BaseChallengeEngine):
         # Casual preset's 25) won't retroactively discover more billed actors
         # without a fresh TMDB fetch - this only affects the *effective* depth
         # considered, never causes an error.
-        from_cast = await cache_repo.get_movie_cast(self.session, self.tmdb, from_movie_id, cast_limit)
+        from_cast = await cache_repo.get_movie_cast(
+            self.session, self.tmdb, from_movie_id, cast_limit
+        )
         to_cast = await cache_repo.get_movie_cast(self.session, self.tmdb, to_movie_id, cast_limit)
         to_cast_by_actor = {member["actor_id"]: member for member in to_cast}
 
@@ -150,8 +162,7 @@ class CineChainEngine(BaseChallengeEngine):
                 actor_name=member["name"],
                 profile_path=member["profile_path"],
                 character_in_from=member["character_name"],
-                character_in_to=to_cast_by_actor[member["actor_id"]
-                                                 ]["character_name"],
+                character_in_to=to_cast_by_actor[member["actor_id"]]["character_name"],
             )
             for member in from_cast
             if member["actor_id"] in to_cast_by_actor
@@ -163,7 +174,8 @@ class CineChainEngine(BaseChallengeEngine):
         linked = bool(connections) or (hop is not None and self.character_hop_links)
         if not linked:
             return ValidationResult(
-                valid=False, reason="No shared credited cast found", connections=[])
+                valid=False, reason="No shared credited cast found", connections=[]
+            )
 
         mechanic: dict = {}
         if hop is not None:
@@ -172,11 +184,15 @@ class CineChainEngine(BaseChallengeEngine):
         if reunion is not None:
             mechanic[GOLDEN_REUNION_KEY] = reunion
         if not connections and hop is not None:
-            connections = [SharedActorConnection(
-                kind="character", actor_id=hop.actor_to.person_id,
-                actor_name=f"{hop.actor_from.name} \u2192 {hop.actor_to.name}",
-                character_in_from=hop.actor_from.character,
-                character_in_to=hop.actor_to.character)]
+            connections = [
+                SharedActorConnection(
+                    kind="character",
+                    actor_id=hop.actor_to.person_id,
+                    actor_name=f"{hop.actor_from.name} \u2192 {hop.actor_to.name}",
+                    character_in_from=hop.actor_from.character,
+                    character_in_to=hop.actor_to.character,
+                )
+            ]
         return ValidationResult(valid=True, connections=connections, mechanic=mechanic or None)
 
     async def get_suggestions(
@@ -266,8 +282,7 @@ class CineChainEngine(BaseChallengeEngine):
                         actor_id=member["actor_id"],
                         actor_name=member["name"],
                         profile_path=member["profile_path"],
-                        character_in_frontier=frontier_character_by_actor.get(
-                            member["actor_id"]),
+                        character_in_frontier=frontier_character_by_actor.get(member["actor_id"]),
                         character_in_candidate=cast_entry["character_name"] if cast_entry else None,
                     )
                 )

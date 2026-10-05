@@ -51,8 +51,19 @@ CACHE_TTL_SECONDS = 86400 * 7  # 7 days
 # a stale checkpoint would resume a list that has since changed
 CHECKPOINT_TTL_SECONDS = 86400
 MONTHS = {
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
 }
 
 # Director credits memo keyed by TMDB movie id, shared for the process lifetime.
@@ -91,7 +102,7 @@ CF_SIGNATURES = [
     "cf-mitigated",
 ]
 
-USERNAME_RE = re.compile(r'[A-Za-z0-9_]{1,40}')
+USERNAME_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 
 # Tier 0 curator accounts tracked out of the box; HQ discovery can add more.
 SEED_ACCOUNTS: list[dict[str, str]] = [
@@ -114,17 +125,18 @@ class WatchlistNotFound(Exception):
         self.username = username
         super().__init__(
             f"Letterboxd watchlist for '{username}' was not found. The account may be "
-            "private, renamed or deleted.")
+            "private, renamed or deleted."
+        )
 
 
 ProgressCallback = Callable[[dict[str, Any]], None] | None
 
 
-def report_progress(callback: ProgressCallback, stage: str, current: int | None,
-                    total: int | None, message: str) -> None:
+def report_progress(
+    callback: ProgressCallback, stage: str, current: int | None, total: int | None, message: str
+) -> None:
     if callback is not None:
-        callback({"stage": stage, "current": current,
-                 "total": total, "message": message})
+        callback({"stage": stage, "current": current, "total": total, "message": message})
 
 
 # ---------------------------------------------------------
@@ -154,7 +166,7 @@ def node_classes(node: Tag | None) -> list[str]:
 def rating_from_classes(node: Tag | None) -> float | None:
     """Letterboxd encodes stars as `rated-N` where N is out of 10."""
     for cls in node_classes(node):
-        match = re.match(r'^rated-(\d{1,2})$', cls)
+        match = re.match(r"^rated-(\d{1,2})$", cls)
         if match:
             return int(match.group(1)) / 2.0
     return None
@@ -163,7 +175,7 @@ def rating_from_classes(node: Tag | None) -> float | None:
 def parse_year(value: str | None) -> int | None:
     if not value:
         return None
-    match = re.search(r'\b((?:18|19|20)\d{2})\b', value)
+    match = re.search(r"\b((?:18|19|20)\d{2})\b", value)
     return int(match.group(1)) if match else None
 
 
@@ -174,7 +186,7 @@ def parse_id(value: str | None) -> int | None:
 
 
 def year_from_slug(slug: str) -> int | None:
-    match = re.search(r'-((?:18|19|20)\d{2})$', slug.strip('/'))
+    match = re.search(r"-((?:18|19|20)\d{2})$", slug.strip("/"))
     if not match:
         return None
     year = int(match.group(1))
@@ -185,31 +197,30 @@ def normalize_slug(raw: str | None) -> str | None:
     if not raw:
         return None
     slug = str(raw).strip()
-    slug = re.sub(r'^https?://[^/]+', '', slug)
-    slug = slug.replace('/film/', '').strip('/')
-    slug = slug.split('/')[0]
+    slug = re.sub(r"^https?://[^/]+", "", slug)
+    slug = slug.replace("/film/", "").strip("/")
+    slug = slug.split("/")[0]
     return slug or None
 
 
 def clean_title_str(title: str) -> str:
-    ascii_title = unicodedata.normalize('NFKD', title).encode(
-        'ASCII', 'ignore').decode('utf-8')
-    return ascii_title.replace('"', '').replace("'", "").strip()
+    ascii_title = unicodedata.normalize("NFKD", title).encode("ASCII", "ignore").decode("utf-8")
+    return ascii_title.replace('"', "").replace("'", "").strip()
 
 
 def build_paginated_url(base_url: str, page_num: int, detail_mode: bool = False) -> str:
     """Canonical Letterboxd pagination (trailing slash always present).
 
-      detail:    /{path}/detail/  ->  /{path}/page/2/detail/
-      standard:  /{path}/         ->  /{path}/page/2/
+    detail:    /{path}/detail/  ->  /{path}/page/2/detail/
+    standard:  /{path}/         ->  /{path}/page/2/
     """
     parsed = urlparse(base_url)
-    path = re.sub(r'/{2,}', '/', parsed.path).strip('/')
-    path = re.sub(r'/page/\d+', '', path)
-    had_detail = path == 'detail' or path.endswith('/detail')
+    path = re.sub(r"/{2,}", "/", parsed.path).strip("/")
+    path = re.sub(r"/page/\d+", "", path)
+    had_detail = path == "detail" or path.endswith("/detail")
     if had_detail:
-        path = re.sub(r'/?detail$', '', path)
-    path = path.strip('/')
+        path = re.sub(r"/?detail$", "", path)
+    path = path.strip("/")
 
     segments = [path] if path else []
     if page_num > 1:
@@ -218,10 +229,18 @@ def build_paginated_url(base_url: str, page_num: int, detail_mode: bool = False)
         segments.append("detail")
 
     final_path = "/" + "/".join(s for s in segments if s)
-    if not final_path.endswith('/'):
-        final_path += '/'
-    return urlunparse((parsed.scheme or "https", parsed.netloc or "letterboxd.com",
-                       final_path, parsed.params, parsed.query, parsed.fragment))
+    if not final_path.endswith("/"):
+        final_path += "/"
+    return urlunparse(
+        (
+            parsed.scheme or "https",
+            parsed.netloc or "letterboxd.com",
+            final_path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
 
 
 # ---------------------------------------------------------
@@ -232,15 +251,21 @@ def extract_poster(container: Tag) -> Tag | None:
         return container
     found = container.select_one(
         ".film-poster[data-film-slug], [data-film-slug], [data-item-slug], "
-        "[data-film-link], [data-item-link], [data-target-link]")
+        "[data-film-link], [data-item-link], [data-target-link]"
+    )
     return found if isinstance(found, Tag) else None
 
 
 def slug_from_poster(poster: Tag | None) -> str | None:
     if poster is None:
         return None
-    for attr in ("data-film-slug", "data-item-slug", "data-film-link",
-                 "data-item-link", "data-target-link"):
+    for attr in (
+        "data-film-slug",
+        "data-item-slug",
+        "data-film-link",
+        "data-item-link",
+        "data-target-link",
+    ):
         slug = normalize_slug(attr_str(poster, attr))
         if slug:
             return slug
@@ -260,16 +285,15 @@ def title_year_from_img(poster: Tag | None, slug: str) -> tuple[str, int | None]
         if not candidate:
             continue
         raw = raw or candidate.strip()
-        match = re.match(
-            r'^(.*)\s+\(((?:18|19|20)\d{2})\)$', candidate.strip())
+        match = re.match(r"^(.*)\s+\(((?:18|19|20)\d{2})\)$", candidate.strip())
         if match:
             return match.group(1).strip(), int(match.group(2))
 
     slug_year = year_from_slug(slug)
     if raw:
         return raw, slug_year
-    bare = re.sub(r'-(?:18|19|20)\d{2}$', '', slug) if slug_year else slug
-    return bare.replace('-', ' ').title(), slug_year
+    bare = re.sub(r"-(?:18|19|20)\d{2}$", "", slug) if slug_year else slug
+    return bare.replace("-", " ").title(), slug_year
 
 
 def parse_detail_entries(soup: BeautifulSoup) -> list[dict[str, Any]]:
@@ -286,29 +310,33 @@ def parse_detail_entries(soup: BeautifulSoup) -> list[dict[str, Any]]:
             continue
         seen.add(slug)
 
-        headline = container.select_one(
-            ".headline-2 a, h2.primaryname a, h2 a")
+        headline = container.select_one(".headline-2 a, h2.primaryname a, h2 a")
         title = headline.get_text(strip=True) if headline else None
 
-        year_tag = container.select_one(
-            ".headline-2 small, h2 small, .releasedate a, .releasedate")
+        year_tag = container.select_one(".headline-2 small, h2 small, .releasedate a, .releasedate")
         year = parse_year(year_tag.get_text(strip=True)) if year_tag else None
 
         alt_title, alt_year = title_year_from_img(poster, slug)
         title = title or alt_title
         year = year or alt_year or year_from_slug(slug)
 
-        directors = [d.get_text(strip=True) for d in container.select(
-            ".film-detail-content p a[href*='/director/'], "
-            ".credits a[href*='/director/'], a[href*='/director/']")]
+        directors = [
+            d.get_text(strip=True)
+            for d in container.select(
+                ".film-detail-content p a[href*='/director/'], "
+                ".credits a[href*='/director/'], a[href*='/director/']"
+            )
+        ]
 
-        entries.append({
-            "title": title,
-            "year": year,
-            "slug": slug,
-            "directors": directors,
-            "tmdb_id": parse_id(attr_str(poster, "data-tmdb-id")),
-        })
+        entries.append(
+            {
+                "title": title,
+                "year": year,
+                "slug": slug,
+                "directors": directors,
+                "tmdb_id": parse_id(attr_str(poster, "data-tmdb-id")),
+            }
+        )
 
     return entries
 
@@ -328,20 +356,24 @@ def parse_grid_entries(soup: BeautifulSoup) -> list[dict[str, Any]]:
         seen.add(slug)
 
         title, year = title_year_from_img(poster, slug)
-        entries.append({
-            "title": title,
-            "year": year,
-            "slug": slug,
-            "directors": [],
-            "tmdb_id": parse_id(attr_str(poster, "data-tmdb-id")),
-        })
+        entries.append(
+            {
+                "title": title,
+                "year": year,
+                "slug": slug,
+                "directors": [],
+                "tmdb_id": parse_id(attr_str(poster, "data-tmdb-id")),
+            }
+        )
 
     return entries
 
 
 def has_next_page(soup: BeautifulSoup) -> bool:
-    return soup.select_one(
-        "div.paginate-pages a.next, a.next, a.paginate-next, .pagination a.next") is not None
+    return (
+        soup.select_one("div.paginate-pages a.next, a.next, a.paginate-next, .pagination a.next")
+        is not None
+    )
 
 
 # ---------------------------------------------------------
@@ -353,13 +385,17 @@ def tmdb_auth(api_key: str) -> tuple[dict[str, str], dict[str, str]]:
     return {}, {"api_key": api_key}
 
 
-def tmdb_get(client: curl_requests.Session, url: str, params: dict[str, Any],
-             headers: dict[str, str], max_retries: int = 3) -> dict[str, Any] | None:
+def tmdb_get(
+    client: curl_requests.Session,
+    url: str,
+    params: dict[str, Any],
+    headers: dict[str, str],
+    max_retries: int = 3,
+) -> dict[str, Any] | None:
     """Single TMDB call with 429 backoff. Returns None instead of raising."""
     for attempt in range(max_retries):
         try:
-            resp = client.get(url, params=params,
-                              headers=headers, timeout=10.0)
+            resp = client.get(url, params=params, headers=headers, timeout=10.0)
             if resp.status_code == 429:
                 time.sleep(1)
                 continue
@@ -378,23 +414,32 @@ def fetch_tmdb_directors(client: curl_requests.Session, tmdb_id: int, api_key: s
         return _tmdb_director_cache[tmdb_id]
     headers, base_params = tmdb_auth(api_key)
     data = tmdb_get(
-        client, f"https://api.themoviedb.org/3/movie/{tmdb_id}/credits", dict(base_params), headers)
-    directors = [c.get("name", "") for c in (data or {}).get("crew", [])
-                 if c.get("job") == "Director"]
+        client, f"https://api.themoviedb.org/3/movie/{tmdb_id}/credits", dict(base_params), headers
+    )
+    directors = [
+        c.get("name", "") for c in (data or {}).get("crew", []) if c.get("job") == "Director"
+    ]
     if data is not None:  # don't memoize transient failures
         _tmdb_director_cache[tmdb_id] = directors
     return directors
 
 
-def tmdb_search(client: curl_requests.Session, query: str, headers: dict[str, str],
-                base_params: dict[str, str], year: int | None = None) -> list[dict[str, Any]]:
+def tmdb_search(
+    client: curl_requests.Session,
+    query: str,
+    headers: dict[str, str],
+    base_params: dict[str, str],
+    year: int | None = None,
+) -> list[dict[str, Any]]:
     params: dict[str, Any] = {
-        **base_params, "query": query, "include_adult": "false", "language": "en-US",
+        **base_params,
+        "query": query,
+        "include_adult": "false",
+        "language": "en-US",
     }
     if year:
         params["primary_release_year"] = year
-    data = tmdb_get(
-        client, "https://api.themoviedb.org/3/search/movie", params, headers)
+    data = tmdb_get(client, "https://api.themoviedb.org/3/search/movie", params, headers)
     return data.get("results", []) if data else []
 
 
@@ -423,7 +468,8 @@ def rank_candidates(
             continue
         cand_year = parse_year(str(cand.get("release_date") or "")[:4])
         ratio = difflib.SequenceMatcher(
-            None, clean_q.lower(), clean_title_str(cand_title).lower()).ratio()
+            None, clean_q.lower(), clean_title_str(cand_title).lower()
+        ).ratio()
         if ratio < MIN_TITLE_MATCH_RATIO:
             continue
         if year and cand_year and abs(cand_year - year) > 2:
@@ -445,15 +491,19 @@ def slug_search_query(slug: str | None, clean_q: str) -> str | None:
     None when it would just repeat the title search."""
     if not slug:
         return None
-    cleaned_slug = slug.strip('/').split('/')[-1]
-    cleaned_slug = re.sub(r'-(?:18|19|20)\d{2}$', '', cleaned_slug)
-    slug_query = cleaned_slug.replace('-', ' ').strip()
+    cleaned_slug = slug.strip("/").split("/")[-1]
+    cleaned_slug = re.sub(r"-(?:18|19|20)\d{2}$", "", cleaned_slug)
+    slug_query = cleaned_slug.replace("-", " ").strip()
     return slug_query if slug_query and slug_query.lower() != clean_q.lower() else None
 
 
 def resolve_tmdb_multipass(
-    client: curl_requests.Session, title: str, year: int | None, directors: list[str],
-    api_key: str, slug: str | None = None,
+    client: curl_requests.Session,
+    title: str,
+    year: int | None,
+    directors: list[str],
+    api_key: str,
+    slug: str | None = None,
 ) -> dict[str, Any] | None:
     """Multi-pass resolution: exact year -> near year -> title-only fuzzy ->
     slug fallback (handles international/non-Latin titles). Returns the
@@ -471,15 +521,17 @@ def resolve_tmdb_multipass(
             for cand in candidates:
                 for cand_director in fetch_tmdb_directors(client, cand["id"], api_key):
                     for target in directors:
-                        if difflib.SequenceMatcher(
-                            None, target.lower(), cand_director.lower()
-                        ).ratio() > 0.8:
+                        if (
+                            difflib.SequenceMatcher(
+                                None, target.lower(), cand_director.lower()
+                            ).ratio()
+                            > 0.8
+                        ):
                             return cand
         return candidates[0]
 
     for search_year in search_year_order(year):
-        match = best_candidate(tmdb_search(
-            client, clean_q, headers, base_params, search_year))
+        match = best_candidate(tmdb_search(client, clean_q, headers, base_params, search_year))
         if match:
             return _match_fields(match)
 
@@ -489,9 +541,8 @@ def resolve_tmdb_multipass(
 
     slug_query = slug_search_query(slug, clean_q)
     if slug_query:
-        slug_results = (
-            tmdb_search(client, slug_query, headers, base_params, year)
-            or tmdb_search(client, slug_query, headers, base_params)
+        slug_results = tmdb_search(client, slug_query, headers, base_params, year) or tmdb_search(
+            client, slug_query, headers, base_params
         )
         match = best_candidate(slug_results)
         if match:
@@ -514,7 +565,8 @@ def cache_dir() -> Path:
 def new_session() -> curl_requests.Session:
     # Letterboxd 302s slash-less / differently-cased URLs to the canonical one.
     session = curl_requests.Session(
-        impersonate=IMPERSONATE_PROFILE, timeout=15.0, allow_redirects=True, max_redirects=5)
+        impersonate=IMPERSONATE_PROFILE, timeout=15.0, allow_redirects=True, max_redirects=5
+    )
     session.headers.update(BROWSER_HEADERS)
     return session
 
@@ -526,27 +578,43 @@ def polite_delay(is_deep_mode: bool = False, progress_callback: ProgressCallback
 
     chance = random.random()
     if chance < 0.015:
-        report_progress(progress_callback, "stealth_break", None, None,
-                        "Macro-break: pausing 20-45s to avoid bot detection")
+        report_progress(
+            progress_callback,
+            "stealth_break",
+            None,
+            None,
+            "Macro-break: pausing 20-45s to avoid bot detection",
+        )
         time.sleep(random.uniform(20.0, 45.0))
     elif chance < 0.095:
-        report_progress(progress_callback, "stealth_break", None, None,
-                        "Micro-break: pausing 6-12s to avoid bot detection")
+        report_progress(
+            progress_callback,
+            "stealth_break",
+            None,
+            None,
+            "Micro-break: pausing 6-12s to avoid bot detection",
+        )
         time.sleep(random.uniform(6.0, 12.0))
 
 
-def fetch_html(client: curl_requests.Session, url: str, no_cache: bool = False,
-               max_retries: int = 4, is_deep_mode: bool = False,
-               progress_callback: ProgressCallback = None) -> str:
-    cache_path = cache_dir() / \
-        f"{hashlib.md5(url.encode('utf-8')).hexdigest()}.html"
+def fetch_html(
+    client: curl_requests.Session,
+    url: str,
+    no_cache: bool = False,
+    max_retries: int = 4,
+    is_deep_mode: bool = False,
+    progress_callback: ProgressCallback = None,
+) -> str:
+    cache_path = cache_dir() / f"{hashlib.md5(url.encode('utf-8')).hexdigest()}.html"
 
-    if not no_cache and cache_path.exists() and time.time() - cache_path.stat().st_mtime < CACHE_TTL_SECONDS:
+    if (
+        not no_cache
+        and cache_path.exists()
+        and time.time() - cache_path.stat().st_mtime < CACHE_TTL_SECONDS
+    ):
         html_content = cache_path.read_text(encoding="utf-8")
         # never trust a poisoned (challenge-page) cache entry
-        if "Letterboxd" in html_content and not any(
-            sig in html_content for sig in CF_SIGNATURES
-        ):
+        if "Letterboxd" in html_content and not any(sig in html_content for sig in CF_SIGNATURES):
             return html_content
 
     polite_delay(is_deep_mode, progress_callback)
@@ -559,11 +627,15 @@ def fetch_html(client: curl_requests.Session, url: str, no_cache: bool = False,
                 raise CloudflareBlock(f"Cloudflare challenge active on: {url}")
 
             if response.status_code in (429, 503):
-                base_wait = int(response.headers.get(
-                    "Retry-After", 2 ** (attempt + 2)))
+                base_wait = int(response.headers.get("Retry-After", 2 ** (attempt + 2)))
                 wait_time = min(base_wait + random.uniform(1.0, 5.0), 60.0)
-                report_progress(progress_callback, "rate_limited", None, None,
-                                f"Rate limited ({response.status_code}); backing off {wait_time:.0f}s")
+                report_progress(
+                    progress_callback,
+                    "rate_limited",
+                    None,
+                    None,
+                    f"Rate limited ({response.status_code}); backing off {wait_time:.0f}s",
+                )
                 time.sleep(wait_time)
                 continue
 
@@ -577,10 +649,9 @@ def fetch_html(client: curl_requests.Session, url: str, no_cache: bool = False,
         except curl_requests.exceptions.RequestException:
             if attempt == max_retries - 1:
                 raise
-            time.sleep((2 ** attempt) + random.uniform(0.5, 2.0))
+            time.sleep((2**attempt) + random.uniform(0.5, 2.0))
 
-    raise CloudflareBlock(
-        f"Exhausted {max_retries} attempts (persistently rate limited) on: {url}")
+    raise CloudflareBlock(f"Exhausted {max_retries} attempts (persistently rate limited) on: {url}")
 
 
 def is_not_found(exc: Exception) -> bool:
@@ -590,8 +661,7 @@ def is_not_found(exc: Exception) -> bool:
 
 def dump_debug_html(html: str, page_num: int) -> None:
     """Keeps the raw page of an unexpectedly empty result for selector debugging."""
-    (cache_dir() /
-     f"debug_html_dump_page_{page_num}.html").write_text(html, encoding="utf-8")
+    (cache_dir() / f"debug_html_dump_page_{page_num}.html").write_text(html, encoding="utf-8")
 
 
 # ---------------------------------------------------------
@@ -657,8 +727,9 @@ class CheckpointManager:
         self.current_page = current_page
         tmp_path = self.filepath.with_suffix(".json.tmp")
         tmp_path.write_text(
-            json.dumps({"current_page": current_page, "items": self.items},
-                       indent=2, ensure_ascii=False),
+            json.dumps(
+                {"current_page": current_page, "items": self.items}, indent=2, ensure_ascii=False
+            ),
             encoding="utf-8",
         )
         os.replace(tmp_path, self.filepath)
@@ -672,20 +743,27 @@ class CheckpointManager:
 # Deep metadata (individual film page)
 # ---------------------------------------------------------
 def _imdb_id_from(text: str | None) -> str | None:
-    match = re.search(r'imdb\.com/title/(tt\d+)', text or "", re.IGNORECASE)
+    match = re.search(r"imdb\.com/title/(tt\d+)", text or "", re.IGNORECASE)
     return match.group(1) if match else None
 
 
 def extract_deep_metadata(
-    client: curl_requests.Session, slug: str, no_cache: bool, api_key: str | None = None,
+    client: curl_requests.Session,
+    slug: str,
+    no_cache: bool,
+    api_key: str | None = None,
     progress_callback: ProgressCallback = None,
 ) -> dict[str, Any]:
     """Fetches the film's own page for TMDB/IMDb ids and the Letterboxd rating."""
-    meta: dict[str, Any] = {"tmdb_id": None,
-                            "tmdb_type": None, "imdb_id": None}
+    meta: dict[str, Any] = {"tmdb_id": None, "tmdb_type": None, "imdb_id": None}
     try:
-        html = fetch_html(client, f"{BASE_URL}/film/{slug}/", no_cache=no_cache,
-                          is_deep_mode=True, progress_callback=progress_callback)
+        html = fetch_html(
+            client,
+            f"{BASE_URL}/film/{slug}/",
+            no_cache=no_cache,
+            is_deep_mode=True,
+            progress_callback=progress_callback,
+        )
         soup = BeautifulSoup(html, "html.parser")
 
         body = soup.find("body")
@@ -696,10 +774,10 @@ def extract_deep_metadata(
             meta["tmdb_type"] = attr_str(body_tag, "data-tmdb-type") or "movie"
 
         if not meta["tmdb_id"]:
-            tmdb_link = soup.select_one(
-                'a[data-track-action="TMDb"], a[href*="themoviedb.org/"]')
-            match = re.search(r'themoviedb\.org/(movie|tv)/(\d+)',
-                              attr_str(tmdb_link, "href") or "")
+            tmdb_link = soup.select_one('a[data-track-action="TMDb"], a[href*="themoviedb.org/"]')
+            match = re.search(
+                r"themoviedb\.org/(movie|tv)/(\d+)", attr_str(tmdb_link, "href") or ""
+            )
             if match:
                 meta["tmdb_type"] = match.group(1)
                 meta["tmdb_id"] = int(match.group(2))
@@ -708,8 +786,7 @@ def extract_deep_metadata(
         script = soup.find("script", type="application/ld+json")
         if isinstance(script, Tag) and script.string:
             try:
-                raw_ld = json.loads(
-                    re.sub(r'/\*.*?\*/', '', script.string, flags=re.DOTALL))
+                raw_ld = json.loads(re.sub(r"/\*.*?\*/", "", script.string, flags=re.DOTALL))
                 ld = raw_ld[0] if isinstance(raw_ld, list) else raw_ld
                 rating = ld.get("aggregateRating", {}).get("ratingValue")
                 if rating is not None:
@@ -717,8 +794,7 @@ def extract_deep_metadata(
             except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
                 ld = None
 
-        link = soup.select_one(
-            'a[data-track-action="IMDb"], a[href*="imdb.com/title/"]')
+        link = soup.select_one('a[data-track-action="IMDb"], a[href*="imdb.com/title/"]')
         meta["imdb_id"] = _imdb_id_from(attr_str(link, "href"))
         if meta["imdb_id"] is None and ld is not None:
             for value in ld.get("sameAs", []):
@@ -731,27 +807,37 @@ def extract_deep_metadata(
         if meta["imdb_id"] is None and meta["tmdb_id"] is not None and api_key:
             headers, params = tmdb_auth(api_key)
             external = tmdb_get(
-                client, f"https://api.themoviedb.org/3/movie/{meta['tmdb_id']}/external_ids",
-                params, headers)
+                client,
+                f"https://api.themoviedb.org/3/movie/{meta['tmdb_id']}/external_ids",
+                params,
+                headers,
+            )
             if external and external.get("imdb_id"):
                 meta["imdb_id"] = external["imdb_id"]
     except CloudflareBlock:
         raise
     except Exception:
-        logger.warning("Deep metadata fetch failed for %s",
-                       slug, exc_info=True)
+        logger.warning("Deep metadata fetch failed for %s", slug, exc_info=True)
     return meta
 
 
 def enrich_entry(
-    client: curl_requests.Session, entry: dict[str, Any], is_deep: bool,
-    tmdb_api_key: str | None, no_cache: bool, progress_callback: ProgressCallback = None,
+    client: curl_requests.Session,
+    entry: dict[str, Any],
+    is_deep: bool,
+    tmdb_api_key: str | None,
+    no_cache: bool,
+    progress_callback: ProgressCallback = None,
 ) -> None:
     """Resolves the TMDB id (inline attribute, deep page, or multi-pass search) in place."""
     if is_deep:
         meta = extract_deep_metadata(
-            client, entry["slug"], no_cache=no_cache, api_key=tmdb_api_key,
-            progress_callback=progress_callback)
+            client,
+            entry["slug"],
+            no_cache=no_cache,
+            api_key=tmdb_api_key,
+            progress_callback=progress_callback,
+        )
         entry.update({k: v for k, v in meta.items() if v is not None})
         return
 
@@ -761,9 +847,13 @@ def enrich_entry(
 
     if tmdb_api_key:
         match = resolve_tmdb_multipass(
-            client, str(entry.get("title")
-                        or entry["slug"]), entry.get("year"),
-            entry.get("directors", []), tmdb_api_key, entry.get("slug"))
+            client,
+            str(entry.get("title") or entry["slug"]),
+            entry.get("year"),
+            entry.get("directors", []),
+            tmdb_api_key,
+            entry.get("slug"),
+        )
         if match:
             entry.update({k: v for k, v in match.items() if v is not None})
         else:
@@ -772,23 +862,33 @@ def enrich_entry(
 
 def _detect_total_films(soup: BeautifulSoup) -> int | None:
     candidates = [
-        *soup.select('span.footnote, span.value, small.value'),
+        *soup.select("span.footnote, span.value, small.value"),
         *soup.select('meta[property="og:description"]'),
     ]
     for candidate in candidates:
-        text = candidate.get(
-            'content') if candidate.name == 'meta' else candidate.get_text(' ', strip=True)
-        match = re.search(r'([\d,]+)\s*(?:films?|movies?)',
-                          str(text), re.IGNORECASE)
+        text = (
+            candidate.get("content")
+            if candidate.name == "meta"
+            else candidate.get_text(" ", strip=True)
+        )
+        match = re.search(r"([\d,]+)\s*(?:films?|movies?)", str(text), re.IGNORECASE)
         if match:
-            return int(match.group(1).replace(',', ''))
+            return int(match.group(1).replace(",", ""))
     return None
 
 
 def _scrape_paginated(
-    base_url: str, *, mode: str, detail_mode: bool, parse_page: Callable[[BeautifulSoup], list[dict[str, Any]]],
-    is_deep: bool, tmdb_api_key: str | None, max_pages: int | None, no_cache: bool,
-    progress_callback: ProgressCallback, ranked_output: bool,
+    base_url: str,
+    *,
+    mode: str,
+    detail_mode: bool,
+    parse_page: Callable[[BeautifulSoup], list[dict[str, Any]]],
+    is_deep: bool,
+    tmdb_api_key: str | None,
+    max_pages: int | None,
+    no_cache: bool,
+    progress_callback: ProgressCallback,
+    ranked_output: bool,
 ) -> dict[str, Any]:
     """Shared fetch -> parse -> enrich -> checkpoint loop (lists, watchlists, diary).
 
@@ -802,8 +902,13 @@ def _scrape_paginated(
     total_pages: int | None = None
 
     if checkpoint.resumed:
-        report_progress(progress_callback, "resume", len(checkpoint.items), None,
-                        f"Resuming from page {page_num} ({len(checkpoint.items)} films already captured)")
+        report_progress(
+            progress_callback,
+            "resume",
+            len(checkpoint.items),
+            None,
+            f"Resuming from page {page_num} ({len(checkpoint.items)} films already captured)",
+        )
 
     with new_session() as client:
         try:
@@ -811,14 +916,19 @@ def _scrape_paginated(
                 if max_pages and page_num > max_pages:
                     break
 
-                page_url = build_paginated_url(
-                    base_url, page_num, detail_mode=detail_mode)
-                report_progress(progress_callback, "fetch_page", page_num, total_pages,
-                                f"Fetching page {page_num}: {page_url}")
+                page_url = build_paginated_url(base_url, page_num, detail_mode=detail_mode)
+                report_progress(
+                    progress_callback,
+                    "fetch_page",
+                    page_num,
+                    total_pages,
+                    f"Fetching page {page_num}: {page_url}",
+                )
 
                 try:
-                    html = fetch_html(client, page_url, no_cache=no_cache,
-                                      progress_callback=progress_callback)
+                    html = fetch_html(
+                        client, page_url, no_cache=no_cache, progress_callback=progress_callback
+                    )
                 except curl_requests.exceptions.HTTPError as exc:
                     if is_not_found(exc) and (page_num > 1 or checkpoint.items):
                         break  # end of pagination
@@ -827,12 +937,14 @@ def _scrape_paginated(
                 soup = BeautifulSoup(html, "html.parser")
                 if page_num == 1 or (checkpoint.resumed and total_films is None):
                     total_films = _detect_total_films(soup)
-                    total_pages = math.ceil(
-                        total_films / 100) if total_films else None
+                    total_pages = math.ceil(total_films / 100) if total_films else None
                 if page_num == 1:
-                    is_ranked = bool(soup.select_one(
-                        ".list-number, span[class*=list-number], .list-numbering, "
-                        ".listitem .list-number"))
+                    is_ranked = bool(
+                        soup.select_one(
+                            ".list-number, span[class*=list-number], .list-numbering, "
+                            ".listitem .list-number"
+                        )
+                    )
 
                 page_entries = parse_page(soup)
                 if not page_entries:
@@ -843,13 +955,24 @@ def _scrape_paginated(
                     if checkpoint.has(entry):
                         continue
                     entry.setdefault("directors", [])
-                    enrich_entry(client, entry, is_deep, tmdb_api_key, no_cache,
-                                 progress_callback=progress_callback)
+                    enrich_entry(
+                        client,
+                        entry,
+                        is_deep,
+                        tmdb_api_key,
+                        no_cache,
+                        progress_callback=progress_callback,
+                    )
                     checkpoint.upsert(entry)
 
                 checkpoint.save(page_num)
-                report_progress(progress_callback, "page_done", len(checkpoint.items), total_films,
-                                f"Processed page {page_num} ({len(checkpoint.items)} films so far)")
+                report_progress(
+                    progress_callback,
+                    "page_done",
+                    len(checkpoint.items),
+                    total_films,
+                    f"Processed page {page_num} ({len(checkpoint.items)} films so far)",
+                )
 
                 if not has_next_page(soup):
                     break
@@ -857,8 +980,13 @@ def _scrape_paginated(
                 checkpoint.save(page_num)
         except Exception:
             checkpoint.save(page_num)
-            report_progress(progress_callback, "aborted", len(checkpoint.items), total_films,
-                            "Scrape aborted; progress checkpointed and will resume on the next sync")
+            report_progress(
+                progress_callback,
+                "aborted",
+                len(checkpoint.items),
+                total_films,
+                "Scrape aborted; progress checkpointed and will resume on the next sync",
+            )
             raise
 
     films = checkpoint.items
@@ -878,8 +1006,12 @@ def _scrape_paginated(
 
 
 def scrape_letterboxd_list(
-    url: str, tmdb_api_key: str | None = None, max_pages: int | None = None,
-    no_cache: bool = False, progress_callback: ProgressCallback = None, deep: bool = False,
+    url: str,
+    tmdb_api_key: str | None = None,
+    max_pages: int | None = None,
+    no_cache: bool = False,
+    progress_callback: ProgressCallback = None,
+    deep: bool = False,
 ) -> dict[str, Any]:
     """Scrape a Letterboxd list/watchlist. Uses the `/detail/` view (inline
     title/year/director, far fewer requests) unless `deep` is set, which instead
@@ -887,36 +1019,53 @@ def scrape_letterboxd_list(
     path = urlparse(url).path
     # Only user lists have the inline `/detail/` view; watchlists 404 on it and
     # are scraped from the plain poster grid.
-    detail_mode = '/list/' in path and not deep
+    detail_mode = "/list/" in path and not deep
 
     def parse_page(soup: BeautifulSoup) -> list[dict[str, Any]]:
         entries = parse_detail_entries(soup) if detail_mode else []
         return entries or parse_grid_entries(soup)
 
     return _scrape_paginated(
-        url, mode="list", detail_mode=detail_mode, parse_page=parse_page, is_deep=deep,
-        tmdb_api_key=tmdb_api_key, max_pages=max_pages, no_cache=no_cache,
-        progress_callback=progress_callback, ranked_output=True)
+        url,
+        mode="list",
+        detail_mode=detail_mode,
+        parse_page=parse_page,
+        is_deep=deep,
+        tmdb_api_key=tmdb_api_key,
+        max_pages=max_pages,
+        no_cache=no_cache,
+        progress_callback=progress_callback,
+        ranked_output=True,
+    )
 
 
 def clean_username(username: str) -> str:
     """Letterboxd usernames are interpolated into URL paths, so reject anything else."""
-    cleaned = username.strip().strip('/')
+    cleaned = username.strip().strip("/")
     if not USERNAME_RE.fullmatch(cleaned):
         raise ValueError(f"Invalid Letterboxd username: {username!r}")
     return cleaned
 
 
 def scrape_letterboxd_watchlist(
-    username: str, tmdb_api_key: str | None = None, max_pages: int | None = None,
-    no_cache: bool = False, progress_callback: ProgressCallback = None, deep: bool = False,
+    username: str,
+    tmdb_api_key: str | None = None,
+    max_pages: int | None = None,
+    no_cache: bool = False,
+    progress_callback: ProgressCallback = None,
+    deep: bool = False,
 ) -> dict[str, Any]:
     username = clean_username(username)
     url = f"{BASE_URL}/{username}/watchlist/"
     try:
-        return scrape_letterboxd_list(url, tmdb_api_key=tmdb_api_key, max_pages=max_pages,
-                                      no_cache=no_cache, progress_callback=progress_callback,
-                                      deep=deep)
+        return scrape_letterboxd_list(
+            url,
+            tmdb_api_key=tmdb_api_key,
+            max_pages=max_pages,
+            no_cache=no_cache,
+            progress_callback=progress_callback,
+            deep=deep,
+        )
     except curl_requests.exceptions.HTTPError as exc:
         if is_not_found(exc):
             raise WatchlistNotFound(username) from exc
@@ -933,15 +1082,14 @@ def parse_diary_header(node: Tag) -> tuple[int | None, int | None]:
 
     month = None
     month_match = re.search(
-        r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b',
-        text, re.IGNORECASE)
+        r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b", text, re.IGNORECASE
+    )
     if month_match:
         month = MONTHS.get(month_match.group(1).lower())
 
     # `/for/YYYY/MM/` links are authoritative when present
     for candidate in node.select("a[href*='/for/']"):
-        match = re.search(r'/for/(\d{4})(?:/(\d{1,2}))?',
-                          attr_str(candidate, "href") or "")
+        match = re.search(r"/for/(\d{4})(?:/(\d{1,2}))?", attr_str(candidate, "href") or "")
         if match:
             year = int(match.group(1))
             if match.group(2):
@@ -951,13 +1099,14 @@ def parse_diary_header(node: Tag) -> tuple[int | None, int | None]:
 
 
 def diary_date_for_row(
-    row: Tag, current_year: int | None, current_month: int | None,
+    row: Tag,
+    current_year: int | None,
+    current_month: int | None,
 ) -> tuple[str | None, int | None, int | None]:
     """ISO `YYYY-MM-DD` for a diary row, preferring its own `/for/Y/M/D/` link
     and falling back to the tracked month/year header state."""
     # the month/year cell is only populated on the first row of each month
-    calendar = row.select_one(
-        "td.col-monthdate, div.monthdate, td.td-calendar, div.date")
+    calendar = row.select_one("td.col-monthdate, div.monthdate, td.td-calendar, div.date")
     if isinstance(calendar, Tag):
         head_year, head_month = parse_diary_header(calendar)
         current_year = head_year or current_year
@@ -965,19 +1114,19 @@ def diary_date_for_row(
 
     day_cell = row.select_one("td.col-daydate, td.td-day")
     link = day_cell.select_one("a") if isinstance(day_cell, Tag) else None
-    full = re.search(r'/for/(\d{4})/(\d{1,2})/(\d{1,2})',
-                     attr_str(link, "href") or "")
+    full = re.search(r"/for/(\d{4})/(\d{1,2})/(\d{1,2})", attr_str(link, "href") or "")
     if full:
-        year, month, day = int(full.group(1)), int(
-            full.group(2)), int(full.group(3))
+        year, month, day = int(full.group(1)), int(full.group(2)), int(full.group(3))
         return f"{year:04d}-{month:02d}-{day:02d}", year, month
 
-    day_text = day_cell.get_text(
-        strip=True) if isinstance(day_cell, Tag) else ""
-    day_match = re.search(r'(\d{1,2})', day_text)
+    day_text = day_cell.get_text(strip=True) if isinstance(day_cell, Tag) else ""
+    day_match = re.search(r"(\d{1,2})", day_text)
     if day_match and current_year and current_month:
-        return (f"{current_year:04d}-{current_month:02d}-{int(day_match.group(1)):02d}",
-                current_year, current_month)
+        return (
+            f"{current_year:04d}-{current_month:02d}-{int(day_match.group(1)):02d}",
+            current_year,
+            current_month,
+        )
 
     return None, current_year, current_month
 
@@ -1006,47 +1155,55 @@ def parse_diary_entries(soup: BeautifulSoup) -> list[dict[str, Any]]:
 
         headline = row.select_one(
             "h3.headline-3 a, .headline-3 a, h2.primaryname a, "
-            "td.col-production a[href^='/film/'], td.td-film-details a")
+            "td.col-production a[href^='/film/'], td.td-film-details a"
+        )
         alt_title, alt_year = title_year_from_img(poster, slug)
-        title = (headline.get_text(strip=True)
-                 if headline else None) or alt_title
+        title = (headline.get_text(strip=True) if headline else None) or alt_title
 
         released = row.select_one("td.col-released, td.td-released")
-        year = (parse_year(released.get_text(strip=True)) if released else None) \
-            or alt_year or year_from_slug(slug)
+        year = (
+            (parse_year(released.get_text(strip=True)) if released else None)
+            or alt_year
+            or year_from_slug(slug)
+        )
 
         watched_at, current_year, current_month = diary_date_for_row(
-            row, current_year, current_month)
+            row, current_year, current_month
+        )
 
         # the rewatch cell is always present; `icon-status-off` means first watch
         rewatch_td = row.select_one("td.col-rewatch, td.td-rewatch")
-        is_rewatch = rewatch_td is not None and "icon-status-off" not in node_classes(
-            rewatch_td)
+        is_rewatch = rewatch_td is not None and "icon-status-off" not in node_classes(rewatch_td)
 
         rating_node = row.select_one(
             "td.col-rating span.rating[class*='rated-'], "
             "td.td-rating span.rating[class*='rated-'], "
-            "span.rating[class*='rated-']")
-        user_rating = rating_from_classes(
-            rating_node) if isinstance(rating_node, Tag) else None
+            "span.rating[class*='rated-']"
+        )
+        user_rating = rating_from_classes(rating_node) if isinstance(rating_node, Tag) else None
 
-        entries.append({
-            "title": title,
-            "year": year,
-            "slug": slug,
-            "watched_at": watched_at,
-            "user_rating": user_rating,
-            "is_rewatch": is_rewatch,
-            "tmdb_id": parse_id(attr_str(poster, "data-tmdb-id")),
-            "tmdb_type": None,
-        })
+        entries.append(
+            {
+                "title": title,
+                "year": year,
+                "slug": slug,
+                "watched_at": watched_at,
+                "user_rating": user_rating,
+                "is_rewatch": is_rewatch,
+                "tmdb_id": parse_id(attr_str(poster, "data-tmdb-id")),
+                "tmdb_type": None,
+            }
+        )
 
     return entries
 
 
 def scrape_user_diary_history(
-    username: str, mode: str = "diary", tmdb_api_key: str | None = None,
-    max_pages: int | None = None, no_cache: bool = False,
+    username: str,
+    mode: str = "diary",
+    tmdb_api_key: str | None = None,
+    max_pages: int | None = None,
+    no_cache: bool = False,
     progress_callback: ProgressCallback = None,
 ) -> dict[str, Any]:
     """Full paginated history: `mode="diary"` (dated entries, ratings, rewatches)
@@ -1056,15 +1213,22 @@ def scrape_user_diary_history(
     user = clean_username(username)
     base_url = f"{BASE_URL}/{user}/films/diary/" if mode == "diary" else f"{BASE_URL}/{user}/films/"
     result = _scrape_paginated(
-        base_url, mode=mode, detail_mode=False,
+        base_url,
+        mode=mode,
+        detail_mode=False,
         parse_page=parse_diary_entries if mode == "diary" else parse_grid_entries,
-        is_deep=False, tmdb_api_key=tmdb_api_key, max_pages=max_pages, no_cache=no_cache,
-        progress_callback=progress_callback, ranked_output=False)
+        is_deep=False,
+        tmdb_api_key=tmdb_api_key,
+        max_pages=max_pages,
+        no_cache=no_cache,
+        progress_callback=progress_callback,
+        ranked_output=False,
+    )
     return {**result, "list_type": mode, "username": user}
 
 
 def clean_title_and_year(raw_title: str, slug: str) -> tuple[str, int | None]:
-    match = re.search(r'^(.*)\s+\(((?:18|19|20)\d{2})\)$', raw_title.strip())
+    match = re.search(r"^(.*)\s+\(((?:18|19|20)\d{2})\)$", raw_title.strip())
     if match:
         return match.group(1).strip(), int(match.group(2))
     return raw_title.strip(), year_from_slug(slug)
@@ -1081,52 +1245,55 @@ def ingest_rss_diary(username: str) -> dict[str, Any]:
         raw_feed = resp.text
 
     root = SafeET.fromstring(raw_feed)
-    ns = {'letterboxd': 'https://letterboxd.com', 'tmdb': 'https://themoviedb.org'}
+    ns = {"letterboxd": "https://letterboxd.com", "tmdb": "https://themoviedb.org"}
     entries: list[dict[str, Any]] = []
 
-    for item in root.findall('./channel/item'):
-        link_node = item.find('link')
+    for item in root.findall("./channel/item"):
+        link_node = item.find("link")
         lb_url = link_node.text if link_node is not None else ""
         # RSS links are user-scoped (`/alice/film/<slug>/`), which normalize_slug can't unpick
-        film_match = re.search(r'/film/([^/]+)', urlparse(lb_url or "").path)
-        slug = film_match.group(1) if film_match else normalize_slug(
-            urlparse(lb_url or "").path) or ""
+        film_match = re.search(r"/film/([^/]+)", urlparse(lb_url or "").path)
+        slug = (
+            film_match.group(1) if film_match else normalize_slug(urlparse(lb_url or "").path) or ""
+        )
 
-        title_node = item.find('letterboxd:filmTitle', ns)
-        year_node = item.find('letterboxd:filmYear', ns)
+        title_node = item.find("letterboxd:filmTitle", ns)
+        year_node = item.find("letterboxd:filmYear", ns)
 
         if title_node is None or title_node.text is None:
-            raw_title_node = item.find('title')
+            raw_title_node = item.find("title")
             raw_title = raw_title_node.text if raw_title_node is not None else "Unknown"
             title, year = clean_title_and_year(str(raw_title), slug)
         else:
             title = title_node.text
-            year = parse_year(
-                year_node.text) if year_node is not None else year_from_slug(slug)
+            year = parse_year(year_node.text) if year_node is not None else year_from_slug(slug)
 
-        date_node = item.find('letterboxd:watchedDate', ns)
-        rating_node = item.find('letterboxd:memberRating', ns)
-        rewatch_node = item.find('letterboxd:rewatch', ns)
+        date_node = item.find("letterboxd:watchedDate", ns)
+        rating_node = item.find("letterboxd:memberRating", ns)
+        rewatch_node = item.find("letterboxd:rewatch", ns)
         # The feed carries the TMDB id as <tmdb:movieId> (films) or <tmdb:tvId> (TV).
-        tmdb_node = item.find('tmdb:movieId', ns)
+        tmdb_node = item.find("tmdb:movieId", ns)
 
-        desc_node = item.find('description')
+        desc_node = item.find("description")
         desc = ""
         if desc_node is not None and desc_node.text:
-            desc = BeautifulSoup(desc_node.text, "html.parser").get_text(
-                separator="\n", strip=True)
+            desc = BeautifulSoup(desc_node.text, "html.parser").get_text(separator="\n", strip=True)
 
-        entries.append({
-            "title": title,
-            "year": year,
-            "slug": slug,
-            "letterboxd_url": lb_url,
-            "watched_at": date_node.text if date_node is not None else None,
-            "user_rating": float(rating_node.text) if rating_node is not None and rating_node.text else None,
-            "is_rewatch": rewatch_node is not None and rewatch_node.text == "Yes",
-            "review_snippet": desc,
-            "tmdb_id": parse_id(tmdb_node.text) if tmdb_node is not None else None,
-        })
+        entries.append(
+            {
+                "title": title,
+                "year": year,
+                "slug": slug,
+                "letterboxd_url": lb_url,
+                "watched_at": date_node.text if date_node is not None else None,
+                "user_rating": float(rating_node.text)
+                if rating_node is not None and rating_node.text
+                else None,
+                "is_rewatch": rewatch_node is not None and rewatch_node.text == "Yes",
+                "review_snippet": desc,
+                "tmdb_id": parse_id(tmdb_node.text) if tmdb_node is not None else None,
+            }
+        )
 
     return {
         "scraped_at": datetime.now(UTC).isoformat(),
@@ -1146,7 +1313,7 @@ def username_from_profile_link(link: Tag | None) -> str | None:
     href = attr_str(link, "href")
     if not href:
         return None
-    path_parts = [part for part in urlparse(href).path.split('/') if part]
+    path_parts = [part for part in urlparse(href).path.split("/") if part]
     return path_parts[0] if len(path_parts) == 1 else None
 
 
@@ -1159,8 +1326,9 @@ def account_has_badge(container: Tag, tier: str) -> bool:
     }
     if container.select_one(selectors[tier]):
         return True
-    return container.find(string=re.compile(
-        rf'^\s*{re.escape(tier)}\s*$', re.IGNORECASE)) is not None
+    return (
+        container.find(string=re.compile(rf"^\s*{re.escape(tier)}\s*$", re.IGNORECASE)) is not None
+    )
 
 
 def extract_account_summary(container: Tag) -> dict[str, Any] | None:
@@ -1171,8 +1339,7 @@ def extract_account_summary(container: Tag) -> dict[str, Any] | None:
 
     name_node = container.select_one("h1, h2, h3, .name")
     avatar_node = container.select_one("img.avatar, a.avatar img")
-    avatar_src = attr_str(avatar_node, "src") or attr_str(
-        avatar_node, "data-src")
+    avatar_src = attr_str(avatar_node, "src") or attr_str(avatar_node, "data-src")
     bio_node = container.select_one(".bio, .person-summary p")
     return {
         "username": username,
@@ -1184,16 +1351,18 @@ def extract_account_summary(container: Tag) -> dict[str, Any] | None:
 
 
 def discover_hq_accounts(
-    target: str | None = None, max_pages: int | None = None, no_cache: bool = False,
-    include_all: bool = False, progress_callback: ProgressCallback = None,
+    target: str | None = None,
+    max_pages: int | None = None,
+    no_cache: bool = False,
+    include_all: bool = False,
+    progress_callback: ProgressCallback = None,
 ) -> dict[str, Any]:
     """Walks the HQ member directory (or, with `target`, that member's following
     list filtered to HQ accounts unless `include_all`). A Cloudflare block
     returns what was collected so far with `partial=True`."""
     target = clean_username(target) if target else None
     is_hq_directory = target is None
-    base_url = (f"{BASE_URL}/members/hq/" if is_hq_directory
-                else f"{BASE_URL}/{target}/following/")
+    base_url = f"{BASE_URL}/members/hq/" if is_hq_directory else f"{BASE_URL}/{target}/following/"
     accounts: list[dict[str, Any]] = []
     seen_usernames: set[str] = set()
     page_num = 1
@@ -1203,20 +1372,31 @@ def discover_hq_accounts(
         try:
             while not max_pages or page_num <= max_pages:
                 page_url = build_paginated_url(base_url, page_num)
-                report_progress(progress_callback, "fetch_page", page_num, None,
-                                f"Fetching accounts page {page_num}: {page_url}")
+                report_progress(
+                    progress_callback,
+                    "fetch_page",
+                    page_num,
+                    None,
+                    f"Fetching accounts page {page_num}: {page_url}",
+                )
                 try:
-                    html = fetch_html(client, page_url, no_cache=no_cache,
-                                      progress_callback=progress_callback)
+                    html = fetch_html(
+                        client, page_url, no_cache=no_cache, progress_callback=progress_callback
+                    )
                 except curl_requests.exceptions.HTTPError as exc:
                     if is_not_found(exc) and page_num > 1:
                         break
                     raise
 
                 soup = BeautifulSoup(html, "html.parser")
-                cards = [node for node in soup.select(
-                    ".person-summary, tr.person-summary, ul.person-list li, "
-                    "ul.member-directory > li") if isinstance(node, Tag)]
+                cards = [
+                    node
+                    for node in soup.select(
+                        ".person-summary, tr.person-summary, ul.person-list li, "
+                        "ul.member-directory > li"
+                    )
+                    if isinstance(node, Tag)
+                ]
                 if not cards:
                     dump_debug_html(html, page_num)
                     break
@@ -1231,8 +1411,13 @@ def discover_hq_accounts(
                     if include_all or account["is_hq"]:
                         accounts.append(account)
 
-                report_progress(progress_callback, "page_done", len(accounts), None,
-                                f"Found {len(accounts)} accounts so far")
+                report_progress(
+                    progress_callback,
+                    "page_done",
+                    len(accounts),
+                    None,
+                    f"Found {len(accounts)} accounts so far",
+                )
                 if not has_next_page(soup):
                     break
                 page_num += 1
@@ -1250,24 +1435,25 @@ def discover_hq_accounts(
     }
 
 
-def inspect_account(username: str, no_cache: bool = False,
-                    progress_callback: ProgressCallback = None) -> dict[str, Any]:
+def inspect_account(
+    username: str, no_cache: bool = False, progress_callback: ProgressCallback = None
+) -> dict[str, Any]:
     """Reads one profile page: display name, avatar, bio, tier (HQ/Patron/Pro), list count."""
     username = clean_username(username)
     profile_url = f"{BASE_URL}/{username}/"
 
     with new_session() as client:
-        html = fetch_html(client, profile_url, no_cache=no_cache,
-                          progress_callback=progress_callback)
+        html = fetch_html(
+            client, profile_url, no_cache=no_cache, progress_callback=progress_callback
+        )
 
     soup = BeautifulSoup(html, "html.parser")
-    profile = soup.select_one(
-        ".profile-header, .profile-header-wrapper, header.profile-header")
+    profile = soup.select_one(".profile-header, .profile-header-wrapper, header.profile-header")
     container = profile if isinstance(profile, Tag) else soup
-    name_node = container.select_one(".displayname .label, h1 .label") \
-        or container.select_one(".profile-name, h1, .title-1, .name")
-    avatar_node = container.select_one(
-        "img.avatar, .profile-avatar img, a.avatar img")
+    name_node = container.select_one(".displayname .label, h1 .label") or container.select_one(
+        ".profile-name, h1, .title-1, .name"
+    )
+    avatar_node = container.select_one("img.avatar, .profile-avatar img, a.avatar img")
     bio_node = container.select_one(".bio, .profile-bio")
 
     account_tier = None
@@ -1277,17 +1463,14 @@ def inspect_account(username: str, no_cache: bool = False,
             break
 
     lists_count = 0
-    lists_link = soup.select_one(
-        f"a[href='/{username}/lists/'], a[href$='/{username}/lists/']")
+    lists_link = soup.select_one(f"a[href='/{username}/lists/'], a[href$='/{username}/lists/']")
     if lists_link:
-        count_value = attr_str(
-            lists_link, "data-count") or lists_link.get_text(" ", strip=True)
-        count_match = re.search(r'([\d,]+)', count_value)
+        count_value = attr_str(lists_link, "data-count") or lists_link.get_text(" ", strip=True)
+        count_match = re.search(r"([\d,]+)", count_value)
         if count_match:
-            lists_count = int(count_match.group(1).replace(',', ''))
+            lists_count = int(count_match.group(1).replace(",", ""))
 
-    avatar_src = attr_str(avatar_node, "src") or attr_str(
-        avatar_node, "data-src")
+    avatar_src = attr_str(avatar_node, "src") or attr_str(avatar_node, "data-src")
     return {
         "source": "letterboxd_profile",
         "username": username,
@@ -1300,7 +1483,9 @@ def inspect_account(username: str, no_cache: bool = False,
 
 
 def discover_user_lists(
-    username: str, max_pages: int | None = None, no_cache: bool = False,
+    username: str,
+    max_pages: int | None = None,
+    no_cache: bool = False,
     progress_callback: ProgressCallback = None,
 ) -> dict[str, Any]:
     """Inventories an account's public lists (title, URL, film count, description,
@@ -1317,23 +1502,34 @@ def discover_user_lists(
         try:
             while not max_pages or page_num <= max_pages:
                 page_url = build_paginated_url(base_url, page_num)
-                report_progress(progress_callback, "fetch_page", page_num, None,
-                                f"Fetching lists page {page_num}: {page_url}")
+                report_progress(
+                    progress_callback,
+                    "fetch_page",
+                    page_num,
+                    None,
+                    f"Fetching lists page {page_num}: {page_url}",
+                )
                 try:
-                    html = fetch_html(client, page_url, no_cache=no_cache,
-                                      progress_callback=progress_callback)
+                    html = fetch_html(
+                        client, page_url, no_cache=no_cache, progress_callback=progress_callback
+                    )
                 except curl_requests.exceptions.HTTPError as exc:
                     if is_not_found(exc) and page_num > 1:
                         break
                     raise
 
                 soup = BeautifulSoup(html, "html.parser")
-                cards: list[Tag] = [c for c in soup.select(
-                    "section.list, section.film-list-summary, div.film-list-summary, "
-                    ".list-summary, .list-set > section") if isinstance(c, Tag)]
+                cards: list[Tag] = [
+                    c
+                    for c in soup.select(
+                        "section.list, section.film-list-summary, div.film-list-summary, "
+                        ".list-summary, .list-set > section"
+                    )
+                    if isinstance(c, Tag)
+                ]
                 if not cards:
                     for link in soup.select("h2 a[href*='/list/'], h3 a[href*='/list/']"):
-                        parent = link.find_parent(['section', 'div', 'li'])
+                        parent = link.find_parent(["section", "div", "li"])
                         if isinstance(parent, Tag) and parent not in cards:
                             cards.append(parent)
                 if not cards:
@@ -1348,8 +1544,13 @@ def discover_user_lists(
                     seen_urls.add(entry["url"])
                     discovered.append(entry)
 
-                report_progress(progress_callback, "page_done", len(discovered), None,
-                                f"Processed {len(discovered)} list cards so far")
+                report_progress(
+                    progress_callback,
+                    "page_done",
+                    len(discovered),
+                    None,
+                    f"Processed {len(discovered)} list cards so far",
+                )
                 if not has_next_page(soup):
                     break
                 page_num += 1
@@ -1358,14 +1559,21 @@ def discover_user_lists(
             if not discovered:
                 raise
 
-    return {"username": username, "pages": pages_processed, "lists": discovered,
-            "partial": error is not None, "error": error}
+    return {
+        "username": username,
+        "pages": pages_processed,
+        "lists": discovered,
+        "partial": error is not None,
+        "error": error,
+    }
 
 
 def title_from_slug(slug_or_url: str) -> str:
     """Readable fallback title ("my-great-list" -> "My Great List") for a list with no scraped one."""
-    slug = urlparse(slug_or_url).path.strip('/').split('/')[-1] if '/' in slug_or_url else slug_or_url
-    words = [w for w in re.split(r'[-_\s]+', slug) if w]
+    slug = (
+        urlparse(slug_or_url).path.strip("/").split("/")[-1] if "/" in slug_or_url else slug_or_url
+    )
+    words = [w for w in re.split(r"[-_\s]+", slug) if w]
     return " ".join(w if w.isdigit() else w.capitalize() for w in words) or slug_or_url
 
 
@@ -1374,7 +1582,7 @@ def _list_card_link(card: Tag) -> Tag | None:
     list (with no text) and comes first in the DOM, so it must not win."""
     for selector in ("h1 a", "h2 a", "h3 a"):
         for link in card.select(selector):
-            if link.get_text(strip=True) and '/list/' in (attr_str(link, "href") or ""):
+            if link.get_text(strip=True) and "/list/" in (attr_str(link, "href") or ""):
                 return link
     for link in card.select("a[href*='/list/']"):
         if link.get_text(strip=True) and not link.select_one("img, ul"):
@@ -1385,30 +1593,31 @@ def _list_card_link(card: Tag) -> Tag | None:
 def _parse_list_card(card: Tag) -> dict[str, Any] | None:
     link_el = _list_card_link(card)
     href = attr_str(link_el, "href")
-    if not href or '/list/' not in href:
+    if not href or "/list/" not in href:
         return None
 
     list_url = urljoin(BASE_URL, href)
-    if not list_url.endswith('/'):
-        list_url += '/'
+    if not list_url.endswith("/"):
+        list_url += "/"
 
     val_tag = card.select_one("small.value, small, span.value")
-    digits = re.sub(r'\D', '', val_tag.get_text()) if val_tag else ""
-    desc_el = card.select_one(
-        ".list-description, .body-text, .description, .notes")
+    digits = re.sub(r"\D", "", val_tag.get_text()) if val_tag else ""
+    desc_el = card.select_one(".list-description, .body-text, .description, .notes")
 
     preview_posters: list[str] = []
     preview_slugs: list[str] = []
     for preview in card.select(
-            "ul.poster-list li, ul.posterlist li, li.posteritem, li.poster-container, "
-            "li.griditem")[:5]:
+        "ul.poster-list li, ul.posterlist li, li.posteritem, li.poster-container, li.griditem"
+    )[:5]:
         poster_node = preview.select_one("img")
         if poster_node:
-            poster_src = attr_str(poster_node, "src") or attr_str(
-                poster_node, "data-src")
+            poster_src = attr_str(poster_node, "src") or attr_str(poster_node, "data-src")
             # lazy-loaded posters ship a grey placeholder until the page's JS swaps it in
-            if (poster_src and "empty-poster" not in poster_src
-                    and poster_src not in preview_posters):
+            if (
+                poster_src
+                and "empty-poster" not in poster_src
+                and poster_src not in preview_posters
+            ):
                 preview_posters.append(urljoin(BASE_URL, poster_src))
         for holder in (preview, *preview.select("[data-film-slug], [data-item-slug]")):
             for attr in ("data-film-slug", "data-item-slug"):
@@ -1418,7 +1627,7 @@ def _parse_list_card(card: Tag) -> dict[str, Any] | None:
 
     return {
         "title": (link_el.get_text(strip=True) if link_el else "") or title_from_slug(list_url),
-        "slug": list_url.strip('/').split('/')[-1],
+        "slug": list_url.strip("/").split("/")[-1],
         "url": list_url,
         "total_films": int(digits) if digits else 0,
         "description": desc_el.get_text(separator="\n", strip=True) if desc_el else None,
@@ -1432,8 +1641,8 @@ def derive_badge_prefix(url: str, badge_prefix: str | None = None) -> str:
     from the list's own URL slug for custom imports with no explicit prefix."""
     if badge_prefix:
         return badge_prefix.strip().upper()
-    slug = urlparse(url).path.strip('/').split('/')[-1] or "list"
-    tokens = [t for t in re.split(r'[^A-Za-z0-9]+', slug) if t]
+    slug = urlparse(url).path.strip("/").split("/")[-1] or "list"
+    tokens = [t for t in re.split(r"[^A-Za-z0-9]+", slug) if t]
     if not tokens:
         return "LB"
     digits = "".join(t for t in tokens if t.isdigit())

@@ -17,36 +17,41 @@ TMDB_BASE = "https://api.themoviedb.org/3"
 
 
 def film(release="2000-06-01", **kw):
-    return CachedMovie(tmdb_id=kw.pop("tmdb_id", 1), title=kw.pop("title", "T"), release_date=release, **kw)
+    return CachedMovie(
+        tmdb_id=kw.pop("tmdb_id", 1), title=kw.pop("title", "T"), release_date=release, **kw
+    )
 
 
 # --- keyword taxonomy ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("slug, year, label", [
-    ("ancient-rome", 100, "Ancient Rome"),
-    ("ancient-greece", -400, "Ancient Greece"),
-    ("ancient-egypt", -1200, "Ancient Egypt"),
-    ("middle-ages", 1250, "Middle Ages"),
-    ("medieval", 1250, "Middle Ages"),
-    ("renaissance", 1500, "Renaissance"),
-    ("samurai", 1600, "Samurai Era"),
-    ("18th-century", 1750, "18th Century"),
-    ("victorian-era", 1870, "Victorian Era"),
-    ("19th-century", 1870, "19th Century"),
-    ("wild-west", 1880, "Wild West"),
-    ("world-war-i", 1916, "World War I"),
-    ("roaring-twenties", 1925, "Roaring Twenties"),
-    ("world-war-ii", 1943, "World War II"),
-    ("cold-war", 1965, "Cold War"),
-    ("1970s", 1975, "1970s"),
-    ("1980s", 1985, "1980s"),
-    ("1990s", 1995, "1990s"),
-    ("post-apocalyptic", 2060, "Post-Apocalyptic Future"),
-    ("cyberpunk", 2080, "Cyberpunk Future"),
-    ("space-travel", 2150, "Space Age Future"),
-    ("dystopia", 2150, "Dystopian Future"),
-])
+@pytest.mark.parametrize(
+    "slug, year, label",
+    [
+        ("ancient-rome", 100, "Ancient Rome"),
+        ("ancient-greece", -400, "Ancient Greece"),
+        ("ancient-egypt", -1200, "Ancient Egypt"),
+        ("middle-ages", 1250, "Middle Ages"),
+        ("medieval", 1250, "Middle Ages"),
+        ("renaissance", 1500, "Renaissance"),
+        ("samurai", 1600, "Samurai Era"),
+        ("18th-century", 1750, "18th Century"),
+        ("victorian-era", 1870, "Victorian Era"),
+        ("19th-century", 1870, "19th Century"),
+        ("wild-west", 1880, "Wild West"),
+        ("world-war-i", 1916, "World War I"),
+        ("roaring-twenties", 1925, "Roaring Twenties"),
+        ("world-war-ii", 1943, "World War II"),
+        ("cold-war", 1965, "Cold War"),
+        ("1970s", 1975, "1970s"),
+        ("1980s", 1985, "1980s"),
+        ("1990s", 1995, "1990s"),
+        ("post-apocalyptic", 2060, "Post-Apocalyptic Future"),
+        ("cyberpunk", 2080, "Cyberpunk Future"),
+        ("space-travel", 2150, "Space Age Future"),
+        ("dystopia", 2150, "Dystopian Future"),
+    ],
+)
 def test_taxonomy_matches_the_spec(slug, year, label):
     assert he.TAXONOMY[slug] == (year, label)
     assert he.resolve_narrative_era(film(), "", [slug.replace("-", " ")]) == (year, label)
@@ -65,29 +70,42 @@ def test_the_most_concrete_era_wins_over_generic_futures():
 
 
 def test_keywords_beat_the_overview():
-    assert he.resolve_narrative_era(film(), "In 1066, a king.", ["samurai"]) == (1600, "Samurai Era")
+    assert he.resolve_narrative_era(film(), "In 1066, a king.", ["samurai"]) == (
+        1600,
+        "Samurai Era",
+    )
 
 
 # --- overview scanner ---------------------------------------------------------
 
 
 def test_overview_century_references():
-    assert he.resolve_narrative_era(film(), "A sailor in the 18th century.", []) == (1750, "18th Century")
+    assert he.resolve_narrative_era(film(), "A sailor in the 18th century.", []) == (
+        1750,
+        "18th Century",
+    )
     assert he.resolve_narrative_era(film(), "Set in the 21st-century.", [])[0] == 2050
-    assert he.resolve_narrative_era(film(), "A story from the 3rd century BC", []) == (-250, "3rd Century BC")
+    assert he.resolve_narrative_era(film(), "A story from the 3rd century BC", []) == (
+        -250,
+        "3rd Century BC",
+    )
     assert he.resolve_narrative_era(film(), "The 12th Century monks...", [])[1] == "12th Century"
 
 
 def test_overview_years():
     assert he.resolve_narrative_era(film(), "In 1943 a spy parachutes in.", []) == (1943, "1940s")
-    assert he.resolve_narrative_era(film("2005-01-01"), "By 2077 the oceans rose.", []) == (2077, "Future")
+    assert he.resolve_narrative_era(film("2005-01-01"), "By 2077 the oceans rose.", []) == (
+        2077,
+        "Future",
+    )
     assert he.resolve_narrative_era(film(), "Rome, 44 BC, the Ides.", []) == (-44, "Ancient World")
     assert he.resolve_narrative_era(film(), "The year is 800 AD.", []) == (800, "Middle Ages")
 
 
 def test_nothing_found_means_contemporary_release_year():
-    assert he.resolve_narrative_era(film("1994-10-14"), "Two friends open a cafe.", ["friendship"]) == (
-        1994, "Contemporary")
+    assert he.resolve_narrative_era(
+        film("1994-10-14"), "Two friends open a cafe.", ["friendship"]
+    ) == (1994, "Contemporary")
 
 
 def test_missing_release_date_still_returns_a_year():
@@ -102,11 +120,23 @@ def test_format_year():
 
 
 def test_parse_era_reply():
-    assert he.parse_era_reply('{"year": 1888, "era": "Victorian London"}') == (1888, "Victorian London")
+    assert he.parse_era_reply('{"year": 1888, "era": "Victorian London"}') == (
+        1888,
+        "Victorian London",
+    )
     assert he.parse_era_reply('Sure! {"year": -44, "era": "Late Roman Republic"} done') == (
-        -44, "Late Roman Republic")
-    for bad in ("no json", '{"year": "1900", "era": "x"}', '{"year": 1900}', '{"year": 99999, "era": "x"}',
-                '{"year": true, "era": "x"}', '{"year": 1900, "era": "  "}', "[1, 2]"):
+        -44,
+        "Late Roman Republic",
+    )
+    for bad in (
+        "no json",
+        '{"year": "1900", "era": "x"}',
+        '{"year": 1900}',
+        '{"year": 99999, "era": "x"}',
+        '{"year": true, "era": "x"}',
+        '{"year": 1900, "era": "  "}',
+        "[1, 2]",
+    ):
         assert he.parse_era_reply(bad) is None
 
 
@@ -116,7 +146,8 @@ def test_parse_era_reply():
 @pytest.fixture()
 def db_engine(config_dir):
     engine = create_engine(
-        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False})
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     return engine
 
@@ -131,7 +162,8 @@ def client(db_engine):
     with TestClient(app) as test_client:
         test_client.post(
             "/api/auth/register",
-            json={"username": "alice", "password": "password123", "display_name": "Alice"})
+            json={"username": "alice", "password": "password123", "display_name": "Alice"},
+        )
         test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
@@ -142,33 +174,69 @@ UNIVERSE = {
     2: {"title": "Knights", "release": "2001-01-01", "keywords": ["medieval"], "pop": 8},
     3: {"title": "The Front", "release": "1998-07-01", "keywords": ["world war ii"], "pop": 7},
     4: {"title": "Neon Rain", "release": "1982-06-01", "keywords": ["cyberpunk"], "pop": 6},
-    5: {"title": "Cafe Society", "release": "2015-01-01", "keywords": [], "pop": 5,
-        "overview": "Friends open a cafe."},
+    5: {
+        "title": "Cafe Society",
+        "release": "2015-01-01",
+        "keywords": [],
+        "pop": 5,
+        "overview": "Friends open a cafe.",
+    },
     6: {"title": "Pharaoh", "release": "1995-01-01", "keywords": ["ancient egypt"], "pop": 4},
 }
 
 
 def mock_universe(movies=UNIVERSE, keywords_status=200):
     for movie_id, m in movies.items():
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "title": m["title"], "release_date": m["release"],
-            "poster_path": f"/p{movie_id}.jpg", "overview": m.get("overview", ""),
-            "origin_country": ["US"], "original_language": "en", "runtime": 100, "genres": [],
-            "popularity": m.get("pop", 1.0), "status": "Released",
-        }))
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "title": m["title"],
+                    "release_date": m["release"],
+                    "poster_path": f"/p{movie_id}.jpg",
+                    "overview": m.get("overview", ""),
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 100,
+                    "genres": [],
+                    "popularity": m.get("pop", 1.0),
+                    "status": "Released",
+                },
+            )
+        )
         respx.get(f"{TMDB_BASE}/movie/{movie_id}/keywords").mock(
-            return_value=httpx.Response(keywords_status, json={
-                "id": movie_id, "keywords": [{"id": i, "name": k} for i, k in enumerate(m["keywords"])]}))
-    respx.get(f"{TMDB_BASE}/discover/movie").mock(return_value=httpx.Response(
-        200, json={"results": [], "page": 1, "total_pages": 1}))
+            return_value=httpx.Response(
+                keywords_status,
+                json={
+                    "id": movie_id,
+                    "keywords": [{"id": i, "name": k} for i, k in enumerate(m["keywords"])],
+                },
+            )
+        )
+    respx.get(f"{TMDB_BASE}/discover/movie").mock(
+        return_value=httpx.Response(200, json={"results": [], "page": 1, "total_pages": 1})
+    )
     respx.get(f"{TMDB_BASE}/search/keyword").mock(
-        return_value=httpx.Response(200, json={"results": []}))
+        return_value=httpx.Response(200, json={"results": []})
+    )
 
 
 def create_run(client, **rules):
-    resp = client.post("/api/runs", json={"name": "Time", "game_type": "historical_time_travel", "rules_config": {
-        "allow_repeats": "strict", "no_consecutive_actor": False, "min_runtime": 0,
-        "wildcards_budget": 2, **rules}})
+    resp = client.post(
+        "/api/runs",
+        json={
+            "name": "Time",
+            "game_type": "historical_time_travel",
+            "rules_config": {
+                "allow_repeats": "strict",
+                "no_consecutive_actor": False,
+                "min_runtime": 0,
+                "wildcards_budget": 2,
+                **rules,
+            },
+        },
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -189,8 +257,14 @@ def test_engine_is_registered(client):
 
 
 def test_direction_is_validated(client):
-    resp = client.post("/api/runs", json={"name": "x", "game_type": "historical_time_travel",
-                                          "rules_config": {"direction": "sideways"}})
+    resp = client.post(
+        "/api/runs",
+        json={
+            "name": "x",
+            "game_type": "historical_time_travel",
+            "rules_config": {"direction": "sideways"},
+        },
+    )
     assert resp.status_code == 422 and "direction" in resp.text
 
 
@@ -213,18 +287,26 @@ def test_climb_enforces_a_later_setting_year_not_release_year(client, db_engine)
     assert meta["narrative_year"] == 2080 and meta["narrative_era_label"] == "Cyberpunk Future"
     assert meta["direction"] == "climb"
     assert "Historical Time-Travel" in blocked.json()["detail"]["reason"]
-    assert "1250" in blocked.json()["detail"]["reason"] and "2080" in blocked.json()["detail"]["reason"]
+    assert (
+        "1250" in blocked.json()["detail"]["reason"]
+        and "2080" in blocked.json()["detail"]["reason"]
+    )
 
     listed = steps(client, run_id)
     assert [(s["movie_narrative_year"], s["movie_narrative_era_label"]) for s in listed] == [
-        (100, "Ancient Rome"), (2080, "Cyberpunk Future")]
+        (100, "Ancient Rome"),
+        (2080, "Cyberpunk Future"),
+    ]
     with Session(db_engine) as session:
         assert session.get(CachedMovie, 4).narrative_year == 2080
 
 
 def test_the_same_setting_year_does_not_count(client):
     run_id = create_run(client)
-    twin = {**UNIVERSE, 7: {"title": "Rome Again", "release": "2010-01-01", "keywords": ["ancient rome"]}}
+    twin = {
+        **UNIVERSE,
+        7: {"title": "Rome Again", "release": "2010-01-01", "keywords": ["ancient rome"]},
+    }
     with respx.mock:
         mock_universe(twin)
         log(client, run_id, 1)
@@ -294,8 +376,9 @@ def test_hybrid_mode_also_needs_a_shared_actor(client):
     with respx.mock:
         mock_universe()
         for movie_id in UNIVERSE:
-            respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(return_value=httpx.Response(
-                200, json={"id": movie_id, "cast": [], "crew": []}))
+            respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(
+                return_value=httpx.Response(200, json={"id": movie_id, "cast": [], "crew": []})
+            )
         log(client, run_id, 1)
         resp = log(client, run_id, 4)
     assert resp.status_code == 409  # forward in time, but no shared cast
@@ -353,10 +436,14 @@ def test_llm_failure_or_garbage_is_not_saved_as_contemporary(db_engine, llm_conf
 
     monkeypatch.setattr(llm, "generate", garbage)
     (result, movie) = run_ensure(db_engine, 1, llm_config)
-    assert result == (2000, "Contemporary") and movie.narrative_year == 2000  # model answered, nothing found
+    assert (
+        result == (2000, "Contemporary") and movie.narrative_year == 2000
+    )  # model answered, nothing found
 
 
-def test_llm_is_skipped_for_pool_films_and_never_for_keyword_hits(db_engine, llm_config, monkeypatch):
+def test_llm_is_skipped_for_pool_films_and_never_for_keyword_hits(
+    db_engine, llm_config, monkeypatch
+):
     with Session(db_engine) as session:
         session.add(film(tmdb_id=1, overview="A tailor and a ghost."))
         session.commit()
@@ -386,20 +473,34 @@ def test_endpoint_resolves_and_overrides(client, db_engine):
         resolved = client.post("/api/movies/3/narrative-era")
         assert resolved.status_code == 200
         assert resolved.json() == {
-            "tmdb_id": 3, "narrative_year": 1943, "narrative_era_label": "World War II",
-            "source": "resolved"}
+            "tmdb_id": 3,
+            "narrative_year": 1943,
+            "narrative_era_label": "World War II",
+            "source": "resolved",
+        }
 
-        manual = client.post("/api/movies/3/narrative-era", json={
-            "narrative_year": 1944, "narrative_era_label": "D-Day"})
+        manual = client.post(
+            "/api/movies/3/narrative-era",
+            json={"narrative_year": 1944, "narrative_era_label": "D-Day"},
+        )
         assert manual.json() == {
-            "tmdb_id": 3, "narrative_year": 1944, "narrative_era_label": "D-Day", "source": "manual"}
+            "tmdb_id": 3,
+            "narrative_year": 1944,
+            "narrative_era_label": "D-Day",
+            "source": "manual",
+        }
 
         bce = client.post("/api/movies/6/narrative-era", json={"narrative_year": -1300})
         assert bce.json()["narrative_year"] == -1300
         assert bce.json()["narrative_era_label"] == "Ancient World"
 
-        label_only = client.post("/api/movies/3/narrative-era", json={"narrative_era_label": "Normandy"})
-        assert label_only.json()["narrative_year"] == 1944 and label_only.json()["narrative_era_label"] == "Normandy"
+        label_only = client.post(
+            "/api/movies/3/narrative-era", json={"narrative_era_label": "Normandy"}
+        )
+        assert (
+            label_only.json()["narrative_year"] == 1944
+            and label_only.json()["narrative_era_label"] == "Normandy"
+        )
 
         # A plain re-resolve replaces the manual edit.
         again = client.post("/api/movies/3/narrative-era")
@@ -413,7 +514,10 @@ def test_manual_override_survives_logging_and_drives_the_rules(client):
     run_id = create_run(client)
     with respx.mock:
         mock_universe()
-        client.post("/api/movies/1/narrative-era", json={"narrative_year": 2500, "narrative_era_label": "Far Future"})
+        client.post(
+            "/api/movies/1/narrative-era",
+            json={"narrative_year": 2500, "narrative_era_label": "Far Future"},
+        )
         log(client, run_id, 1)
         assert log(client, run_id, 4).status_code == 409  # 2080 is no longer after 2500
         assert steps(client, run_id)[0]["movie_narrative_era_label"] == "Far Future"
@@ -422,9 +526,20 @@ def test_manual_override_survives_logging_and_drives_the_rules(client):
 def test_endpoint_validation(client):
     with respx.mock:
         mock_universe()
-        assert client.post("/api/movies/1/narrative-era", json={"narrative_year": 50000}).status_code == 422
-        assert client.post("/api/movies/1/narrative-era", json={"narrative_year": "soon"}).status_code == 422
-        assert client.post("/api/movies/1/narrative-era", json={"narrative_era_label": "x" * 61}).status_code == 422
+        assert (
+            client.post("/api/movies/1/narrative-era", json={"narrative_year": 50000}).status_code
+            == 422
+        )
+        assert (
+            client.post("/api/movies/1/narrative-era", json={"narrative_year": "soon"}).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/api/movies/1/narrative-era", json={"narrative_era_label": "x" * 61}
+            ).status_code
+            == 422
+        )
 
 
 def test_endpoint_requires_login(db_engine):
@@ -467,10 +582,21 @@ def seed_dated(db_engine):
     }
     with Session(db_engine) as session:
         for movie_id, (title, release, year, label, pop) in rows.items():
-            session.add(CachedMovie(
-                tmdb_id=movie_id, title=title, release_date=release, overview="x", runtime=100,
-                narrative_year=year, narrative_era_label=label, popularity=pop, status="Released",
-                poster_path=f"/p{movie_id}.jpg", origin_country='["US"]'))
+            session.add(
+                CachedMovie(
+                    tmdb_id=movie_id,
+                    title=title,
+                    release_date=release,
+                    overview="x",
+                    runtime=100,
+                    narrative_year=year,
+                    narrative_era_label=label,
+                    popularity=pop,
+                    status="Released",
+                    poster_path=f"/p{movie_id}.jpg",
+                    origin_country='["US"]',
+                )
+            )
         session.commit()
 
 
@@ -484,7 +610,9 @@ def test_pick_next_pool_only_holds_later_settings_nearest_first(client, db_engin
     seed_dated(db_engine)
     run_id = create_run(client)
     with respx.mock:
-        mock_universe({10: {"title": "Rome Epic", "release": "2000-01-01", "keywords": ["ancient rome"]}})
+        mock_universe(
+            {10: {"title": "Rome Epic", "release": "2000-01-01", "keywords": ["ancient rome"]}}
+        )
         log(client, run_id, 10)
         pool = discover(client, run_id, 10)
     pool = pool.get("candidates", pool) if isinstance(pool, dict) else pool
@@ -498,7 +626,9 @@ def test_pick_next_pool_on_a_descent_only_holds_earlier_settings(client, db_engi
     seed_dated(db_engine)
     run_id = create_run(client, direction="descent")
     with respx.mock:
-        mock_universe({13: {"title": "Neon Rain", "release": "1982-01-01", "keywords": ["cyberpunk"]}})
+        mock_universe(
+            {13: {"title": "Neon Rain", "release": "1982-01-01", "keywords": ["cyberpunk"]}}
+        )
         log(client, run_id, 13)
         pool = discover(client, run_id, 13)
     pool = pool.get("candidates", pool) if isinstance(pool, dict) else pool
@@ -511,12 +641,28 @@ def test_pool_fetches_fresh_films_by_era_keyword(client, db_engine):
     with respx.mock:
         mock_universe({1: UNIVERSE[1], 4: UNIVERSE[4]})
         respx.get(f"{TMDB_BASE}/search/keyword").mock(
-            return_value=httpx.Response(200, json={"results": [{"id": 321, "name": "medieval"}]}))
-        respx.get(f"{TMDB_BASE}/discover/movie").mock(return_value=httpx.Response(200, json={
-            "results": [{"id": 4, "title": "Neon Rain", "release_date": "1982-06-01",
-                         "poster_path": "/p4.jpg", "genre_ids": [], "original_language": "en",
-                         "popularity": 6.0}],
-            "page": 1, "total_pages": 1}))
+            return_value=httpx.Response(200, json={"results": [{"id": 321, "name": "medieval"}]})
+        )
+        respx.get(f"{TMDB_BASE}/discover/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "id": 4,
+                            "title": "Neon Rain",
+                            "release_date": "1982-06-01",
+                            "poster_path": "/p4.jpg",
+                            "genre_ids": [],
+                            "original_language": "en",
+                            "popularity": 6.0,
+                        }
+                    ],
+                    "page": 1,
+                    "total_pages": 1,
+                },
+            )
+        )
         log(client, run_id, 1)
         pool = discover(client, run_id, 1)
     pool = pool.get("candidates", pool) if isinstance(pool, dict) else pool

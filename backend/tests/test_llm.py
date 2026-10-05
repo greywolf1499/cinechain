@@ -23,7 +23,8 @@ OLLAMA_CHAT = "http://localhost:11434/api/chat"
 @pytest.fixture()
 def client(config_dir):
     engine = create_engine(
-        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False})
+        f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
 
     def override_get_session():
@@ -32,8 +33,10 @@ def client(config_dir):
 
     app.dependency_overrides[get_session] = override_get_session
     with TestClient(app) as test_client:
-        test_client.post("/api/auth/register", json={
-            "username": "alice", "password": "password123", "display_name": "Alice"})
+        test_client.post(
+            "/api/auth/register",
+            json={"username": "alice", "password": "password123", "display_name": "Alice"},
+        )
         test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
@@ -53,10 +56,24 @@ def mock_movies():
         (1, "Heat", "A crew of thieves and a obsessive detective collide in Los Angeles."),
         (2, "Collateral", "A cabbie is forced to drive a hitman across the city."),
     ):
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "title": title, "release_date": "1995-12-15", "poster_path": None,
-            "overview": overview, "origin_country": ["US"], "original_language": "en",
-            "runtime": 120, "genres": [], "popularity": 5.0, "status": "Released"}))
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "title": title,
+                    "release_date": "1995-12-15",
+                    "poster_path": None,
+                    "overview": overview,
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 120,
+                    "genres": [],
+                    "popularity": 5.0,
+                    "status": "Released",
+                },
+            )
+        )
 
 
 def enable_ollama(client, **extra):
@@ -72,7 +89,10 @@ def ollama_reply(text):
 
 
 def test_clean_output_strips_reasoning_quotes_and_whitespace():
-    assert llm.clean_output('<think>hmm\nlet me think</think>\n  "A neat   pitch."  ') == "A neat pitch."
+    assert (
+        llm.clean_output('<think>hmm\nlet me think</think>\n  "A neat   pitch."  ')
+        == "A neat pitch."
+    )
     assert llm.clean_output("unfinished thought</think>The real answer") == "The real answer"
 
 
@@ -87,7 +107,9 @@ def test_mask_title_hides_the_films_name():
 async def test_ollama_chat_request_shape_and_cleaning():
     config = llm.LlmConfig(provider="ollama")
     with respx.mock:
-        route = respx.post(OLLAMA_CHAT).mock(return_value=ollama_reply("<think>x</think>Hello there."))
+        route = respx.post(OLLAMA_CHAT).mock(
+            return_value=ollama_reply("<think>x</think>Hello there.")
+        )
         text = await llm.generate(config, "sys", "user prompt", max_tokens=40)
     body = json.loads(route.calls[0].request.content)
     assert text == "Hello there."
@@ -99,30 +121,37 @@ async def test_ollama_chat_request_shape_and_cleaning():
 
 async def test_openai_chat_sends_the_key_and_normalises_the_url():
     config = llm.LlmConfig(
-        provider="openai", base_url="https://llm.example/v1", api_key="sk-x", model="qwen")
+        provider="openai", base_url="https://llm.example/v1", api_key="sk-x", model="qwen"
+    )
     with respx.mock:
         route = respx.post("https://llm.example/v1/chat/completions").mock(
-            return_value=httpx.Response(200, json={
-                "choices": [{"message": {"content": "Pitch."}}]}))
+            return_value=httpx.Response(200, json={"choices": [{"message": {"content": "Pitch."}}]})
+        )
         assert await llm.generate(config, "s", "p") == "Pitch."
     assert route.calls[0].request.headers["authorization"] == "Bearer sk-x"
     assert json.loads(route.calls[0].request.content)["model"] == "qwen"
-    assert llm.openai_url(llm.LlmConfig(provider="openai", base_url="http://h:1")) == \
-        "http://h:1/v1/chat/completions"
+    assert (
+        llm.openai_url(llm.LlmConfig(provider="openai", base_url="http://h:1"))
+        == "http://h:1/v1/chat/completions"
+    )
 
 
-@pytest.mark.parametrize("failure", [
-    httpx.Response(500, json={"error": "model not found"}),
-    httpx.Response(200, json={"unexpected": 1}),
-    httpx.Response(200, json={"message": {"content": "   "}}),
-    httpx.ConnectError("refused"),
-    httpx.ReadTimeout("slow"),
-])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.Response(500, json={"error": "model not found"}),
+        httpx.Response(200, json={"unexpected": 1}),
+        httpx.Response(200, json={"message": {"content": "   "}}),
+        httpx.ConnectError("refused"),
+        httpx.ReadTimeout("slow"),
+    ],
+)
 async def test_every_failure_is_an_llm_unavailable(failure):
     with respx.mock:
         route = respx.post(OLLAMA_CHAT)
         route.mock(side_effect=failure) if isinstance(failure, Exception) else route.mock(
-            return_value=failure)
+            return_value=failure
+        )
         with pytest.raises(llm.LlmUnavailable):
             await llm.generate(llm.LlmConfig(provider="ollama"), "s", "p")
 
@@ -277,15 +306,24 @@ def test_llm_settings_default_to_off_and_mask_the_key(client):
     assert initial["llm_provider"] == "off" and initial["llm_keep_alive_seconds"] == 300
     assert isinstance(initial["llm_local_available"], bool)
 
-    saved = client.patch("/api/settings/integrations", json={
-        "llm_provider": "openai", "llm_base_url": "http://x:1", "llm_api_key": "sk-abcdef1234",
-        "llm_model": "qwen", "llm_keep_alive_seconds": 0}).json()
+    saved = client.patch(
+        "/api/settings/integrations",
+        json={
+            "llm_provider": "openai",
+            "llm_base_url": "http://x:1",
+            "llm_api_key": "sk-abcdef1234",
+            "llm_model": "qwen",
+            "llm_keep_alive_seconds": 0,
+        },
+    ).json()
     assert saved["llm_provider"] == "openai" and saved["llm_keep_alive_seconds"] == 0
     assert saved["llm_api_key_masked"] == "****1234" and "sk-abcdef1234" not in json.dumps(saved)
 
 
-@pytest.mark.parametrize("payload", [
-    {"llm_provider": "magic"}, {"llm_keep_alive_seconds": -1}, {"llm_keep_alive_seconds": 99999}])
+@pytest.mark.parametrize(
+    "payload",
+    [{"llm_provider": "magic"}, {"llm_keep_alive_seconds": -1}, {"llm_keep_alive_seconds": 99999}],
+)
 def test_invalid_llm_settings_are_rejected(client, payload):
     assert client.patch("/api/settings/integrations", json=payload).status_code == 422
 
@@ -324,12 +362,16 @@ def test_pitch_endpoint_grounds_the_prompt_and_caches(client):
     enable_ollama(client)
     with respx.mock:
         mock_movies()
-        chat = respx.post(OLLAMA_CHAT).mock(return_value=ollama_reply("Two LA nights, one stolen heartbeat."))
+        chat = respx.post(OLLAMA_CHAT).mock(
+            return_value=ollama_reply("Two LA nights, one stolen heartbeat.")
+        )
         payload = {"previous_movie_id": 1, "candidate_movie_id": 2, "link_label": "Jamie Foxx"}
         first = client.post("/api/engine/pitch", json=payload)
         second = client.post("/api/engine/pitch", json=payload)
 
-    assert first.status_code == 200 and first.json() == {"pitch": "Two LA nights, one stolen heartbeat."}
+    assert first.status_code == 200 and first.json() == {
+        "pitch": "Two LA nights, one stolen heartbeat."
+    }
     assert second.json() == first.json() and chat.call_count == 1  # cached
     prompt = json.loads(chat.calls[0].request.content)["messages"][1]["content"]
     assert "Heat (1995)" in prompt and "Collateral (1995)" in prompt and "Jamie Foxx" in prompt
@@ -339,7 +381,9 @@ def test_critic_style_uses_the_veto_advice_prompt_and_its_own_cache(client):
     enable_ollama(client)
     with respx.mock:
         mock_movies()
-        chat = respx.post(OLLAMA_CHAT).mock(return_value=ollama_reply("Brace for a three-hour slog."))
+        chat = respx.post(OLLAMA_CHAT).mock(
+            return_value=ollama_reply("Brace for a three-hour slog.")
+        )
         base = {"previous_movie_id": 1, "candidate_movie_id": 2}
         critic = client.post("/api/engine/pitch", json={**base, "style": "critic"})
         plain = client.post("/api/engine/pitch", json=base)
@@ -355,7 +399,9 @@ def test_pitch_failure_is_a_503_with_the_reason(client):
     with respx.mock:
         mock_movies()
         respx.post(OLLAMA_CHAT).mock(side_effect=httpx.ConnectError("refused"))
-        resp = client.post("/api/engine/pitch", json={"previous_movie_id": 1, "candidate_movie_id": 2})
+        resp = client.post(
+            "/api/engine/pitch", json={"previous_movie_id": 1, "candidate_movie_id": 2}
+        )
     assert resp.status_code == 503 and "refused" in resp.json()["detail"]
 
 

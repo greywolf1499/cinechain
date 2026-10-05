@@ -65,8 +65,12 @@ HANDICAPS: dict[str, Handicap] = {
         Handicap("b_movie", "Campy Cinema: Under 6.0 rating", _b_movie, "vote_average"),
         Handicap("epic_length", "The Long Haul: Over 150 mins", _epic_length, "runtime"),
         Handicap("short_flick", "Lightning Fast: Under 85 mins", _short_flick, "runtime"),
-        Handicap("foreign_tongue", "Passport Punch: Non-English only", _foreign_tongue,
-                 "original_language"),
+        Handicap(
+            "foreign_tongue",
+            "Passport Punch: Non-English only",
+            _foreign_tongue,
+            "original_language",
+        ),
     )
 }
 

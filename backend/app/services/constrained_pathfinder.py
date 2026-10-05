@@ -110,7 +110,9 @@ class _Ctx:
         await self.pace()
         fetched = await pathfinder._fetch_with_backoff(
             lambda: cache_repo.get_movie(self.session, self.tmdb, movie_id, refresh=hydrate),
-            self.stats, self.deadline)
+            self.stats,
+            self.deadline,
+        )
         self.stats.tmdb_calls += 1
         return fetched if fetched is not None else row
 
@@ -122,8 +124,11 @@ class _Ctx:
             await self.pace()
             cast = await pathfinder._fetch_with_backoff(
                 lambda: cache_repo.get_movie_cast(
-                    self.session, self.tmdb, movie_id, self.cast_limit),
-                self.stats, self.deadline)
+                    self.session, self.tmdb, movie_id, self.cast_limit
+                ),
+                self.stats,
+                self.deadline,
+            )
             self.stats.tmdb_calls += 1
             if cast is None:
                 return []
@@ -139,8 +144,11 @@ class _Ctx:
                 await self.pace()
                 credits_ = await pathfinder._fetch_with_backoff(
                     lambda actor_id=actor_id: cache_repo.get_actor_credits(
-                        self.session, self.tmdb, actor_id),
-                    self.stats, self.deadline)
+                        self.session, self.tmdb, actor_id
+                    ),
+                    self.stats,
+                    self.deadline,
+                )
                 self.stats.tmdb_calls += 1
                 if credits_ is None:
                     continue
@@ -157,7 +165,9 @@ class _Ctx:
             await self.pace()
             directors = await pathfinder._fetch_with_backoff(
                 lambda: cache_repo.get_movie_directors(self.session, self.tmdb, movie_id),
-                self.stats, self.deadline)
+                self.stats,
+                self.deadline,
+            )
             self.stats.tmdb_calls += 1
             if directors is None:
                 return []
@@ -166,16 +176,18 @@ class _Ctx:
         found: list[tuple[CachedMovie, NodeKey]] = []
         for director in directors:
             person_id = director.person_id
-            films = await anyio.to_thread.run_sync(
-                self.repo.get_cached_director_credits, person_id)
+            films = await anyio.to_thread.run_sync(self.repo.get_cached_director_credits, person_id)
             if films is None:
                 if self.over_budget():
                     continue
                 await self.pace()
                 films = await pathfinder._fetch_with_backoff(
                     lambda person_id=person_id, name=director.name: cache_repo.get_director_credits(
-                        self.session, self.tmdb, person_id, name),
-                    self.stats, self.deadline)
+                        self.session, self.tmdb, person_id, name
+                    ),
+                    self.stats,
+                    self.deadline,
+                )
                 self.stats.tmdb_calls += 1
                 if films is None:
                     continue
@@ -197,8 +209,7 @@ async def _order_frontier(ctx: _Ctx, side: _Side, limit: int) -> list[State]:
     cached: list[State] = []
     uncached: list[State] = []
     for state in side.frontier:
-        cast = await anyio.to_thread.run_sync(
-            ctx.repo.get_cached_cast, state[0], ctx.cast_limit)
+        cast = await anyio.to_thread.run_sync(ctx.repo.get_cached_cast, state[0], ctx.cast_limit)
         (cached if cast is not None else uncached).append(state)
     return (cached + uncached)[:limit]
 
@@ -215,17 +226,20 @@ async def _expand(ctx: _Ctx, side: _Side, limit: int) -> dict[State, tuple[State
             parent = side.visited[state][0]
             if parent is not None and movie_id not in ctx.protected:
                 parent_movie = await anyio.to_thread.run_sync(
-                    ctx.session.get, CachedMovie, parent[0])
+                    ctx.session.get, CachedMovie, parent[0]
+                )
                 # Deferred edge check: the film's detail wasn't known when it was discovered.
                 if parent_movie is not None and not (
-                    ctx.pair_ok(parent_movie, movie) if side.forward
+                    ctx.pair_ok(parent_movie, movie)
+                    if side.forward
                     else ctx.pair_ok(movie, parent_movie)
                 ):
                     side.drop(state)
                     continue
             for kind in _kinds_from(constraints, tag):
                 neighbours = await (
-                    ctx.actor_neighbours(movie_id) if kind == "actor"
+                    ctx.actor_neighbours(movie_id)
+                    if kind == "actor"
                     else ctx.director_neighbours(movie_id)
                 )
                 new_tag = kind if constraints.alternate_edges else None
@@ -234,7 +248,11 @@ async def _expand(ctx: _Ctx, side: _Side, limit: int) -> dict[State, tuple[State
                         continue
                     if film.tmdb_id in ctx.excluded and film.tmdb_id not in ctx.protected:
                         continue
-                    if ctx.min_runtime and film.runtime is not None and film.runtime < ctx.min_runtime:
+                    if (
+                        ctx.min_runtime
+                        and film.runtime is not None
+                        and film.runtime < ctx.min_runtime
+                    ):
                         continue
                     if not (ctx.pair_ok(movie, film) if side.forward else ctx.pair_ok(film, movie)):
                         continue
@@ -273,21 +291,30 @@ def _assemble(forward: _Side, backward: _Side, f_state: State, b_state: State) -
     return path
 
 
-def _tags_compatible(constraints: PathConstraints, forward_tag: str | None, back_tag: str | None) -> bool:
+def _tags_compatible(
+    constraints: PathConstraints, forward_tag: str | None, back_tag: str | None
+) -> bool:
     if not constraints.alternate_edges:
         return True
     return forward_tag is None or back_tag is None or forward_tag != back_tag
 
 
 async def _meeting_paths(
-    ctx: _Ctx, forward: _Side, backward: _Side, fresh_side: _Side, fresh: list[State],
-    min_hops: int | None, rejected: set[tuple[State, State]],
+    ctx: _Ctx,
+    forward: _Side,
+    backward: _Side,
+    fresh_side: _Side,
+    fresh: list[State],
+    min_hops: int | None,
+    rejected: set[tuple[State, State]],
 ) -> list[list[NodeKey]]:
     other = backward if fresh_side is forward else forward
     candidates: dict[tuple[int, ...], list[NodeKey]] = {}
     for state in fresh:
         for other_state in other.by_movie.get(state[0], []):
-            f_state, b_state = (state, other_state) if fresh_side is forward else (other_state, state)
+            f_state, b_state = (
+                (state, other_state) if fresh_side is forward else (other_state, state)
+            )
             if (f_state, b_state) in rejected:
                 continue
             if not _tags_compatible(ctx.constraints, f_state[1], b_state[1]):
@@ -301,7 +328,9 @@ async def _meeting_paths(
             candidates.setdefault(movie_ids, path)
             if ctx.constraints.needs_detail:
                 # Films discovered on the final hop were never expanded; verify them now.
-                await hydrate_movies(ctx.session, ctx.tmdb, list(movie_ids), deadline=ctx.deadline + 3)
+                await hydrate_movies(
+                    ctx.session, ctx.tmdb, list(movie_ids), deadline=ctx.deadline + 3
+                )
                 if not await _path_satisfies(ctx, movie_ids):
                     rejected.add((f_state, b_state))
                     candidates.pop(movie_ids, None)
@@ -309,7 +338,9 @@ async def _meeting_paths(
 
 
 async def _path_satisfies(ctx: _Ctx, movie_ids: tuple[int, ...]) -> bool:
-    movies = [await anyio.to_thread.run_sync(ctx.session.get, CachedMovie, mid) for mid in movie_ids]
+    movies = [
+        await anyio.to_thread.run_sync(ctx.session.get, CachedMovie, mid) for mid in movie_ids
+    ]
     if any(movie is None for movie in movies):
         return True  # can't judge - the constraint treats unknown data as allowed
     return all(ctx.pair_ok(a, b) for a, b in pairwise(movies))
@@ -336,7 +367,9 @@ async def solve_constrained(
     cast_limit = cast_limit or settings.pathfinder_cast_limit
     frontier_cap = settings.pathfinder_actor_credit_limit
     max_duration_seconds = (
-        max_duration_seconds if max_duration_seconds is not None else settings.bridge_max_duration_seconds
+        max_duration_seconds
+        if max_duration_seconds is not None
+        else settings.bridge_max_duration_seconds
     )
 
     async with pathfinder._SEARCH_SEMAPHORE:
@@ -344,15 +377,23 @@ async def solve_constrained(
         deadline = start + max_duration_seconds
         stats = pathfinder._SearchStats()
         ctx = _Ctx(
-            session=session, tmdb=tmdb, repo=CacheRepo(session), constraints=constraints,
-            cast_limit=cast_limit, min_runtime=min_runtime,
-            excluded=excluded_movie_ids or set(), call_budget=call_budget,
-            deadline=deadline, stats=stats, protected={from_movie_id, to_movie_id},
+            session=session,
+            tmdb=tmdb,
+            repo=CacheRepo(session),
+            constraints=constraints,
+            cast_limit=cast_limit,
+            min_runtime=min_runtime,
+            excluded=excluded_movie_ids or set(),
+            call_budget=call_budget,
+            deadline=deadline,
+            stats=stats,
+            protected={from_movie_id, to_movie_id},
         )
         try:
             if from_movie_id == to_movie_id:
                 result = await pathfinder._finish_result(
-                    session, tmdb, [[movie_node(from_movie_id)]], deadline)
+                    session, tmdb, [[movie_node(from_movie_id)]], deadline
+                )
                 yield {"type": "result", **result}
                 yield {"type": "done"}
                 return
@@ -362,12 +403,17 @@ async def solve_constrained(
                 target = await ctx.movie(to_movie_id)
                 reason = (
                     constraints.endpoint_reason(source, target)
-                    if source is not None and target is not None else None
+                    if source is not None and target is not None
+                    else None
                 )
                 if reason:
-                    yield {"type": "exhausted", "reason": "constraint_impossible", "message": reason,
-                           "tmdb_calls": stats.tmdb_calls,
-                           "elapsed_ms": (time.monotonic() - start) * 1000}
+                    yield {
+                        "type": "exhausted",
+                        "reason": "constraint_impossible",
+                        "message": reason,
+                        "tmdb_calls": stats.tmdb_calls,
+                        "elapsed_ms": (time.monotonic() - start) * 1000,
+                    }
                     yield {"type": "done"}
                     return
 
@@ -413,7 +459,8 @@ async def solve_constrained(
                 }
 
                 paths = await _meeting_paths(
-                    ctx, forward, backward, side, side.frontier, min_hops, rejected)
+                    ctx, forward, backward, side, side.frontier, min_hops, rejected
+                )
                 if paths:
                     result = await pathfinder._finish_result(session, tmdb, paths, deadline)
                     yield {"type": "result", **result}
@@ -421,9 +468,12 @@ async def solve_constrained(
                     return
 
                 if call_budget is not None and stats.tmdb_calls >= call_budget:
-                    yield {"type": "exhausted", "reason": "budget_exceeded",
-                           "tmdb_calls": stats.tmdb_calls,
-                           "elapsed_ms": (time.monotonic() - start) * 1000}
+                    yield {
+                        "type": "exhausted",
+                        "reason": "budget_exceeded",
+                        "tmdb_calls": stats.tmdb_calls,
+                        "elapsed_ms": (time.monotonic() - start) * 1000,
+                    }
                     yield {"type": "done"}
                     return
 
@@ -443,9 +493,12 @@ async def solve_constrained(
                     yield {"type": "done"}
                     return
 
-            yield {"type": "exhausted", "reason": "max_depth_reached",
-                   "tmdb_calls": stats.tmdb_calls,
-                   "elapsed_ms": (time.monotonic() - start) * 1000}
+            yield {
+                "type": "exhausted",
+                "reason": "max_depth_reached",
+                "tmdb_calls": stats.tmdb_calls,
+                "elapsed_ms": (time.monotonic() - start) * 1000,
+            }
             yield {"type": "done"}
         except Exception as exc:
             logger.exception("constrained bridge solve failed")

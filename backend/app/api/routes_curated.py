@@ -42,12 +42,17 @@ from app.utils.ids import utcnow
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/curated", tags=["curated"])
 
+
 def _error_payload(exc: Exception) -> dict[str, Any]:
     """Structured task error: `message` for display, `code` (and `status`) so the
     frontend can render a specific warning."""
     if isinstance(exc, letterboxd.WatchlistNotFound):
-        return {"code": "watchlist_not_found", "status": 404, "message": str(exc),
-                "username": exc.username}
+        return {
+            "code": "watchlist_not_found",
+            "status": 404,
+            "message": str(exc),
+            "username": exc.username,
+        }
     if isinstance(exc, letterboxd.CloudflareBlock):
         return {"code": "cloudflare_block", "status": 503, "message": str(exc)}
     return {"code": "scrape_failed", "message": str(exc)}
@@ -55,8 +60,7 @@ def _error_payload(exc: Exception) -> dict[str, Any]:
 
 def _resolve_tmdb_api_key(session: Session) -> str | None:
     overrides = settings_repo.get_overrides(session)
-    key = (overrides.get("tmdb_api_key")
-           or get_settings().tmdb_api_key or "").strip()
+    key = (overrides.get("tmdb_api_key") or get_settings().tmdb_api_key or "").strip()
     return key or None
 
 
@@ -151,8 +155,7 @@ def list_curated_lists(
     all_rows = session.exec(select(CuratedList)).all()
     by_preset = {row.preset_key: row for row in all_rows if row.preset_key}
     other_rows = [
-        row for row in all_rows
-        if row.preset_key is None and (include_disabled or row.is_enabled)
+        row for row in all_rows if row.preset_key is None and (include_disabled or row.is_enabled)
     ]
 
     results = [
@@ -203,7 +206,9 @@ def _link_to_account(session: Session, row: CuratedList) -> None:
 
 def _prepare_new_list(session: Session, row: CuratedList, slug_hint: str | None = None) -> None:
     _ensure_seed_accounts(session)
-    row.slug = _unique_slug(session, slug_hint or row.preset_key or _list_slug_hint(row.url, row.title))
+    row.slug = _unique_slug(
+        session, slug_hint or row.preset_key or _list_slug_hint(row.url, row.title)
+    )
     _link_to_account(session, row)
 
 
@@ -229,8 +234,7 @@ def _get_or_create_list(session: Session, list_id: str) -> CuratedList:
         return existing_by_preset
     preset = letterboxd.PRESETS.get(list_id)
     if preset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail="Unknown curated list")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown curated list")
     curated_list = CuratedList(
         preset_key=list_id, title=preset["title"], url=preset["url"], badge_prefix=preset["badge"]
     )
@@ -241,13 +245,14 @@ def _get_or_create_list(session: Session, list_id: str) -> CuratedList:
     return curated_list
 
 
-def _persist_sync_result(session: Session, curated_list: CuratedList, result: dict) -> tuple[int, int]:
+def _persist_sync_result(
+    session: Session, curated_list: CuratedList, result: dict
+) -> tuple[int, int]:
     films = result["films"]
     matched = [f for f in films if f.get("tmdb_id")]
 
     for badge in session.exec(
-        select(CanonMovieBadge).where(
-            CanonMovieBadge.curated_list_id == curated_list.id)
+        select(CanonMovieBadge).where(CanonMovieBadge.curated_list_id == curated_list.id)
     ).all():
         session.delete(badge)
     session.commit()
@@ -257,8 +262,10 @@ def _persist_sync_result(session: Session, curated_list: CuratedList, result: di
         label = f"{curated_list.badge_prefix} #{rank}" if rank else curated_list.badge_prefix
         session.add(
             CanonMovieBadge(
-                curated_list_id=curated_list.id, movie_id=film["tmdb_id"],
-                badge_label=label, rank=rank,
+                curated_list_id=curated_list.id,
+                movie_id=film["tmdb_id"],
+                badge_label=label,
+                rank=rank,
             )
         )
 
@@ -288,7 +295,8 @@ def sync_curated_list(
     def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
         try:
             result = letterboxd.scrape_letterboxd_list(
-                url, tmdb_api_key=tmdb_api_key, progress_callback=ctx.progress)
+                url, tmdb_api_key=tmdb_api_key, progress_callback=ctx.progress
+            )
         except Exception as exc:
             with ctx.session() as db:
                 failed = db.get(CuratedList, row_id)
@@ -303,9 +311,15 @@ def sync_curated_list(
         return {"matched": matched, "total_films": total, "is_ranked": result["is_ranked"]}
 
     task, _ = task_runner.submit_task(
-        background_tasks, session, "curated_list_sync", work,
-        user_id=admin.id, dedupe_key=f"curated_list_sync:{row_id}",
-        label=f"Syncing {title}", describe_error=_error_payload)
+        background_tasks,
+        session,
+        "curated_list_sync",
+        work,
+        user_id=admin.id,
+        dedupe_key=f"curated_list_sync:{row_id}",
+        label=f"Syncing {title}",
+        describe_error=_error_payload,
+    )
     return TaskOut.from_model(task)
 
 
@@ -322,8 +336,7 @@ def create_custom_list(
     session: Session = Depends(get_session),
     _admin: User = Depends(get_current_admin),
 ) -> CuratedListOut:
-    badge_prefix = letterboxd.derive_badge_prefix(
-        payload.url, payload.badge_prefix)
+    badge_prefix = letterboxd.derive_badge_prefix(payload.url, payload.badge_prefix)
     existing = _find_list_by_url(session, payload.url)
     if existing is not None:
         existing.badge_prefix = badge_prefix
@@ -406,13 +419,13 @@ def sync_watchlist(
     try:
         username = letterboxd.clean_username(payload.letterboxd_username)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
         try:
             result = letterboxd.scrape_letterboxd_watchlist(
-                username, tmdb_api_key=tmdb_api_key, progress_callback=ctx.progress)
+                username, tmdb_api_key=tmdb_api_key, progress_callback=ctx.progress
+            )
         except letterboxd.WatchlistNotFound as exc:
             try:
                 with ctx.session() as db:
@@ -437,9 +450,15 @@ def sync_watchlist(
         return {"matched": matched, "total_films": len(result["films"])}
 
     task, _ = task_runner.submit_task(
-        background_tasks, session, "watchlist_sync", work,
-        user_id=user_id, dedupe_key=f"watchlist_sync:{user_id}:{username}",
-        label=f"Letterboxd watchlist ({username})", describe_error=_error_payload)
+        background_tasks,
+        session,
+        "watchlist_sync",
+        work,
+        user_id=user_id,
+        dedupe_key=f"watchlist_sync:{user_id}:{username}",
+        label=f"Letterboxd watchlist ({username})",
+        describe_error=_error_payload,
+    )
     return TaskOut.from_model(task)
 
 
@@ -470,8 +489,7 @@ def _persist_watchlist(
         )
 
     for old in session.exec(
-        select(LetterboxdWatchlist).where(
-            LetterboxdWatchlist.user_id == user_id)
+        select(LetterboxdWatchlist).where(LetterboxdWatchlist.user_id == user_id)
     ).all():
         session.delete(old)
     user = session.get(User, user_id)
@@ -487,7 +505,7 @@ def _persist_watchlist(
 
 
 def _norm_url(url: str) -> str:
-    return url.strip().rstrip('/').lower()
+    return url.strip().rstrip("/").lower()
 
 
 def _find_list_by_url(session: Session, url: str) -> CuratedList | None:
@@ -500,7 +518,9 @@ def _find_list_by_url(session: Session, url: str) -> CuratedList | None:
 
 def _list_out(session: Session, row: CuratedList) -> CuratedListOut:
     out = CuratedListOut.from_model(row)
-    account = session.get(CuratedSourceAccount, row.source_account_id) if row.source_account_id else None
+    account = (
+        session.get(CuratedSourceAccount, row.source_account_id) if row.source_account_id else None
+    )
     if account is not None:
         out.account_username = account.username
         out.account_display_name = account.display_name
@@ -552,11 +572,14 @@ def update_curated_list(
     curated_list = _get_or_create_list(session, list_id)
     if payload.slug is not None and payload.slug != curated_list.slug:
         if session.exec(select(CuratedList.id).where(CuratedList.slug == payload.slug)).first():
-            raise HTTPException(status.HTTP_409_CONFLICT, detail=f"Slug '{payload.slug}' is already in use")
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, detail=f"Slug '{payload.slug}' is already in use"
+            )
         curated_list.slug = payload.slug
     if payload.badge_prefix is not None:
         curated_list.badge_prefix = letterboxd.derive_badge_prefix(
-            curated_list.url, payload.badge_prefix)
+            curated_list.url, payload.badge_prefix
+        )
     if payload.badge_color is not None:
         curated_list.badge_color = payload.badge_color
     if payload.badge_emoji is not None:
@@ -569,7 +592,9 @@ def update_curated_list(
             try:
                 chosen = image_cache.validate_image_url(_unwrap_proxy_url(payload.image_url))
             except image_cache.ImageProxyError as exc:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.detail) from exc
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.detail
+                ) from exc
             _delete_uploaded_image(curated_list)
             curated_list.image_url = chosen
         else:
@@ -578,8 +603,7 @@ def update_curated_list(
         curated_list.is_enabled = payload.is_enabled
         if not payload.is_enabled:
             for badge in session.exec(
-                select(CanonMovieBadge).where(
-                    CanonMovieBadge.curated_list_id == curated_list.id)
+                select(CanonMovieBadge).where(CanonMovieBadge.curated_list_id == curated_list.id)
             ).all():
                 session.delete(badge)
             curated_list.total_items = 0
@@ -622,8 +646,7 @@ async def upload_list_image(
             raise HTTPException(413, detail="Image must be 2MB or smaller")
     sniffed = _sniff_image_type(bytes(data))
     if sniffed is None:
-        raise HTTPException(415,
-                            detail="Upload a PNG, JPEG, GIF or WebP image")
+        raise HTTPException(415, detail="Upload a PNG, JPEG, GIF or WebP image")
     extension, _ = sniffed
     _delete_uploaded_image(curated_list)
     filename = f"{curated_list.id}.{extension}"
@@ -649,9 +672,15 @@ def get_list_image(
     path = list_images_dir() / Path(curated_list.image_filename).name
     if not path.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No custom image")
-    media_type = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}.get(
-        path.suffix.lstrip("."), "application/octet-stream")
-    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "private, max-age=86400"})
+    media_type = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "gif": "image/gif",
+        "webp": "image/webp",
+    }.get(path.suffix.lstrip("."), "application/octet-stream")
+    return FileResponse(
+        path, media_type=media_type, headers={"Cache-Control": "private, max-age=86400"}
+    )
 
 
 class ListPage(BaseModel):
@@ -665,13 +694,17 @@ class ListPage(BaseModel):
 def _ensure_preset_rows(session: Session) -> None:
     """Materializes the preset lists as real rows so they can be searched,
     sorted and paginated in SQL like every other list."""
-    existing = set(session.exec(
-        select(CuratedList.preset_key).where(col(CuratedList.preset_key).is_not(None))).all())
+    existing = set(
+        session.exec(
+            select(CuratedList.preset_key).where(col(CuratedList.preset_key).is_not(None))
+        ).all()
+    )
     missing = [key for key in letterboxd.PRESETS if key not in existing]
     for key in missing:
         preset = letterboxd.PRESETS[key]
-        row = CuratedList(preset_key=key, title=preset["title"], url=preset["url"],
-                          badge_prefix=preset["badge"])
+        row = CuratedList(
+            preset_key=key, title=preset["title"], url=preset["url"], badge_prefix=preset["badge"]
+        )
         _prepare_new_list(session, row)
         session.add(row)
     if missing:
@@ -700,25 +733,37 @@ def browse_curated_lists(
     _ensure_preset_rows(session)
 
     watched = (
-        select(CanonMovieBadge.curated_list_id.label("list_id"),
-               func.count(func.distinct(CanonMovieBadge.movie_id)).label("n"))
-        .where(col(CanonMovieBadge.movie_id).in_(
-            select(RunStep.movie_id).where(RunStep.status == "watched")))
+        select(
+            CanonMovieBadge.curated_list_id.label("list_id"),
+            func.count(func.distinct(CanonMovieBadge.movie_id)).label("n"),
+        )
+        .where(
+            col(CanonMovieBadge.movie_id).in_(
+                select(RunStep.movie_id).where(RunStep.status == "watched")
+            )
+        )
         .group_by(CanonMovieBadge.curated_list_id)
         .subquery()
     )
     watched_n = func.coalesce(watched.c.n, 0)
     stmt = (
-        select(CuratedList, watched_n, CuratedSourceAccount.username, CuratedSourceAccount.display_name)
+        select(
+            CuratedList, watched_n, CuratedSourceAccount.username, CuratedSourceAccount.display_name
+        )
         .outerjoin(watched, watched.c.list_id == CuratedList.id)
         .outerjoin(CuratedSourceAccount, CuratedSourceAccount.id == CuratedList.source_account_id)
     )
     needle = q.strip()
     if needle:
-        stmt = stmt.where(or_(
-            _like(CuratedList.title, needle), _like(CuratedList.description, needle),
-            _like(CuratedList.badge_prefix, needle), _like(CuratedSourceAccount.username, needle),
-            _like(CuratedSourceAccount.display_name, needle)))
+        stmt = stmt.where(
+            or_(
+                _like(CuratedList.title, needle),
+                _like(CuratedList.description, needle),
+                _like(CuratedList.badge_prefix, needle),
+                _like(CuratedSourceAccount.username, needle),
+                _like(CuratedSourceAccount.display_name, needle),
+            )
+        )
     if state == "enabled":
         stmt = stmt.where(CuratedList.is_enabled == True)
     elif state == "disabled":
@@ -738,7 +783,8 @@ def browse_curated_lists(
     ordering = sort_column.asc() if direction == "asc" else sort_column.desc()
     rows = session.exec(
         stmt.order_by(ordering, func.lower(CuratedList.title), CuratedList.id)
-        .offset((page - 1) * page_size).limit(page_size)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     ).all()
 
     items = []
@@ -748,8 +794,13 @@ def browse_curated_lists(
         out.account_username = username
         out.account_display_name = display_name
         items.append(out)
-    return ListPage(items=items, total=int(total), page=page, page_size=page_size,
-                    pages=max(1, -(-int(total) // page_size)))
+    return ListPage(
+        items=items,
+        total=int(total),
+        page=page,
+        page_size=page_size,
+        pages=max(1, -(-int(total) // page_size)),
+    )
 
 
 # ---------------------------------------------------------
@@ -781,8 +832,7 @@ def _normalize_username(username: str) -> str:
     try:
         return letterboxd.clean_username(username).lower()
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def _ensure_seed_accounts(session: Session) -> None:
@@ -790,8 +840,11 @@ def _ensure_seed_accounts(session: Session) -> None:
     added = False
     for seed in letterboxd.SEED_ACCOUNTS:
         if seed["username"] not in existing:
-            session.add(CuratedSourceAccount(
-                username=seed["username"], display_name=seed["display_name"], is_hq=True))
+            session.add(
+                CuratedSourceAccount(
+                    username=seed["username"], display_name=seed["display_name"], is_hq=True
+                )
+            )
             added = True
     if added:
         session.commit()
@@ -799,12 +852,13 @@ def _ensure_seed_accounts(session: Session) -> None:
 
 def _get_account(session: Session, username: str) -> CuratedSourceAccount | None:
     return session.exec(
-        select(CuratedSourceAccount).where(
-            CuratedSourceAccount.username == username)
+        select(CuratedSourceAccount).where(CuratedSourceAccount.username == username)
     ).first()
 
 
-def _upsert_account(session: Session, username: str, data: dict[str, Any]) -> tuple[CuratedSourceAccount, bool]:
+def _upsert_account(
+    session: Session, username: str, data: dict[str, Any]
+) -> tuple[CuratedSourceAccount, bool]:
     account = _get_account(session, username)
     created = account is None
     if account is None:
@@ -825,14 +879,16 @@ _enabled_flag = case((col(CuratedList.is_enabled).is_(True), 1), else_=0)
 
 
 def _account_out(
-    session: Session, account: CuratedSourceAccount,
-    discovered: int | None = None, enabled: int | None = None,
+    session: Session,
+    account: CuratedSourceAccount,
+    discovered: int | None = None,
+    enabled: int | None = None,
 ) -> AccountOut:
     if discovered is None or enabled is None:
         counts = session.exec(
-            select(func.count(), func.coalesce(
-                func.sum(_enabled_flag), 0))
-            .where(CuratedList.source_account_id == account.id)
+            select(func.count(), func.coalesce(func.sum(_enabled_flag), 0)).where(
+                CuratedList.source_account_id == account.id
+            )
         ).one()
         discovered, enabled = int(counts[0]), int(counts[1])
     return AccountOut(
@@ -843,10 +899,12 @@ def _account_out(
         is_hq=account.is_hq,
         account_tier=account.account_tier,
         total_public_lists=account.total_public_lists,
-        last_inspected_at=account.last_inspected_at.isoformat(
-        ) if account.last_inspected_at else None,
-        lists_discovered_at=account.lists_discovered_at.isoformat(
-        ) if account.lists_discovered_at else None,
+        last_inspected_at=account.last_inspected_at.isoformat()
+        if account.last_inspected_at
+        else None,
+        lists_discovered_at=account.lists_discovered_at.isoformat()
+        if account.lists_discovered_at
+        else None,
         discovered_lists=discovered,
         enabled_lists=enabled,
     )
@@ -859,7 +917,8 @@ def list_accounts(
 ) -> list[AccountOut]:
     _ensure_seed_accounts(session)
     accounts = session.exec(
-        select(CuratedSourceAccount).order_by(CuratedSourceAccount.created_at)).all()
+        select(CuratedSourceAccount).order_by(CuratedSourceAccount.created_at)
+    ).all()
     return [_account_out(session, account) for account in accounts]
 
 
@@ -884,37 +943,57 @@ def browse_accounts(
     """Paginated curator directory (hundreds of discovered HQ accounts)."""
     _ensure_seed_accounts(session)
     counts = (
-        select(CuratedList.source_account_id.label("account_id"),
-               func.count().label("lists"),
-               func.coalesce(func.sum(_enabled_flag), 0).label("enabled"))
+        select(
+            CuratedList.source_account_id.label("account_id"),
+            func.count().label("lists"),
+            func.coalesce(func.sum(_enabled_flag), 0).label("enabled"),
+        )
         .group_by(CuratedList.source_account_id)
         .subquery()
     )
     lists_n = func.coalesce(counts.c.lists, 0)
     enabled_n = func.coalesce(counts.c.enabled, 0)
-    name = func.lower(func.coalesce(CuratedSourceAccount.display_name, CuratedSourceAccount.username))
+    name = func.lower(
+        func.coalesce(CuratedSourceAccount.display_name, CuratedSourceAccount.username)
+    )
     stmt = select(CuratedSourceAccount, lists_n, enabled_n).outerjoin(
-        counts, counts.c.account_id == CuratedSourceAccount.id)
+        counts, counts.c.account_id == CuratedSourceAccount.id
+    )
     needle = q.strip()
     if needle:
-        stmt = stmt.where(or_(_like(CuratedSourceAccount.username, needle),
-                              _like(CuratedSourceAccount.display_name, needle),
-                              _like(CuratedSourceAccount.bio, needle)))
+        stmt = stmt.where(
+            or_(
+                _like(CuratedSourceAccount.username, needle),
+                _like(CuratedSourceAccount.display_name, needle),
+                _like(CuratedSourceAccount.bio, needle),
+            )
+        )
     if kind == "hq":
         stmt = stmt.where(CuratedSourceAccount.is_hq == True)
     elif kind == "other":
         stmt = stmt.where(CuratedSourceAccount.is_hq == False)
 
     total = int(session.exec(select(func.count()).select_from(stmt.subquery())).one())
-    ordering = {"name": [name.asc()], "lists": [lists_n.desc(), name.asc()],
-                "enabled": [enabled_n.desc(), name.asc()]}[sort]
+    ordering = {
+        "name": [name.asc()],
+        "lists": [lists_n.desc(), name.asc()],
+        "enabled": [enabled_n.desc(), name.asc()],
+    }[sort]
     rows = session.exec(
         stmt.order_by(*ordering, CuratedSourceAccount.id)
-        .offset((page - 1) * page_size).limit(page_size)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     ).all()
-    items = [_account_out(session, account, int(lists), int(enabled)) for account, lists, enabled in rows]
-    return AccountPage(items=items, total=total, page=page, page_size=page_size,
-                       pages=max(1, -(-total // page_size)))
+    items = [
+        _account_out(session, account, int(lists), int(enabled)) for account, lists, enabled in rows
+    ]
+    return AccountPage(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=max(1, -(-total // page_size)),
+    )
 
 
 @router.post("/accounts/discover-hq", status_code=status.HTTP_202_ACCEPTED, response_model=TaskOut)
@@ -934,26 +1013,38 @@ def discover_hq(
 
     def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
         found = letterboxd.discover_hq_accounts(
-            target, max_pages=max_pages, progress_callback=ctx.progress)
+            target, max_pages=max_pages, progress_callback=ctx.progress
+        )
         new_accounts = 0
         with ctx.session() as db:
             for account in found["accounts"]:
                 _, created = _upsert_account(db, account["username"].lower(), account)
                 new_accounts += int(created)
-        return {"discovered": len(found["accounts"]), "new": new_accounts,
-                "partial": found["partial"], "error": found["error"]}
+        return {
+            "discovered": len(found["accounts"]),
+            "new": new_accounts,
+            "partial": found["partial"],
+            "error": found["error"],
+        }
 
     task, _ = task_runner.submit_task(
-        background_tasks, session, "discover_hq", work,
-        user_id=admin.id, dedupe_key=f"discover_hq:{target or 'directory'}",
+        background_tasks,
+        session,
+        "discover_hq",
+        work,
+        user_id=admin.id,
+        dedupe_key=f"discover_hq:{target or 'directory'}",
         label="Discovering HQ accounts" + (f" (via {target})" if target else ""),
-        describe_error=_error_payload)
+        describe_error=_error_payload,
+    )
     return TaskOut.from_model(task)
 
 
 def _scrape_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, letterboxd.CloudflareBlock):
-        return HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Letterboxd blocked the request: {exc}")
+        return HTTPException(
+            status.HTTP_502_BAD_GATEWAY, detail=f"Letterboxd blocked the request: {exc}"
+        )
     if letterboxd.is_not_found(exc):
         return HTTPException(status.HTTP_404_NOT_FOUND, detail="Letterboxd account not found")
     return HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Letterboxd request failed: {exc}")
@@ -968,7 +1059,8 @@ async def inspect_account(
     username = _normalize_username(username)
     try:
         data = await anyio.to_thread.run_sync(
-            functools.partial(letterboxd.inspect_account, username))
+            functools.partial(letterboxd.inspect_account, username)
+        )
     except (letterboxd.CloudflareBlock, curl_requests.exceptions.RequestException) as exc:
         raise _scrape_http_error(exc) from exc
 
@@ -986,24 +1078,29 @@ def _persist_discovered_lists(
     rows = session.exec(select(CuratedList)).all()
     by_url = {_norm_url(row.url): row for row in rows}
     by_preset = {row.preset_key: row for row in rows if row.preset_key}
-    preset_by_url = {_norm_url(p["url"]): (key, p)
-                     for key, p in letterboxd.PRESETS.items()}
+    preset_by_url = {_norm_url(p["url"]): (key, p) for key, p in letterboxd.PRESETS.items()}
 
     for entry in discovered:
         url_key = _norm_url(entry["url"])
         preset_match = preset_by_url.get(url_key)
-        row = by_url.get(url_key) or (by_preset.get(
-            preset_match[0]) if preset_match else None)
+        row = by_url.get(url_key) or (by_preset.get(preset_match[0]) if preset_match else None)
         if row is None:
             if preset_match:
                 key, preset = preset_match
-                row = CuratedList(preset_key=key, title=preset["title"], url=entry["url"],
-                                  badge_prefix=preset["badge"], is_enabled=True)
+                row = CuratedList(
+                    preset_key=key,
+                    title=preset["title"],
+                    url=entry["url"],
+                    badge_prefix=preset["badge"],
+                    is_enabled=True,
+                )
             else:
-                row = CuratedList(title=entry["title"], url=entry["url"],
-                                  badge_prefix=letterboxd.derive_badge_prefix(
-                                      entry["url"]),
-                                  is_enabled=False)
+                row = CuratedList(
+                    title=entry["title"],
+                    url=entry["url"],
+                    badge_prefix=letterboxd.derive_badge_prefix(entry["url"]),
+                    is_enabled=False,
+                )
             _prepare_new_list(session, row, slug_hint=_list_slug_hint(entry["url"], entry["title"]))
         elif entry["title"] and (
             (row.preset_key is None and row.last_synced_at is None) or not (row.title or "").strip()
@@ -1019,8 +1116,7 @@ def _persist_discovered_lists(
         by_url[url_key] = row
 
     account.lists_discovered_at = utcnow()
-    account.total_public_lists = max(
-        account.total_public_lists, len(discovered))
+    account.total_public_lists = max(account.total_public_lists, len(discovered))
     session.add(account)
     session.commit()
 
@@ -1044,7 +1140,8 @@ async def get_account_lists(
     if needs_scrape and current_user.is_admin:
         try:
             result = await anyio.to_thread.run_sync(
-                functools.partial(letterboxd.discover_user_lists, username, max_pages=max_pages))
+                functools.partial(letterboxd.discover_user_lists, username, max_pages=max_pages)
+            )
         except (letterboxd.CloudflareBlock, curl_requests.exceptions.RequestException) as exc:
             raise _scrape_http_error(exc) from exc
         if account is None:
@@ -1053,11 +1150,11 @@ async def get_account_lists(
         partial, error = result["partial"], result["error"]
         session.refresh(account)
     elif account is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND,
-                            detail="Unknown curator account")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown curator account")
 
     rows = session.exec(
-        select(CuratedList).where(CuratedList.source_account_id == account.id)
+        select(CuratedList)
+        .where(CuratedList.source_account_id == account.id)
         # type: ignore[attr-defined]
         .order_by(CuratedList.film_count.desc(), CuratedList.title)
     ).all()
@@ -1096,8 +1193,10 @@ def get_badges_bulk(
     result: dict[str, list[BadgeOut]] = {}
     for badge, curated_list in rows:
         result.setdefault(str(badge.movie_id), []).append(
-            BadgeOut(badge_label=badge.badge_label,
-                     badge_color=curated_list.badge_color,
-                     badge_emoji=curated_list.badge_emoji)
+            BadgeOut(
+                badge_label=badge.badge_label,
+                badge_color=curated_list.badge_color,
+                badge_emoji=curated_list.badge_emoji,
+            )
         )
     return result

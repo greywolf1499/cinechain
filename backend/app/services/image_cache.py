@@ -124,12 +124,20 @@ def _ttl_seconds(headers: httpx.Headers) -> int:
     return max(MIN_TTL_SECONDS, min(ttl, MAX_TTL_SECONDS))
 
 
-async def _fetch(client: httpx.AsyncClient, url: str, validators: dict[str, str]) -> httpx.Response | tuple[httpx.Response, bytes]:
+async def _fetch(
+    client: httpx.AsyncClient, url: str, validators: dict[str, str]
+) -> httpx.Response | tuple[httpx.Response, bytes]:
     """GET with manual redirect handling (every hop re-validated) and a hard body cap."""
-    headers = {"User-Agent": _USER_AGENT, "Accept": "image/avif,image/webp,image/*;q=0.8", **validators}
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Accept": "image/avif,image/webp,image/*;q=0.8",
+        **validators,
+    }
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        async with client.stream("GET", current, headers=headers, follow_redirects=False) as response:
+        async with client.stream(
+            "GET", current, headers=headers, follow_redirects=False
+        ) as response:
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location")
                 if not location:
@@ -192,14 +200,19 @@ async def get_image(client: httpx.AsyncClient, url: str) -> CachedImage:
         raise ImageProxyError(502, "Upstream did not return a raster image")
 
     _write_atomic(image_path, body)
-    _write_atomic(meta_path, json.dumps({
-        "url": url,
-        "content_type": content_type,
-        "etag": response.headers.get("etag"),
-        "last_modified": response.headers.get("last-modified"),
-        "fetched_at": now,
-        "expires_at": now + _ttl_seconds(response.headers),
-    }).encode("utf-8"))
+    _write_atomic(
+        meta_path,
+        json.dumps(
+            {
+                "url": url,
+                "content_type": content_type,
+                "etag": response.headers.get("etag"),
+                "last_modified": response.headers.get("last-modified"),
+                "fetched_at": now,
+                "expires_at": now + _ttl_seconds(response.headers),
+            }
+        ).encode("utf-8"),
+    )
     _maybe_prune()
     return CachedImage(image_path, content_type)
 

@@ -105,19 +105,22 @@ class MutatorEngine(CineChainEngine):
         return None
 
     def _pair_blocked(
-        self, earlier: CachedMovie, later: CachedMovie, rules: dict | None,
+        self,
+        earlier: CachedMovie,
+        later: CachedMovie,
+        rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> str | None:
         """Why `later` may not follow `earlier`: this mode's own rule, then the run's modifiers."""
-        return (
-            self.pair_violation(earlier, later, rules)
-            or self.modifier_violation(earlier, later, rules, history)
+        return self.pair_violation(earlier, later, rules) or self.modifier_violation(
+            earlier, later, rules, history
         )
 
     def _bridge_needs_detail(self, rules: dict | None) -> bool:
         active = self.active_modifiers(rules)
         return self.needs_detail or bool(
-            active.get(modifiers.COOLDOWN_KEY) or active.get(modifiers.STAIRCASE_KEY))
+            active.get(modifiers.COOLDOWN_KEY) or active.get(modifiers.STAIRCASE_KEY)
+        )
 
     def bridge_constraints(
         self, start_connection_type: str | None = None, rules: dict | None = None
@@ -137,7 +140,8 @@ class MutatorEngine(CineChainEngine):
         previous_transition: dict | None,
     ) -> ValidationResult:
         return await CineChainEngine.validate_primary(
-            self, from_movie_id, to_movie_id, cast_limit=cast_limit)
+            self, from_movie_id, to_movie_id, cast_limit=cast_limit
+        )
 
     async def validate_primary(
         self,
@@ -156,12 +160,15 @@ class MutatorEngine(CineChainEngine):
         if not self.cast_link_required(rules):
             return ValidationResult(valid=True, mechanic=mechanic)
         result = await self._validate_link(
-            from_movie_id, to_movie_id, cast_limit, rules, previous_transition)
+            from_movie_id, to_movie_id, cast_limit, rules, previous_transition
+        )
         result.mechanic = {**(result.mechanic or {}), **(mechanic or {})} or None
         return result
 
     async def _filter_pool(
-        self, frontier: CachedMovie, candidates: list[DiscoveryCandidate],
+        self,
+        frontier: CachedMovie,
+        candidates: list[DiscoveryCandidate],
         rules: dict | None = None,
     ) -> list[DiscoveryCandidate]:
         rows = await self._hydrate_pool(candidates, rules)
@@ -175,7 +182,9 @@ class MutatorEngine(CineChainEngine):
         return [c for c in candidates if c.movie_id in keep]
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None,
+        self,
+        frontier: CachedMovie,
+        rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         """Films that satisfy this mode's own rule relative to `frontier`, with no
@@ -222,7 +231,8 @@ class MutatorEngine(CineChainEngine):
             "type": "error",
             "message": (
                 f"{self.display_name} doesn't link films by cast, so there is nothing to bridge. "
-                "Turn on 'Require shared cast' for a hybrid run."),
+                "Turn on 'Require shared cast' for a hybrid run."
+            ),
         }
         yield {"type": "done"}
 
@@ -283,24 +293,34 @@ class ChronoClimbEngine(MutatorEngine):
         return problems
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None,
+        self,
+        tail_movie_id: int | None,
+        previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
         descent = self._direction(rules) == "descent"
         word, verb = ("before", "Descent") if descent else ("after", "Climb")
         if tail_movie_id is None:
             return ConstraintInfo(
-                kind="year", title=f"Any film starts the {verb.lower()}",
-                detail=f"Every later film must be released {word} the one before it.")
+                kind="year",
+                title=f"Any film starts the {verb.lower()}",
+                detail=f"Every later film must be released {word} the one before it.",
+            )
         year = parse_release_year((await self._load(tail_movie_id)).release_date)
         if year is None:
             return None
         return ConstraintInfo(
-            kind="year", title=f"Next film must be released {word} {year}",
-            detail="Strictly " + ("earlier" if descent else "later") + " - the same year doesn't count.")
+            kind="year",
+            title=f"Next film must be released {word} {year}",
+            detail="Strictly "
+            + ("earlier" if descent else "later")
+            + " - the same year doesn't count.",
+        )
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None,
+        self,
+        frontier: CachedMovie,
+        rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         year = parse_release_year(frontier.release_date)
@@ -317,19 +337,23 @@ class ChronoClimbEngine(MutatorEngine):
         else:
             statement = statement.where(
                 CachedMovie.release_date >= f"{year + 1:04d}-01-01",
-                CachedMovie.release_date <= today)
+                CachedMovie.release_date <= today,
+            )
         statement = statement.order_by(CachedMovie.popularity.desc()).limit(RULE_POOL_SIZE)  # type: ignore[union-attr]
         for row in self.session.exec(statement).all():
             rows[row.tmdb_id] = row
 
         # Plus the most popular films in the next decade, so a fresh cache still has choices.
         window = (
-            (f"{year - 10:04d}-01-01", f"{year - 1:04d}-12-31") if descent
+            (f"{year - 10:04d}-01-01", f"{year - 1:04d}-12-31")
+            if descent
             else (f"{year + 1:04d}-01-01", min(f"{year + 10:04d}-12-31", today))
         )
         try:
             for row in await cache_repo.discover_movies(
-                self.session, self.tmdb, pages=2,
+                self.session,
+                self.tmdb,
+                pages=2,
                 **{"primary_release_date.gte": window[0], "primary_release_date.lte": window[1]},
             ):
                 rows.setdefault(row.tmdb_id, row)
@@ -353,8 +377,31 @@ primary_country = modifiers.primary_country
 
 # Big film-producing countries sampled for a World Passport pool.
 PASSPORT_COUNTRIES = (
-    "US", "GB", "FR", "JP", "KR", "IN", "IT", "DE", "ES", "MX", "CN", "BR", "SE", "DK",
-    "IR", "AR", "RU", "PL", "TR", "HK", "TH", "NG", "EG", "CA", "AU",
+    "US",
+    "GB",
+    "FR",
+    "JP",
+    "KR",
+    "IN",
+    "IT",
+    "DE",
+    "ES",
+    "MX",
+    "CN",
+    "BR",
+    "SE",
+    "DK",
+    "IR",
+    "AR",
+    "RU",
+    "PL",
+    "TR",
+    "HK",
+    "TH",
+    "NG",
+    "EG",
+    "CA",
+    "AU",
 )
 PASSPORT_COUNTRIES_PER_POOL = 12
 PASSPORT_FILMS_PER_COUNTRY = 4
@@ -406,24 +453,34 @@ class WorldPassportEngine(MutatorEngine):
         return {"from_country": country_a, "to_country": country_b}
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None,
+        self,
+        tail_movie_id: int | None,
+        previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
         if tail_movie_id is None:
             return ConstraintInfo(
-                kind="country", title="Any film starts the passport",
-                detail="Every later film must be from a different country than the one before it.")
+                kind="country",
+                title="Any film starts the passport",
+                detail="Every later film must be from a different country than the one before it.",
+            )
         country = primary_country(await self._load(tail_movie_id, hydrate=True))
         if country is None:
             return ConstraintInfo(
-                kind="country", title="Next film must be from a different country",
-                detail="The last film's country isn't on record, so it can't be checked.")
+                kind="country",
+                title="Next film must be from a different country",
+                detail="The last film's country isn't on record, so it can't be checked.",
+            )
         return ConstraintInfo(
-            kind="country", title=f"Next film must be from a country other than {country}",
-            detail="Compared by primary production country.")
+            kind="country",
+            title=f"Next film must be from a country other than {country}",
+            detail="Compared by primary production country.",
+        )
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None,
+        self,
+        frontier: CachedMovie,
+        rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         home = primary_country(frontier)
@@ -432,8 +489,10 @@ class WorldPassportEngine(MutatorEngine):
 
         # Films cached from earlier play whose country is already known.
         statement = (
-            select(CachedMovie).where(CachedMovie.origin_country.is_not(None))  # type: ignore[union-attr]
-            .order_by(CachedMovie.popularity.desc()).limit(RULE_POOL_SIZE * 3)  # type: ignore[union-attr]
+            select(CachedMovie)
+            .where(CachedMovie.origin_country.is_not(None))  # type: ignore[union-attr]
+            .order_by(CachedMovie.popularity.desc())
+            .limit(RULE_POOL_SIZE * 3)  # type: ignore[union-attr]
         )
         for row in self.session.exec(statement).all():
             country = primary_country(row)
@@ -448,17 +507,22 @@ class WorldPassportEngine(MutatorEngine):
 
         # HTTP calls overlap; rows are cached afterwards, one at a time.
         responses = await asyncio.gather(
-            *(self.tmdb.discover_movies(
-                pages=1, with_origin_country=code,
-                **{"primary_release_date.lte": today_iso()}) for code in sampled),
-            return_exceptions=True)
+            *(
+                self.tmdb.discover_movies(
+                    pages=1, with_origin_country=code, **{"primary_release_date.lte": today_iso()}
+                )
+                for code in sampled
+            ),
+            return_exceptions=True,
+        )
         for code, response in zip(sampled, responses, strict=True):
             if isinstance(response, BaseException):
                 if isinstance(response, POOL_FETCH_ERRORS):
                     continue
                 raise response
             for row in await cache_repo.store_stubs(
-                    self.session, response[:PASSPORT_FILMS_PER_COUNTRY]):
+                self.session, response[:PASSPORT_FILMS_PER_COUNTRY]
+            ):
                 if row.tmdb_id in pool or not is_reality_eligible(row):
                     continue
                 if primary_country(row) in locked:
@@ -481,13 +545,16 @@ class AuteurRelayEngine(MutatorEngine):
     game_type = "auteur_relay"
     display_name = "Auteur Relay"
     character_hop_links = False  # links must be a real actor or director, strictly alternating
-    description = "Chain films by alternating links: a shared actor, then a shared director, then an actor..."
+    description = (
+        "Chain films by alternating links: a shared actor, then a shared director, then an actor..."
+    )
 
     def bridge_constraints(
         self, start_connection_type: str | None = None, rules: dict | None = None
     ) -> PathConstraints:
         return PathConstraints(
-            alternate_edges=True, use_directors=True, start_tag=start_connection_type)
+            alternate_edges=True, use_directors=True, start_tag=start_connection_type
+        )
 
     async def _validate_link(
         self,
@@ -498,66 +565,89 @@ class AuteurRelayEngine(MutatorEngine):
         previous_transition: dict | None,
     ) -> ValidationResult:
         shared_actors = await CineChainEngine.validate_primary(
-            self, from_movie_id, to_movie_id, cast_limit=cast_limit)
+            self, from_movie_id, to_movie_id, cast_limit=cast_limit
+        )
         actors = shared_actors.connections if shared_actors.valid else []
 
-        directors_from = await cache_repo.get_movie_directors(self.session, self.tmdb, from_movie_id)
+        directors_from = await cache_repo.get_movie_directors(
+            self.session, self.tmdb, from_movie_id
+        )
         directors_to = {
-            d.person_id for d in await cache_repo.get_movie_directors(
-                self.session, self.tmdb, to_movie_id)
+            d.person_id
+            for d in await cache_repo.get_movie_directors(self.session, self.tmdb, to_movie_id)
         }
         directors = [
             SharedActorConnection(kind="director", actor_id=d.person_id, actor_name=d.name)
-            for d in directors_from if d.person_id in directors_to
+            for d in directors_from
+            if d.person_id in directors_to
         ]
 
         required = OPPOSITE_KIND.get((previous_transition or {}).get("connection_type") or "")
         if not actors and not directors:
             return ValidationResult(
-                valid=False, reason="No shared credited cast or director found",
-                connections=[], connection_type=required)
+                valid=False,
+                reason="No shared credited cast or director found",
+                connections=[],
+                connection_type=required,
+            )
 
         available = {"actor": actors, "director": directors}
         if required is None:
             return ValidationResult(valid=True, connections=[*actors, *directors])
         if available[required]:
             return ValidationResult(
-                valid=True, connections=available[required], connection_type=required)
+                valid=True, connections=available[required], connection_type=required
+            )
         other = OPPOSITE_KIND[required]
         return ValidationResult(
-            valid=False, blocked=True, connection_type=required,
+            valid=False,
+            blocked=True,
+            connection_type=required,
             reason=(
                 f"Auteur Relay: this hop must connect through a {required}, "
                 f"but these films only share a {other}"
-            ))
+            ),
+        )
 
-    def link_metadata(
-        self, result: ValidationResult, client_metadata: dict | None
-    ) -> dict | None:
+    def link_metadata(self, result: ValidationResult, client_metadata: dict | None) -> dict | None:
         meta = dict(client_metadata or {})
         kinds = {c.kind for c in result.connections}
         kind = result.connection_type
         if kind is None:
             hint = meta.get("connection_type")
-            kind = hint if hint in kinds else (
-                "actor" if "actor" in kinds else "director" if "director" in kinds else None)
+            kind = (
+                hint
+                if hint in kinds
+                else ("actor" if "actor" in kinds else "director" if "director" in kinds else None)
+            )
         if kind is None:
             return meta or None
         meta["connection_type"] = kind
         chosen = [c for c in result.connections if c.kind == kind]
         if kind == "director":
-            for key in ("actor_id", "actor_name", "profile_path", "character_in_from", "character_in_to"):
+            for key in (
+                "actor_id",
+                "actor_name",
+                "profile_path",
+                "character_in_from",
+                "character_in_to",
+            ):
                 meta.pop(key, None)
             if chosen:
-                preferred = next((c for c in chosen if c.actor_id == meta.get("director_id")), chosen[0])
+                preferred = next(
+                    (c for c in chosen if c.actor_id == meta.get("director_id")), chosen[0]
+                )
                 meta["director_id"] = preferred.actor_id
                 meta["director_name"] = preferred.actor_name
         else:
             for key in ("director_id", "director_name"):
                 meta.pop(key, None)
             if chosen and meta.get("actor_id") is None:
-                meta.update(actor_id=chosen[0].actor_id, actor_name=chosen[0].actor_name,
-                            profile_path=chosen[0].profile_path)
+                meta.update(
+                    actor_id=chosen[0].actor_id,
+                    actor_name=chosen[0].actor_name,
+                    profile_path=chosen[0].profile_path,
+                )
         return meta
 
     async def discover_candidates(
@@ -578,10 +668,12 @@ class AuteurRelayEngine(MutatorEngine):
                 pool[candidate.movie_id] = candidate
         if required != "actor":
             directors = await cache_repo.get_movie_directors(
-                self.session, self.tmdb, frontier_movie_id)
+                self.session, self.tmdb, frontier_movie_id
+            )
             for director in directors:
                 films = await cache_repo.get_director_credits(
-                    self.session, self.tmdb, director.person_id, director.name)
+                    self.session, self.tmdb, director.person_id, director.name
+                )
                 for film in films:
                     if film.tmdb_id == frontier_movie_id or not is_reality_eligible(film):
                         continue
@@ -597,31 +689,41 @@ class AuteurRelayEngine(MutatorEngine):
                             popularity=film.popularity,
                         )
                         pool[film.tmdb_id] = candidate
-                    candidate.connections.append(DiscoveryConnection(
-                        kind="director", actor_id=director.person_id,
-                        actor_name=director.name))
+                    candidate.connections.append(
+                        DiscoveryConnection(
+                            kind="director", actor_id=director.person_id, actor_name=director.name
+                        )
+                    )
         results = list(pool.values())
         if mode == "and":
             results = [c for c in results if len(c.connections) >= 2]
         return results
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None,
+        self,
+        tail_movie_id: int | None,
+        previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
         if tail_movie_id is None:
             return ConstraintInfo(
-                kind="free", title="Any film starts the relay",
-                detail="After that, hops must alternate between an actor and a director.")
+                kind="free",
+                title="Any film starts the relay",
+                detail="After that, hops must alternate between an actor and a director.",
+            )
         previous = previous_transition or {}
         last = previous.get("connection_type")
         required = OPPOSITE_KIND.get(last or "")
         if required is None:
             return ConstraintInfo(
-                kind="free", title="Next hop is free: connect via an actor or a director",
-                detail="Whichever you pick, the hop after it must be the other kind.")
+                kind="free",
+                title="Next hop is free: connect via an actor or a director",
+                detail="Whichever you pick, the hop after it must be the other kind.",
+            )
         who = previous.get("director_name") if last == "director" else previous.get("actor_name")
         return ConstraintInfo(
-            kind=required, title=f"Next hop must be {'a Director' if required == 'director' else 'an Actor'}",
+            kind=required,
+            title=f"Next hop must be {'a Director' if required == 'director' else 'an Actor'}",
             detail=f"The last hop was through {'a director' if last == 'director' else 'an actor'}"
-                   + (f" ({who})." if who else "."))
+            + (f" ({who})." if who else "."),
+        )

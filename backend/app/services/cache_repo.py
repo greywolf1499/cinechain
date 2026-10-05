@@ -88,7 +88,9 @@ class CacheRepo:
         if row is None:
             row = CachedMovie(tmdb_id=movie["id"])
         row.title = movie["title"]
-        if row.narrative_era_label == "Contemporary" and row.release_date != movie.get("release_date"):
+        if row.narrative_era_label == "Contemporary" and row.release_date != movie.get(
+            "release_date"
+        ):
             # "Contemporary" was derived from the old release year; a real era is never touched.
             row.narrative_year = None
             row.narrative_era_label = None
@@ -159,9 +161,11 @@ class CacheRepo:
         movie = self.session.get(CachedMovie, movie_id)
         if movie is None or movie.directors_fetched_at is None:
             return None
-        return list(self.session.exec(
-            select(CachedMovieDirector).where(CachedMovieDirector.movie_id == movie_id)
-        ).all())
+        return list(
+            self.session.exec(
+                select(CachedMovieDirector).where(CachedMovieDirector.movie_id == movie_id)
+            ).all()
+        )
 
     def upsert_directors(
         self, movie_id: int, directors: list[TMDBDirector]
@@ -176,7 +180,8 @@ class CacheRepo:
         self.session.flush()
         rows = [
             CachedMovieDirector(
-                movie_id=movie_id, person_id=d["id"], name=d["name"], gender=d.get("gender"))
+                movie_id=movie_id, person_id=d["id"], name=d["name"], gender=d.get("gender")
+            )
             for d in directors
         ]
         self.session.add_all(rows)
@@ -214,8 +219,9 @@ class CacheRepo:
             movie = self.upsert_movie_stub(credit)
             movies.append(movie)
             if self.session.get(CachedMovieDirector, (movie.tmdb_id, person_id)) is None:
-                self.session.add(CachedMovieDirector(
-                    movie_id=movie.tmdb_id, person_id=person_id, name=name))
+                self.session.add(
+                    CachedMovieDirector(movie_id=movie.tmdb_id, person_id=person_id, name=name)
+                )
         self.session.commit()
         return movies
 
@@ -226,14 +232,15 @@ class CacheRepo:
         movie = self.session.get(CachedMovie, movie_id)
         if movie is None or movie.crew_fetched_at is None:
             return None
-        return list(self.session.exec(
-            select(CachedCrewCredit).where(CachedCrewCredit.movie_id == movie_id)
-            .order_by(CachedCrewCredit.id)
-        ).all())
+        return list(
+            self.session.exec(
+                select(CachedCrewCredit)
+                .where(CachedCrewCredit.movie_id == movie_id)
+                .order_by(CachedCrewCredit.id)
+            ).all()
+        )
 
-    def upsert_crew(
-        self, movie_id: int, crew: list[TMDBCrewMember]
-    ) -> list[CachedCrewCredit]:
+    def upsert_crew(self, movie_id: int, crew: list[TMDBCrewMember]) -> list[CachedCrewCredit]:
         """Replaces a film's key crew with its full, authoritative list."""
         movie = self.session.get(CachedMovie, movie_id)
         if movie is None:
@@ -246,11 +253,15 @@ class CacheRepo:
             self.session.flush()
             rows = [
                 CachedCrewCredit(
-                    movie_id=movie_id, person_id=member["id"], person_name=member["name"],
+                    movie_id=movie_id,
+                    person_id=member["id"],
+                    person_name=member["name"],
                     job=member["job"],
                     department=member.get("department") or CRAFT_JOBS[member["job"]][1],
-                    profile_path=member.get("profile_path"))
-                for member in crew if member.get("job") in CRAFT_JOBS
+                    profile_path=member.get("profile_path"),
+                )
+                for member in crew
+                if member.get("job") in CRAFT_JOBS
             ]
             self.session.add_all(rows)
             movie.crew_fetched_at = utcnow()
@@ -271,7 +282,8 @@ class CacheRepo:
         """Stores a person's key-craft filmography. A stub movie gains partial crew rows without
         `crew_fetched_at`, so its full crew list is still fetched (and replaces them) when needed."""
         person = self.session.get(CachedCrewPerson, person_id) or CachedCrewPerson(
-            person_id=person_id, name=name)
+            person_id=person_id, name=name
+        )
         person.name = name or person.name
         person.credits_fetched_at = utcnow()
         self.session.add(person)
@@ -280,14 +292,23 @@ class CacheRepo:
             if job not in CRAFT_JOBS:
                 continue
             movie = self.upsert_movie_stub(credit)
-            exists = self.session.exec(select(CachedCrewCredit).where(
-                CachedCrewCredit.movie_id == movie.tmdb_id,
-                CachedCrewCredit.person_id == person_id,
-                CachedCrewCredit.job == job)).first()
+            exists = self.session.exec(
+                select(CachedCrewCredit).where(
+                    CachedCrewCredit.movie_id == movie.tmdb_id,
+                    CachedCrewCredit.person_id == person_id,
+                    CachedCrewCredit.job == job,
+                )
+            ).first()
             if exists is None:
-                self.session.add(CachedCrewCredit(
-                    movie_id=movie.tmdb_id, person_id=person_id, person_name=name, job=job,
-                    department=credit.get("department") or CRAFT_JOBS[job][1]))
+                self.session.add(
+                    CachedCrewCredit(
+                        movie_id=movie.tmdb_id,
+                        person_id=person_id,
+                        person_name=name,
+                        job=job,
+                        department=credit.get("department") or CRAFT_JOBS[job][1],
+                    )
+                )
         try:
             self.session.commit()
         except IntegrityError:
@@ -299,7 +320,8 @@ class CacheRepo:
         crew_rows = self.session.exec(
             select(CachedMovie, CachedCrewCredit)
             .join(CachedCrewCredit, CachedCrewCredit.movie_id == CachedMovie.tmdb_id)
-            .where(CachedCrewCredit.person_id == person_id)).all()
+            .where(CachedCrewCredit.person_id == person_id)
+        ).all()
         for movie, credit in crew_rows:
             role = role_for_job(credit.job)
             if role:
@@ -307,9 +329,11 @@ class CacheRepo:
         cast_rows = self.session.exec(
             select(CachedMovie, CachedMovieCast)
             .join(CachedMovieCast, CachedMovieCast.movie_id == CachedMovie.tmdb_id)
-            .where(CachedMovieCast.actor_id == person_id)).all()
+            .where(CachedMovieCast.actor_id == person_id)
+        ).all()
         films += [
-            PersonFilm(movie, ROLE_ACTOR, None, cast.character_name) for movie, cast in cast_rows]
+            PersonFilm(movie, ROLE_ACTOR, None, cast.character_name) for movie, cast in cast_rows
+        ]
         return films
 
     # --- cast (top-N billing for a given movie) ---
@@ -375,7 +399,8 @@ class CacheRepo:
                     # cast for the first time concurrently.
                     with self.session.begin_nested():
                         actor = CachedActor(
-                            tmdb_id=member["id"], name=member["name"],
+                            tmdb_id=member["id"],
+                            name=member["name"],
                             profile_path=member.get("profile_path"),
                         )
                         self.session.add(actor)
@@ -389,8 +414,7 @@ class CacheRepo:
                 actor.profile_path = member.get("profile_path")
             self.session.add(actor)
 
-            cast_row = self.session.get(
-                CachedMovieCast, (movie_id, member["id"]))
+            cast_row = self.session.get(CachedMovieCast, (movie_id, member["id"]))
             if cast_row is None:
                 try:
                     # Concurrent cold-cache requests can both observe this row
@@ -398,13 +422,11 @@ class CacheRepo:
                     # recover from the unique constraint without poisoning the
                     # outer transaction.
                     with self.session.begin_nested():
-                        cast_row = CachedMovieCast(
-                            movie_id=movie_id, actor_id=member["id"])
+                        cast_row = CachedMovieCast(movie_id=movie_id, actor_id=member["id"])
                         self.session.add(cast_row)
                         self.session.flush()
                 except IntegrityError:
-                    cast_row = self.session.get(
-                        CachedMovieCast, (movie_id, member["id"]))
+                    cast_row = self.session.get(CachedMovieCast, (movie_id, member["id"]))
                     if cast_row is None:
                         raise
             cast_row.cast_order = member["order"]
@@ -453,8 +475,7 @@ class CacheRepo:
             # as upsert_cast/upsert_movie_stub.
             try:
                 with self.session.begin_nested():
-                    actor = CachedActor(
-                        tmdb_id=actor_id, name=f"Unknown actor {actor_id}")
+                    actor = CachedActor(tmdb_id=actor_id, name=f"Unknown actor {actor_id}")
                     self.session.add(actor)
                     self.session.flush()
             except IntegrityError:
@@ -467,8 +488,7 @@ class CacheRepo:
             movie = self.upsert_movie_stub(credit)
             movies.append(movie)
 
-            cast_row = self.session.get(
-                CachedMovieCast, (credit["id"], actor_id))
+            cast_row = self.session.get(CachedMovieCast, (credit["id"], actor_id))
             if cast_row is None:
                 cast_row = CachedMovieCast(
                     movie_id=credit["id"],
@@ -567,9 +587,7 @@ async def get_movie_cast(
     return await anyio.to_thread.run_sync(repo.upsert_cast, tmdb_id, cast, limit)
 
 
-async def get_actor_credits(
-    session: Session, tmdb: TMDBClient, actor_id: int
-) -> list[CachedMovie]:
+async def get_actor_credits(session: Session, tmdb: TMDBClient, actor_id: int) -> list[CachedMovie]:
     repo = CacheRepo(session)
     cached = await anyio.to_thread.run_sync(repo.get_cached_actor_credits, actor_id)
     if cached is not None:

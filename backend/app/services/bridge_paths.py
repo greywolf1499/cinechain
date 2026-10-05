@@ -69,15 +69,19 @@ def make_bridge_node(movie: CachedMovie | None, movie_id: int) -> BridgeNode:
 
 def _canon_heavy(session: Session, nodes: Sequence[BridgeNode]) -> PathTag | None:
     movie_ids = {n.movie_id for n in nodes}
-    badged = set(session.exec(
-        select(CanonMovieBadge.movie_id).where(
-            col(CanonMovieBadge.movie_id).in_(movie_ids))
-    ).all())
+    badged = set(
+        session.exec(
+            select(CanonMovieBadge.movie_id).where(col(CanonMovieBadge.movie_id).in_(movie_ids))
+        ).all()
+    )
     if len(badged) < CANON_HEAVY_MIN_FILMS:
         return None
     return PathTag(
-        key="canon_heavy", label="Canon Heavy", emoji="🏆",
-        detail=f"{len(badged)} films from curated canons")
+        key="canon_heavy",
+        label="Canon Heavy",
+        emoji="🏆",
+        detail=f"{len(badged)} films from curated canons",
+    )
 
 
 def _multi_country(_session: Session, nodes: Sequence[BridgeNode]) -> PathTag | None:
@@ -85,8 +89,11 @@ def _multi_country(_session: Session, nodes: Sequence[BridgeNode]) -> PathTag | 
     if len(countries) < MULTI_COUNTRY_MIN_COUNTRIES:
         return None
     return PathTag(
-        key="multi_country", label="Multi-Country", emoji="🌍",
-        detail=f"Spans {len(countries)} countries: {', '.join(countries)}")
+        key="multi_country",
+        label="Multi-Country",
+        emoji="🌍",
+        detail=f"Spans {len(countries)} countries: {', '.join(countries)}",
+    )
 
 
 def _epic_runtimes(_session: Session, nodes: Sequence[BridgeNode]) -> PathTag | None:
@@ -94,8 +101,11 @@ def _epic_runtimes(_session: Session, nodes: Sequence[BridgeNode]) -> PathTag | 
     if len(epics) < EPIC_RUNTIME_MIN_FILMS:
         return None
     return PathTag(
-        key="epic_runtimes", label="Epic Runtimes", emoji="⏱️",
-        detail=f"{len(epics)} films over {EPIC_RUNTIME_MINUTES} minutes")
+        key="epic_runtimes",
+        label="Epic Runtimes",
+        emoji="⏱️",
+        detail=f"{len(epics)} films over {EPIC_RUNTIME_MINUTES} minutes",
+    )
 
 
 _ANALYZERS = (_canon_heavy, _multi_country, _epic_runtimes)
@@ -124,7 +134,8 @@ async def hydrate_movies(
         try:
             await fetch_with_backoff(
                 lambda movie_id=movie_id: cache_repo.get_movie(
-                    session, tmdb, movie_id, refresh=True),
+                    session, tmdb, movie_id, refresh=True
+                ),
                 deadline,
             )
         except DeadlineReached:
@@ -180,7 +191,8 @@ def find_same_actor_swaps(
         .where(cast_x.c.actor_id == actor_in_id, cast_y.c.actor_id == actor_out_id)
     )
     movies = [
-        m for m in session.exec(statement).all()
+        m
+        for m in session.exec(statement).all()
         if m.tmdb_id not in exclude_movie_ids and is_reality_eligible(m)
     ]
     # Most mainstream first: the likeliest "oh, THAT film" swap.
@@ -244,7 +256,8 @@ def find_broad_detours(
         by_movie: dict[int, list[int]] = {}
         rows = session.exec(
             select(CachedMovieCast.movie_id, CachedMovieCast.actor_id).where(
-                col(CachedMovieCast.actor_id).in_(list(actor_ids)))
+                col(CachedMovieCast.actor_id).in_(list(actor_ids))
+            )
         ).all()
         for movie_id, actor_id in rows:
             by_movie.setdefault(movie_id, []).append(actor_id)
@@ -255,16 +268,21 @@ def find_broad_detours(
     movie_ids = [m for m in into.keys() & out_of.keys() if m not in skip]
 
     candidates: list[tuple[CachedMovie, int, int]] = []
-    for movie in session.exec(
-        select(CachedMovie).where(col(CachedMovie.tmdb_id).in_(movie_ids))
-    ).all() if movie_ids else []:
+    for movie in (
+        session.exec(select(CachedMovie).where(col(CachedMovie.tmdb_id).in_(movie_ids))).all()
+        if movie_ids
+        else []
+    ):
         if not is_reality_eligible(movie):
             continue
         # Prefer the most top-billed actor on each side (list order = billing order).
         actor_in = min(into[movie.tmdb_id], key=actors_from.index)
         actor_out = min(out_of[movie.tmdb_id], key=actors_to.index)
-        if same_pair is not None and same_pair[0] in into[movie.tmdb_id] \
-                and same_pair[1] in out_of[movie.tmdb_id]:
+        if (
+            same_pair is not None
+            and same_pair[0] in into[movie.tmdb_id]
+            and same_pair[1] in out_of[movie.tmdb_id]
+        ):
             continue
         candidates.append((movie, actor_in, actor_out))
     candidates.sort(key=lambda c: (-(c[0].popularity or 0.0), c[0].title))

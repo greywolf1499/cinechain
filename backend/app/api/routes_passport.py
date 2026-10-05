@@ -45,7 +45,8 @@ def _require_tmdb_key(tmdb: TMDBClient) -> None:
     if not (tmdb._overrides.get("tmdb_api_key") or get_settings().tmdb_api_key):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            detail="TMDB API key is not configured - add it under Settings > Integrations.")
+            detail="TMDB API key is not configured - add it under Settings > Integrations.",
+        )
 
 
 def _imports_dir() -> Path:
@@ -74,7 +75,9 @@ async def import_csv(
                 size += len(chunk)
                 if size > passport_import.MAX_UPLOAD_BYTES:
                     raise HTTPException(
-                        413, detail="CSV is larger than 25MB - upload diary.csv, not the whole export.")
+                        413,
+                        detail="CSV is larger than 25MB - upload diary.csv, not the whole export.",
+                    )
                 await anyio.to_thread.run_sync(out.write, chunk)
         try:
             await anyio.to_thread.run_sync(passport_import.validate_csv_header, path)
@@ -85,10 +88,15 @@ async def import_csv(
         raise
 
     task, created = task_runner.submit_task(
-        background_tasks, session, "diary_import_csv",
+        background_tasks,
+        session,
+        "diary_import_csv",
         passport_import.csv_job(path, tmdb, current_user.id),
-        user_id=current_user.id, dedupe_key=f"diary_import:{current_user.id}",
-        label=f"Importing {file.filename or 'diary.csv'}", describe_error=_import_error)
+        user_id=current_user.id,
+        dedupe_key=f"diary_import:{current_user.id}",
+        label=f"Importing {file.filename or 'diary.csv'}",
+        describe_error=_import_error,
+    )
     if not created:  # another import is already running for this user
         path.unlink(missing_ok=True)
     return TaskOut.from_model(task)
@@ -110,10 +118,15 @@ async def import_rss(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     task, _ = task_runner.submit_task(
-        background_tasks, session, "diary_import_rss",
+        background_tasks,
+        session,
+        "diary_import_rss",
         passport_import.rss_job(username, tmdb, current_user.id),
-        user_id=current_user.id, dedupe_key=f"diary_import:{current_user.id}",
-        label=f"Importing {username}'s RSS diary", describe_error=_import_error)
+        user_id=current_user.id,
+        dedupe_key=f"diary_import:{current_user.id}",
+        label=f"Importing {username}'s RSS diary",
+        describe_error=_import_error,
+    )
     return TaskOut.from_model(task)
 
 
@@ -144,18 +157,29 @@ def backfill_directors(
             for index, movie_id in enumerate(missing, start=1):
                 try:
                     found = await fetch_with_backoff(
-                        lambda movie_id=movie_id: cache_repo.get_movie_directors(db, tmdb, movie_id),
-                        time.monotonic() + passport_import.PER_CALL_DEADLINE_SECONDS, None)
+                        lambda movie_id=movie_id: cache_repo.get_movie_directors(
+                            db, tmdb, movie_id
+                        ),
+                        time.monotonic() + passport_import.PER_CALL_DEADLINE_SECONDS,
+                        None,
+                    )
                     done += 0 if found is None else 1  # None = the film is gone from TMDB
                     failed += 1 if found is None else 0
                 except Exception:  # noqa: BLE001 - one bad film must not stop the backfill
                     failed += 1
                 if index % 10 == 0 or index == len(missing):
-                    await ctx.aprogress({"stage": "directors", "current": index, "total": len(missing)})
+                    await ctx.aprogress(
+                        {"stage": "directors", "current": index, "total": len(missing)}
+                    )
         return {"looked_up": done, "failed": failed, "total": len(missing)}
 
     task, _ = task_runner.submit_task(
-        background_tasks, session, "passport_backfill_directors", work,
-        user_id=user_id, dedupe_key=f"passport_backfill_directors:{user_id}",
-        label=f"Looking up directors for {len(missing)} films")
+        background_tasks,
+        session,
+        "passport_backfill_directors",
+        work,
+        user_id=user_id,
+        dedupe_key=f"passport_backfill_directors:{user_id}",
+        label=f"Looking up directors for {len(missing)} films",
+    )
     return TaskOut.from_model(task)

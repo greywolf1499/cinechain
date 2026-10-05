@@ -51,8 +51,15 @@ from app.utils.dates import parse_release_year
 CREW_CRAFT = "crew_craft"
 
 # `transition_metadata` keys the engine rebuilds from its own validation.
-LINK_KEYS = ("person_id", "person_name", "role", "from_role", "profile_path",
-             "character_in_from", "character_in_to")
+LINK_KEYS = (
+    "person_id",
+    "person_name",
+    "role",
+    "from_role",
+    "profile_path",
+    "character_in_from",
+    "character_in_to",
+)
 
 
 @dataclass
@@ -69,7 +76,9 @@ class PersonCredits:
 def actors_of(people: dict[int, PersonCredits]) -> list[CastCredit]:
     return [
         CastCredit(p.person_id, p.name, p.roles[ROLE_ACTOR], p.cast_order)
-        for p in people.values() if ROLE_ACTOR in p.roles]
+        for p in people.values()
+        if ROLE_ACTOR in p.roles
+    ]
 
 
 def directors_of(people: dict[int, PersonCredits]) -> list[Person]:
@@ -110,17 +119,23 @@ class CrewCraftEngine(CineChainEngine):
     ) -> dict[int, PersonCredits]:
         """Everyone who counts on a film: its top-billed cast plus its key crafts."""
         people: dict[int, PersonCredits] = {}
-        for member in await cache_repo.get_movie_cast(self.session, self.tmdb, movie_id, cast_limit):
-            person = people.setdefault(member["actor_id"], PersonCredits(
-                member["actor_id"], member["name"], member["profile_path"]))
+        for member in await cache_repo.get_movie_cast(
+            self.session, self.tmdb, movie_id, cast_limit
+        ):
+            person = people.setdefault(
+                member["actor_id"],
+                PersonCredits(member["actor_id"], member["name"], member["profile_path"]),
+            )
             person.roles[ROLE_ACTOR] = member["character_name"]
             person.cast_order = member["cast_order"]
         for credit in await cache_repo.get_movie_crew(self.session, self.tmdb, movie_id):
             role = role_for_job(credit.job)
             if role is None:
                 continue
-            person = people.setdefault(credit.person_id, PersonCredits(
-                credit.person_id, credit.person_name, credit.profile_path))
+            person = people.setdefault(
+                credit.person_id,
+                PersonCredits(credit.person_id, credit.person_name, credit.profile_path),
+            )
             person.profile_path = person.profile_path or credit.profile_path
             person.roles.setdefault(role, credit.job)
         return people
@@ -141,52 +156,80 @@ class CrewCraftEngine(CineChainEngine):
             if b is None:
                 continue
             for role_from, role_to in role_pairs(set(a.roles), set(b.roles)):
-                connections.append(SharedActorConnection(
-                    kind="craft", actor_id=person_id, actor_name=a.name,
-                    profile_path=a.profile_path or b.profile_path,
-                    character_in_from=a.roles.get(role_from) if role_from == ROLE_ACTOR else None,
-                    character_in_to=b.roles.get(role_to) if role_to == ROLE_ACTOR else None,
-                    role_in_from=role_from, role_in_to=role_to))
+                connections.append(
+                    SharedActorConnection(
+                        kind="craft",
+                        actor_id=person_id,
+                        actor_name=a.name,
+                        profile_path=a.profile_path or b.profile_path,
+                        character_in_from=a.roles.get(role_from)
+                        if role_from == ROLE_ACTOR
+                        else None,
+                        character_in_to=b.roles.get(role_to) if role_to == ROLE_ACTOR else None,
+                        role_in_from=role_from,
+                        role_in_to=role_to,
+                    )
+                )
         hop = find_character_hop(actors_of(earlier), actors_of(later))
         if hop is not None and not connections and self.character_hop_links:
-            connections.append(SharedActorConnection(
-                kind="craft", actor_id=hop.actor_to.person_id,
-                actor_name=f"{hop.actor_from.name} \u2192 {hop.actor_to.name}",
-                character_in_from=hop.actor_from.character,
-                character_in_to=hop.actor_to.character,
-                role_in_from=ROLE_ACTOR, role_in_to=ROLE_ACTOR))
+            connections.append(
+                SharedActorConnection(
+                    kind="craft",
+                    actor_id=hop.actor_to.person_id,
+                    actor_name=f"{hop.actor_from.name} \u2192 {hop.actor_to.name}",
+                    character_in_from=hop.actor_from.character,
+                    character_in_to=hop.actor_to.character,
+                    role_in_from=ROLE_ACTOR,
+                    role_in_to=ROLE_ACTOR,
+                )
+            )
         if not connections:
             return ValidationResult(
-                valid=False, connections=[],
-                reason="No shared cast or crew (composer, cinematographer, writer, director) found")
+                valid=False,
+                connections=[],
+                reason="No shared cast or crew (composer, cinematographer, writer, director) found",
+            )
         mechanic: dict = {}
         if hop is not None:
             mechanic[CHARACTER_HOP_KEY] = hop.character
         reunion = find_golden_reunion(
-            directors_of(earlier), actors_of(earlier), directors_of(later), actors_of(later))
+            directors_of(earlier), actors_of(earlier), directors_of(later), actors_of(later)
+        )
         if reunion is not None:
             mechanic[GOLDEN_REUNION_KEY] = reunion
-        connections.sort(key=lambda c: (
-            c.role_in_from != c.role_in_to, ROLE_PRIORITY.index(c.role_in_to or ROLE_ACTOR),
-            c.actor_name))
+        connections.sort(
+            key=lambda c: (
+                c.role_in_from != c.role_in_to,
+                ROLE_PRIORITY.index(c.role_in_to or ROLE_ACTOR),
+                c.actor_name,
+            )
+        )
         return ValidationResult(valid=True, connections=connections, mechanic=mechanic or None)
 
-    def link_metadata(
-        self, result: ValidationResult, client_metadata: dict | None
-    ) -> dict | None:
+    def link_metadata(self, result: ValidationResult, client_metadata: dict | None) -> dict | None:
         if not result.connections:
             return None
         claimed = client_metadata or {}
         chosen = next(
-            (c for c in result.connections
-             if c.actor_id == claimed.get("person_id")
-             and claimed.get("role") in (None, c.role_in_to)),
-            result.connections[0])
-        kept = {k: v for k, v in claimed.items()
-                if k not in LINK_KEYS and k not in ("actor_id", "actor_name")}
+            (
+                c
+                for c in result.connections
+                if c.actor_id == claimed.get("person_id")
+                and claimed.get("role") in (None, c.role_in_to)
+            ),
+            result.connections[0],
+        )
+        kept = {
+            k: v
+            for k, v in claimed.items()
+            if k not in LINK_KEYS and k not in ("actor_id", "actor_name")
+        }
         metadata = {
-            **kept, "person_id": chosen.actor_id, "person_name": chosen.actor_name,
-            "role": chosen.role_in_to, "from_role": chosen.role_in_from,
+            **kept,
+            "person_id": chosen.actor_id,
+            "person_name": chosen.actor_name,
+            "role": chosen.role_in_to,
+            "from_role": chosen.role_in_from,
             "profile_path": chosen.profile_path,
         }
         if chosen.character_in_from:
@@ -212,49 +255,73 @@ class CrewCraftEngine(CineChainEngine):
         character_by_candidate: dict[tuple[int, int], str] = {}
         for person in frontier.values():
             films = await cache_repo.get_person_filmography(
-                self.session, self.tmdb, person.person_id, person.name)
+                self.session, self.tmdb, person.person_id, person.name
+            )
             for film in films:
                 movie = film.movie
                 if movie.tmdb_id == frontier_movie_id or not is_reality_eligible(movie):
                     continue
-                candidates.setdefault(movie.tmdb_id, DiscoveryCandidate(
-                    movie_id=movie.tmdb_id, title=movie.title, poster_path=movie.poster_path,
-                    release_year=parse_release_year(movie.release_date),
-                    origin_country=movie.origin_country, genre_ids=movie.genre_ids or [],
-                    popularity=movie.popularity))
+                candidates.setdefault(
+                    movie.tmdb_id,
+                    DiscoveryCandidate(
+                        movie_id=movie.tmdb_id,
+                        title=movie.title,
+                        poster_path=movie.poster_path,
+                        release_year=parse_release_year(movie.release_date),
+                        origin_country=movie.origin_country,
+                        genre_ids=movie.genre_ids or [],
+                        popularity=movie.popularity,
+                    ),
+                )
                 roles = roles_by_candidate.setdefault(movie.tmdb_id, {}).setdefault(
-                    person.person_id, set())
+                    person.person_id, set()
+                )
                 roles.add(film.role)
                 if film.role == ROLE_ACTOR and film.character:
-                    character_by_candidate.setdefault((movie.tmdb_id, person.person_id), film.character)
+                    character_by_candidate.setdefault(
+                        (movie.tmdb_id, person.person_id), film.character
+                    )
         for movie_id, candidate in candidates.items():
             for person in frontier.values():
                 candidate_roles = roles_by_candidate[movie_id].get(person.person_id)
                 if not candidate_roles:
                     continue
                 for role_from, role_to in role_pairs(set(person.roles), candidate_roles):
-                    candidate.connections.append(DiscoveryConnection(
-                        kind="craft", actor_id=person.person_id, actor_name=person.name,
-                        profile_path=person.profile_path,
-                        character_in_frontier=(
-                            person.roles.get(role_from) if role_from == ROLE_ACTOR else None),
-                        character_in_candidate=(
-                            character_by_candidate.get((movie_id, person.person_id))
-                            if role_to == ROLE_ACTOR else None),
-                        role_in_frontier=role_from, role_in_candidate=role_to))
+                    candidate.connections.append(
+                        DiscoveryConnection(
+                            kind="craft",
+                            actor_id=person.person_id,
+                            actor_name=person.name,
+                            profile_path=person.profile_path,
+                            character_in_frontier=(
+                                person.roles.get(role_from) if role_from == ROLE_ACTOR else None
+                            ),
+                            character_in_candidate=(
+                                character_by_candidate.get((movie_id, person.person_id))
+                                if role_to == ROLE_ACTOR
+                                else None
+                            ),
+                            role_in_frontier=role_from,
+                            role_in_candidate=role_to,
+                        )
+                    )
         results = list(candidates.values())
         if mode == "and":
             results = [c for c in results if len(c.connections) >= 2]
         return results
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None,
+        self,
+        tail_movie_id: int | None,
+        previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
         return ConstraintInfo(
-            kind="craft", title="Link through any shared cast or craft",
+            kind="craft",
+            title="Link through any shared cast or craft",
             detail="Actor, composer, cinematographer, writer or director - the same person "
-                   "counts even when they held a different role on each film.")
+            "counts even when they held a different role on each film.",
+        )
 
     async def compute_stats(self, steps: list[RunStep]) -> RunStats:
         stats = await super().compute_stats(steps)
@@ -267,6 +334,11 @@ class CrewCraftEngine(CineChainEngine):
                 names[meta["person_id"]] = meta.get("person_name") or "Unknown"
         if not people:
             return stats
-        return stats.model_copy(update={"keystone_actors": [
-            KeystoneActor(actor_id=pid, actor_name=names[pid], appearances=count)
-            for pid, count in people.most_common()]})
+        return stats.model_copy(
+            update={
+                "keystone_actors": [
+                    KeystoneActor(actor_id=pid, actor_name=names[pid], appearances=count)
+                    for pid, count in people.most_common()
+                ]
+            }
+        )

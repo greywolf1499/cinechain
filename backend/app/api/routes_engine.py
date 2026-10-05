@@ -114,7 +114,9 @@ ANTI_CHEAT_LOCKED = {
 }
 
 
-def _anti_cheat_response(session: Session, user: User, from_id: int, to_id: int) -> JSONResponse | None:
+def _anti_cheat_response(
+    session: Session, user: User, from_id: int, to_id: int
+) -> JSONResponse | None:
     """403 when this pair is today's Daily Puzzle and the user hasn't solved or forfeited it."""
     if daily_puzzle.is_locked(session, user.id, from_id, to_id):
         return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content=ANTI_CHEAT_LOCKED)
@@ -129,17 +131,24 @@ async def bridge_fast(
     current_user: User = Depends(get_current_user),
 ) -> dict | Response:
     if locked := _anti_cheat_response(
-            session, current_user, payload.from_movie_id, payload.to_movie_id):
+        session, current_user, payload.from_movie_id, payload.to_movie_id
+    ):
         return locked
     engine = get_engine(payload.game_type, session, tmdb)
     agen = engine.solve_bridge(
-        payload.from_movie_id, payload.to_movie_id, FAST_MAX_DEPTH,
-        call_budget=FAST_CALL_BUDGET, max_duration_seconds=FAST_MAX_DURATION_SECONDS,
+        payload.from_movie_id,
+        payload.to_movie_id,
+        FAST_MAX_DEPTH,
+        call_budget=FAST_CALL_BUDGET,
+        max_duration_seconds=FAST_MAX_DURATION_SECONDS,
     )
     try:
         async for event in agen:
             if event["type"] == "result":
-                return {"status": "solved", **jsonable_encoder({k: v for k, v in event.items() if k != "type"})}
+                return {
+                    "status": "solved",
+                    **jsonable_encoder({k: v for k, v in event.items() if k != "type"}),
+                }
             if event["type"] in ("exhausted", "timeout", "error"):
                 return {"status": "exceeded_fast_budget"}
     finally:
@@ -159,8 +168,7 @@ def _run_solve_context(
     # path param, on these routes.
     run = session.get(Run, run_id)
     if run is None or session.get(RunParticipant, (run_id, current_user.id)) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     excluded = {
         step.movie_id
         for step in session.exec(select(RunStep).where(RunStep.run_id == run_id)).all()
@@ -190,11 +198,13 @@ def _parse_id_list(raw: str | None, name: str, max_items: int) -> list[int]:
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"{name} must be a comma-separated list of integers") from None
+            detail=f"{name} must be a comma-separated list of integers",
+        ) from None
     if len(ids) > max_items:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"{name} accepts at most {max_items} ids")
+            detail=f"{name} accepts at most {max_items} ids",
+        )
     return ids
 
 
@@ -202,9 +212,11 @@ def _tmdb_unavailable(exc: Exception) -> HTTPException:
     if isinstance(exc, DeadlineReached):
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="TMDB is rate limiting us right now - try again in a moment")
+            detail="TMDB is rate limiting us right now - try again in a moment",
+        )
     return HTTPException(
-        status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TMDB lookup failed: {exc}")
+        status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TMDB lookup failed: {exc}"
+    )
 
 
 def _llm_config(session: Session) -> llm.LlmConfig:
@@ -213,7 +225,8 @@ def _llm_config(session: Session) -> llm.LlmConfig:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The generative model is off - an admin can enable it under "
-                   "Settings > Integrations > AI & Embeddings.")
+            "Settings > Integrations > AI & Embeddings.",
+        )
     return config
 
 
@@ -243,9 +256,12 @@ async def pitch_transition(
         raise _tmdb_unavailable(exc) from exc
     try:
         text = await llm.pitch(
-            config, previous, candidate, payload.link_label, critic=payload.style == "critic")
+            config, previous, candidate, payload.link_label, critic=payload.style == "critic"
+        )
     except llm.LlmUnavailable as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
     return PitchResult(pitch=text)
 
 
@@ -283,7 +299,9 @@ async def roulette_spin(
     genre_ids: list[int] = Query(default=[], description="TMDB genre ids (repeat the param)"),
     genre_operator: Literal["AND", "OR"] = Query(default="OR"),
     run_id: str | None = Query(default=None, description="Skip films already in this run"),
-    count: int = Query(default=1, ge=1, le=5, description="Distinct films to draw (Blind Draft: 3)"),
+    count: int = Query(
+        default=1, ge=1, le=5, description="Distinct films to draw (Blind Draft: 3)"
+    ),
     game_type: str = Query(default="roulette"),
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
@@ -295,25 +313,38 @@ async def roulette_spin(
     if not isinstance(engine, RouletteEngine):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{game_type} doesn't support roulette spins")
+            detail=f"{game_type} doesn't support roulette spins",
+        )
     for low, high, label in (
-        (min_runtime, max_runtime, "runtime"), (min_rating, max_rating, "rating"),
+        (min_runtime, max_runtime, "runtime"),
+        (min_rating, max_rating, "rating"),
     ):
         if low is not None and high is not None and low > high:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"min_{label} can't be above max_{label}")
+                detail=f"min_{label} can't be above max_{label}",
+            )
     excluded, _, _ = _run_solve_context(session, run_id, current_user)
 
-    drawn = engine.draw(SpinFilters(
-        max_runtime=max_runtime, min_runtime=min_runtime, min_rating=min_rating,
-        max_rating=max_rating, genre_id=genre, genre_ids=genre_ids,
-        genre_operator=genre_operator, exclude_movie_ids=sorted(excluded)), count)
+    drawn = engine.draw(
+        SpinFilters(
+            max_runtime=max_runtime,
+            min_runtime=min_runtime,
+            min_rating=min_rating,
+            max_rating=max_rating,
+            genre_id=genre,
+            genre_ids=genre_ids,
+            genre_operator=genre_operator,
+            exclude_movie_ids=sorted(excluded),
+        ),
+        count,
+    )
     if drawn is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No movies found in cache matching criteria - loosen the filters, or browse "
-                   "a few lists/actors to grow your local cache")
+            "a few lists/actors to grow your local cache",
+        )
     picks, pool_size = drawn
     movies = [
         RouletteMovie(
@@ -339,14 +370,18 @@ async def bridge_swap_node(
     from_movie_id: int = Query(..., description="The film before it (Movie_A)"),
     to_movie_id: int = Query(..., description="The film after it (Movie_C)"),
     actor_in_id: int | None = Query(
-        default=None, description="Actor_X: links Movie_A to Movie_B (required for mode=same)"),
+        default=None, description="Actor_X: links Movie_A to Movie_B (required for mode=same)"
+    ),
     actor_out_id: int | None = Query(
-        default=None, description="Actor_Y: links Movie_B to Movie_C (required for mode=same)"),
+        default=None, description="Actor_Y: links Movie_B to Movie_C (required for mode=same)"
+    ),
     mode: Literal["same", "broad"] = Query(
         default="same",
-        description="same = the exact same two actors; broad = any actor shared with A and with C"),
+        description="same = the exact same two actors; broad = any actor shared with A and with C",
+    ),
     exclude_movie_ids: str | None = Query(
-        default=None, description="Comma-separated films already on the path"),
+        default=None, description="Comma-separated films already on the path"
+    ),
     game_type: str = Query(default="cinechain"),
     run_id: str | None = Query(default=None),
     session: Session = Depends(get_session),
@@ -361,14 +396,18 @@ async def bridge_swap_node(
     if "bridge_swap" not in engine.capabilities:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{game_type} doesn't support node swapping")
+            detail=f"{game_type} doesn't support node swapping",
+        )
     if mode == "same" and (actor_in_id is None or actor_out_id is None):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="actor_in_id and actor_out_id are required for mode=same")
+            detail="actor_in_id and actor_out_id are required for mode=same",
+        )
     run_excluded, _, _ = _run_solve_context(session, run_id, current_user)
     exclude = {
-        movie_id, from_movie_id, to_movie_id,
+        movie_id,
+        from_movie_id,
+        to_movie_id,
         *_parse_id_list(exclude_movie_ids, "exclude_movie_ids", 50),
     }
     # A run's own history is excluded, but never the path's endpoints themselves.
@@ -378,10 +417,12 @@ async def bridge_swap_node(
     try:
         if mode == "broad":
             actors_from, actors_to = await bridge_paths.ensure_broad_pool(
-                session, tmdb, from_movie_id, to_movie_id, deadline)
+                session, tmdb, from_movie_id, to_movie_id, deadline
+            )
         else:
             await bridge_paths.ensure_filmographies(
-                session, tmdb, [actor_in_id, actor_out_id], deadline)
+                session, tmdb, [actor_in_id, actor_out_id], deadline
+            )
     except (DeadlineReached, TMDBError) as exc:
         raise _tmdb_unavailable(exc) from exc
 
@@ -394,7 +435,8 @@ async def bridge_swap_node(
             actors_to=actors_to,
             exclude_movie_ids=exclude,
             same_pair=(actor_in_id, actor_out_id)
-            if actor_in_id is not None and actor_out_id is not None else None,
+            if actor_in_id is not None and actor_out_id is not None
+            else None,
         )
     else:
         candidates, total = bridge_paths.find_same_actor_swaps(
@@ -420,7 +462,8 @@ async def bridge_path_tags(
     ids = _parse_id_list(movie_ids, "movie_ids", TAGS_MAX_MOVIES)
     if not ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="movie_ids is required")
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="movie_ids is required"
+        )
     await bridge_paths.hydrate_movies(session, tmdb, ids)
     nodes = bridge_paths.build_nodes(session, ids)
     return PathTagsResult(tags=bridge_paths.analyze_path_tags(session, nodes), nodes=nodes)
@@ -446,9 +489,11 @@ async def bridge_stream(
     if locked := _anti_cheat_response(session, current_user, from_movie_id, to_movie_id):
         return locked
     engine = get_engine(game_type, session, tmdb)
-    excluded_movie_ids, cast_limit, min_runtime = _run_solve_context(
-        session, run_id, current_user)
-    excluded_movie_ids = (excluded_movie_ids | set(exclude_movie_ids)) - {from_movie_id, to_movie_id}
+    excluded_movie_ids, cast_limit, min_runtime = _run_solve_context(session, run_id, current_user)
+    excluded_movie_ids = (excluded_movie_ids | set(exclude_movie_ids)) - {
+        from_movie_id,
+        to_movie_id,
+    }
     start_connection_type = _tail_connection_type(session, run_id, from_movie_id)
     run = session.get(Run, run_id) if run_id else None
     run_rules = run.rules_config if run is not None else None
@@ -475,8 +520,7 @@ async def bridge_stream(
                 if await request.is_disconnected():
                     break
                 event_type = event["type"]
-                payload = jsonable_encoder(
-                    {k: v for k, v in event.items() if k != "type"})
+                payload = jsonable_encoder({k: v for k, v in event.items() if k != "type"})
                 yield f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
         finally:
             await agen.aclose()

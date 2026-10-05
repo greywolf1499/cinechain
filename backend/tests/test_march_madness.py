@@ -18,8 +18,10 @@ IDS = list(range(1, 17))
 
 @pytest.fixture()
 def bob(client):
-    client.post("/api/auth/register", json={
-        "username": "bob", "password": "password123", "display_name": "Bob"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "display_name": "Bob"},
+    )
     other = TestClient(app)
     other.post("/api/auth/login", json={"username": "bob", "password": "password123"})
     return other
@@ -31,18 +33,34 @@ def user_id(session_client):
 
 def mock_films(ids=IDS):
     for movie_id in ids:
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "title": f"Film {movie_id}", "release_date": "2000-06-01",
-            "poster_path": f"/p{movie_id}.jpg", "overview": f"Plot {movie_id}", "tagline": "",
-            "origin_country": ["US"], "original_language": "en", "runtime": 90 + movie_id,
-            "genres": [], "popularity": 5.0, "status": "Released"}))
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "title": f"Film {movie_id}",
+                    "release_date": "2000-06-01",
+                    "poster_path": f"/p{movie_id}.jpg",
+                    "overview": f"Plot {movie_id}",
+                    "tagline": "",
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 90 + movie_id,
+                    "genres": [],
+                    "popularity": 5.0,
+                    "status": "Released",
+                },
+            )
+        )
 
 
 def create(client, partner=None, **rules):
     payload = {
-        "name": "Bracket", "game_type": "march_madness",
+        "name": "Bracket",
+        "game_type": "march_madness",
         "participant_user_ids": [user_id(partner)] if partner else [],
-        "rules_config": {"bracket_movie_ids": IDS, **rules}}
+        "rules_config": {"bracket_movie_ids": IDS, **rules},
+    }
     return client.post("/api/runs", json=payload)
 
 
@@ -58,12 +76,15 @@ def detail(client, run_id):
 
 def advance(client, run_id, matchup_id, winner):
     return client.post(
-        f"/api/runs/{run_id}/bracket/advance", json={"matchup_id": matchup_id, "winning_movie_id": winner})
+        f"/api/runs/{run_id}/bracket/advance",
+        json={"matchup_id": matchup_id, "winning_movie_id": winner},
+    )
 
 
 def vote(client, run_id, matchup_id, movie_id):
     return client.post(
-        f"/api/runs/{run_id}/bracket/vote", json={"matchup_id": matchup_id, "movie_id": movie_id})
+        f"/api/runs/{run_id}/bracket/vote", json={"matchup_id": matchup_id, "movie_id": movie_id}
+    )
 
 
 # --- pure bracket logic ---
@@ -117,7 +138,12 @@ def test_creating_a_run_builds_the_bracket(client):
     rules = detail(client, run_id)["rules_config"]
     bracket = rules["bracket"]
     assert bracket["round_of_16"][0]["a"] == 1 and bracket["champion"] is None
-    assert [len(bracket[r]) for r in ("round_of_16", "quarterfinals", "semifinals", "finals")] == [8, 4, 2, 1]
+    assert [len(bracket[r]) for r in ("round_of_16", "quarterfinals", "semifinals", "finals")] == [
+        8,
+        4,
+        2,
+        1,
+    ]
     assert "bracket_movie_ids" not in rules
     card = rules["bracket_films"]["3"]
     assert (card["title"], card["runtime"], card["overview"]) == ("Film 3", 93, "Plot 3")
@@ -126,8 +152,14 @@ def test_creating_a_run_builds_the_bracket(client):
 
 @pytest.mark.parametrize("ids", [IDS[:15], [*IDS[:15], 1], [*IDS[:15], "x"]])
 def test_a_bracket_needs_exactly_sixteen_distinct_ids(client, ids):
-    resp = client.post("/api/runs", json={
-        "name": "x", "game_type": "march_madness", "rules_config": {"bracket_movie_ids": ids}})
+    resp = client.post(
+        "/api/runs",
+        json={
+            "name": "x",
+            "game_type": "march_madness",
+            "rules_config": {"bracket_movie_ids": ids},
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -151,9 +183,15 @@ def test_an_unknown_film_is_a_setup_error(client):
 def add_watchlist(db_engine, user, count):
     with Session(db_engine) as session:
         for movie_id in range(1, count + 1):
-            session.add(LetterboxdWatchlist(
-                user_id=user, letterboxd_username="alice", movie_id=movie_id,
-                title=f"Film {movie_id}", year=2000))
+            session.add(
+                LetterboxdWatchlist(
+                    user_id=user,
+                    letterboxd_username="alice",
+                    movie_id=movie_id,
+                    title=f"Film {movie_id}",
+                    year=2000,
+                )
+            )
         session.commit()
 
 
@@ -166,9 +204,14 @@ def test_seeding_from_the_watchlist(client, db_engine):
 
     with respx.mock:
         mock_films(range(1, 31))
-        resp = client.post("/api/runs", json={
-            "name": "x", "game_type": "march_madness",
-            "rules_config": {"seed_from_watchlist": True}})
+        resp = client.post(
+            "/api/runs",
+            json={
+                "name": "x",
+                "game_type": "march_madness",
+                "rules_config": {"seed_from_watchlist": True},
+            },
+        )
     assert resp.status_code == 201, resp.text
     rules = detail(client, resp.json()["id"])["rules_config"]
     assert "seed_from_watchlist" not in rules
@@ -179,8 +222,14 @@ def test_seeding_from_the_watchlist(client, db_engine):
 def test_a_thin_watchlist_cannot_seed(client, db_engine):
     add_watchlist(db_engine, user_id(client), 10)
     assert client.get("/api/tools/march-madness/seed").status_code == 409
-    resp = client.post("/api/runs", json={
-        "name": "x", "game_type": "march_madness", "rules_config": {"seed_from_watchlist": True}})
+    resp = client.post(
+        "/api/runs",
+        json={
+            "name": "x",
+            "game_type": "march_madness",
+            "rules_config": {"seed_from_watchlist": True},
+        },
+    )
     assert resp.status_code == 422 and "10 films" in resp.json()["detail"]
 
 

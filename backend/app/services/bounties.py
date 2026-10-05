@@ -86,7 +86,12 @@ def _hidden_gem(f: MovieFacts) -> bool:
 
 
 def _foreign_horizon(f: MovieFacts) -> bool:
-    return bool(f.language) and f.language != "en" and f.countries is not None and "US" not in f.countries
+    return (
+        bool(f.language)
+        and f.language != "en"
+        and f.countries is not None
+        and "US" not in f.countries
+    )
 
 
 def _female_gaze(f: MovieFacts) -> bool:
@@ -100,14 +105,35 @@ def _epic_odyssey(f: MovieFacts) -> bool:
 BOUNTIES: dict[str, Bounty] = {
     b.id: b
     for b in (
-        Bounty("short_king", "Short King", "⏱️", f"Runtime under {SHORT_RUNTIME} minutes", _short_king),
-        Bounty("time_capsule", "Time Capsule", "📼", f"Released before {CAPSULE_YEAR}", _time_capsule),
+        Bounty(
+            "short_king", "Short King", "⏱️", f"Runtime under {SHORT_RUNTIME} minutes", _short_king
+        ),
+        Bounty(
+            "time_capsule", "Time Capsule", "📼", f"Released before {CAPSULE_YEAR}", _time_capsule
+        ),
         Bounty("hidden_gem", "Hidden Gem", "💎", "Obscure: TMDB popularity under 12", _hidden_gem),
-        Bounty("foreign_horizon", "Foreign Horizon", "🌍",
-               "Non-English language and not a US production", _foreign_horizon),
-        Bounty("female_gaze", "Female Gaze", "🎥", "Directed by a woman", _female_gaze,
-               needs_directors=True),
-        Bounty("epic_odyssey", "Epic Odyssey", "🏔️", f"Runtime over {EPIC_RUNTIME} minutes", _epic_odyssey),
+        Bounty(
+            "foreign_horizon",
+            "Foreign Horizon",
+            "🌍",
+            "Non-English language and not a US production",
+            _foreign_horizon,
+        ),
+        Bounty(
+            "female_gaze",
+            "Female Gaze",
+            "🎥",
+            "Directed by a woman",
+            _female_gaze,
+            needs_directors=True,
+        ),
+        Bounty(
+            "epic_odyssey",
+            "Epic Odyssey",
+            "🏔️",
+            f"Runtime over {EPIC_RUNTIME} minutes",
+            _epic_odyssey,
+        ),
     )
 }
 
@@ -128,9 +154,7 @@ def active_bounties(rules: dict | None) -> list[str]:
     return [b for b in ((rules or {}).get(ACTIVE_KEY) or []) if resolve(rules, b) is not None]
 
 
-def draw_replacement(
-    active: list[str], completed: list[str], rng: random.Random
-) -> str | None:
+def draw_replacement(active: list[str], completed: list[str], rng: random.Random) -> str | None:
     """A bounty not on the board: from the never-completed ones first, else any other."""
     fresh = [b for b in BOUNTIES if b not in active and b not in completed]
     pool = fresh or [b for b in BOUNTIES if b not in active]
@@ -141,7 +165,9 @@ def prepare_board(rules: dict, rng: random.Random | None = None) -> dict:
     """The rules a Bounty Board run starts with: no wildcards, three random bounties."""
     rng = rng or random.Random()
     return {
-        **rules, "wildcards_budget": 0, ACTIVE_KEY: rng.sample(list(BOUNTIES), BOARD_SIZE),
+        **rules,
+        "wildcards_budget": 0,
+        ACTIVE_KEY: rng.sample(list(BOUNTIES), BOARD_SIZE),
         COMPLETED_KEY: [],
     }
 
@@ -158,12 +184,15 @@ def _countries(raw: str | None) -> list[str] | None:
 
 def facts_of(movie: CachedMovie, directors: list[CachedMovieDirector]) -> MovieFacts:
     return MovieFacts(
-        runtime=movie.runtime, year=parse_release_year(movie.release_date),
-        popularity=movie.popularity, language=movie.original_language,
+        runtime=movie.runtime,
+        year=parse_release_year(movie.release_date),
+        popularity=movie.popularity,
+        language=movie.original_language,
         countries=_countries(movie.origin_country),
         director_genders=[d.gender for d in directors],
         genre_ids=list(movie.genre_ids or []),
-        text=" ".join(filter(None, (movie.title, movie.tagline, movie.overview))).lower())
+        text=" ".join(filter(None, (movie.title, movie.tagline, movie.overview))).lower(),
+    )
 
 
 def completed_by(active: list[Bounty], facts: MovieFacts) -> str | None:
@@ -180,7 +209,10 @@ class BountyAward(NamedTuple):
 
 
 async def evaluate(
-    session: Session, tmdb: TMDBClient, rules: dict | None, movie: CachedMovie,
+    session: Session,
+    tmdb: TMDBClient,
+    rules: dict | None,
+    movie: CachedMovie,
     rng: random.Random | None = None,
 ) -> BountyAward | None:
     """The award, if logging `movie` completes a bounty on the board.
@@ -227,9 +259,7 @@ async def _directors_with_gender(
     return directors
 
 
-def award(
-    rules: dict, bounty_id: str, replacement: str | None, custom: dict | None = None
-) -> dict:
+def award(rules: dict, bounty_id: str, replacement: str | None, custom: dict | None = None) -> dict:
     """The rules after `bounty_id` is completed: +1 wildcard, the bounty swapped for `replacement`
     (`custom` = its definition when it is an AI bounty)."""
     customs = dict(rules.get(CUSTOM_KEY) or {})
@@ -239,7 +269,9 @@ def award(
     if replacement is not None:
         active.append(replacement)
     return {
-        **rules, ACTIVE_KEY: active, COMPLETED_KEY: [*(rules.get(COMPLETED_KEY) or []), bounty_id],
+        **rules,
+        ACTIVE_KEY: active,
+        COMPLETED_KEY: [*(rules.get(COMPLETED_KEY) or []), bounty_id],
         "wildcards_budget": max(rules.get("wildcards_budget", 0), 0) + 1,
         **({CUSTOM_KEY: customs} if customs else {}),
     }
@@ -254,10 +286,11 @@ def revoke(rules: dict, bounty_id: str, replacement: str | None) -> dict:
     if bounty_id in completed:
         completed.remove(bounty_id)
     return {
-        **rules, ACTIVE_KEY: active, COMPLETED_KEY: completed,
+        **rules,
+        ACTIVE_KEY: active,
+        COMPLETED_KEY: completed,
         "wildcards_budget": max(rules.get("wildcards_budget", 0) - 1, 0),
     }
-
 
 
 # --- AI bounties: the rule grammar ---
@@ -266,10 +299,26 @@ MAX_CONDITIONS = 3
 MAX_KEYWORDS = 5
 MIN_YEAR, MAX_RUNTIME = 1888, 400
 GENRE_IDS = {
-    "action": 28, "adventure": 12, "animation": 16, "comedy": 35, "crime": 80, "documentary": 99,
-    "drama": 18, "family": 10751, "fantasy": 14, "history": 36, "horror": 27, "music": 10402,
-    "musical": 10402, "mystery": 9648, "romance": 10749, "science fiction": 878,
-    "sci-fi": 878, "thriller": 53, "war": 10752, "western": 37,
+    "action": 28,
+    "adventure": 12,
+    "animation": 16,
+    "comedy": 35,
+    "crime": 80,
+    "documentary": 99,
+    "drama": 18,
+    "family": 10751,
+    "fantasy": 14,
+    "history": 36,
+    "horror": 27,
+    "music": 10402,
+    "musical": 10402,
+    "mystery": 9648,
+    "romance": 10749,
+    "science fiction": 878,
+    "sci-fi": 878,
+    "thriller": 53,
+    "war": 10752,
+    "western": 37,
 }
 
 
@@ -306,7 +355,11 @@ def normalize_condition(raw: object) -> dict[str, Any] | None:
         return {"type": "year", **bounds} if bounds else None
     if kind == "decade":
         decade = _whole(raw.get("decade"), MIN_YEAR, datetime.now(UTC).year)
-        return {"type": "year", "min": decade // 10 * 10, "max": decade // 10 * 10 + 9} if decade else None
+        return (
+            {"type": "year", "min": decade // 10 * 10, "max": decade // 10 * 10 + 9}
+            if decade
+            else None
+        )
     if kind == "genre":
         genre = str(raw.get("genre") or "").strip().lower()
         return {"type": "genre", "genre": genre} if genre in GENRE_IDS else None
@@ -315,8 +368,11 @@ def normalize_condition(raw: object) -> dict[str, Any] | None:
         words = [words] if isinstance(words, str) else words
         if not isinstance(words, list):
             return None
-        keywords = list(dict.fromkeys(
-            w.strip().lower() for w in words if isinstance(w, str) and len(w.strip()) >= 3))
+        keywords = list(
+            dict.fromkeys(
+                w.strip().lower() for w in words if isinstance(w, str) and len(w.strip()) >= 3
+            )
+        )
         return {"type": "keyword", "keywords": keywords[:MAX_KEYWORDS]} if keywords else None
     return None
 
@@ -349,7 +405,11 @@ def describe_rule(rule: list[dict[str, Any]]) -> str:
         if c["type"] in ("runtime", "year"):
             unit = " min" if c["type"] == "runtime" else ""
             low, high = c.get("min"), c.get("max")
-            span = f"{low}-{high}{unit}" if low and high else (f"{low}+{unit}" if low else f"up to {high}{unit}")
+            span = (
+                f"{low}-{high}{unit}"
+                if low and high
+                else (f"{low}+{unit}" if low else f"up to {high}{unit}")
+            )
             parts.append(f"{'Runtime' if c['type'] == 'runtime' else 'Released'} {span}")
         elif c["type"] == "genre":
             parts.append(f"{c['genre'].title()} genre")
@@ -364,10 +424,13 @@ def custom_bounty(definition: dict) -> Bounty | None:
     if rule is None or not isinstance(definition.get("id"), str):
         return None
     return Bounty(
-        id=definition["id"], title=str(definition.get("title") or "AI Bounty"),
+        id=definition["id"],
+        title=str(definition.get("title") or "AI Bounty"),
         icon=str(definition.get("icon") or "✨"),
         description=str(definition.get("description") or describe_rule(rule)),
-        check=lambda facts: all(_holds(c, facts) for c in rule), ai=True)
+        check=lambda facts: all(_holds(c, facts) for c in rule),
+        ai=True,
+    )
 
 
 # --- AI bounties: generation ---
@@ -411,9 +474,12 @@ def parse_custom_bounty(text: str, taken_titles: list[str] | None = None) -> dic
     icon = str(raw.get("icon") or "").strip()
     description = " ".join(str(raw.get("description") or "").split())[:MAX_DESCRIPTION]
     return {
-        "id": f"{AI_PREFIX}{uuid.uuid4().hex[:6]}", "title": title,
+        "id": f"{AI_PREFIX}{uuid.uuid4().hex[:6]}",
+        "title": title,
         "icon": icon[:4] if icon and not icon.isascii() else "✨",
-        "description": description or describe_rule(rule), "rule": rule}
+        "description": description or describe_rule(rule),
+        "rule": rule,
+    }
 
 
 async def generate_custom_bounty(
@@ -423,7 +489,8 @@ async def generate_custom_bounty(
     avoid = f" Do not reuse these titles: {', '.join(taken_titles)}." if taken_titles else ""
     for _ in range(2):
         text = await llm.generate(
-            config, BOUNTY_SYSTEM, f"Invent a new bounty.{avoid}", max_tokens=260)
+            config, BOUNTY_SYSTEM, f"Invent a new bounty.{avoid}", max_tokens=260
+        )
         bounty = parse_custom_bounty(text, taken_titles)
         if bounty is not None:
             return bounty
@@ -465,10 +532,15 @@ async def roll_custom(session: Session, rules: dict | None) -> dict:
     if not config.enabled:
         raise BountyError(
             "The generative model is off - an admin can enable it under "
-            "Settings > Integrations > AI & Embeddings.")
+            "Settings > Integrations > AI & Embeddings."
+        )
     try:
         custom = await generate_custom_bounty(config, _taken_titles(rules))
     except llm.LlmUnavailable as exc:
         raise BountyError(str(exc), 503) from exc
     board = [*active[1:], custom["id"]] if active else [custom["id"]]
-    return {**rules, ACTIVE_KEY: board, CUSTOM_KEY: {**(rules.get(CUSTOM_KEY) or {}), custom["id"]: custom}}
+    return {
+        **rules,
+        ACTIVE_KEY: board,
+        CUSTOM_KEY: {**(rules.get(CUSTOM_KEY) or {}), custom["id"]: custom},
+    }

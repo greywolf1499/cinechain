@@ -82,7 +82,9 @@ class IntegrationConfigUpdate(BaseModel):
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_model: str | None = None
-    embedding_local_preset: Literal["arctic-embed-xs", "multilingual-e5-small", "all-minilm-l6-v2"] | None = None
+    embedding_local_preset: (
+        Literal["arctic-embed-xs", "multilingual-e5-small", "all-minilm-l6-v2"] | None
+    ) = None
     llm_provider: Literal["off", "local_gguf", "ollama", "openai"] | None = None
     llm_base_url: str | None = None
     llm_api_key: str | None = None
@@ -103,7 +105,9 @@ class EmbeddingTestRequest(BaseModel):
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_model: str | None = None
-    embedding_local_preset: Literal["arctic-embed-xs", "multilingual-e5-small", "all-minilm-l6-v2"] | None = None
+    embedding_local_preset: (
+        Literal["arctic-embed-xs", "multilingual-e5-small", "all-minilm-l6-v2"] | None
+    ) = None
 
 
 class EmbeddingTestResult(BaseModel):
@@ -183,20 +187,15 @@ def _build_config(session: Session) -> IntegrationConfigOut:
         jellyfin_api_key_masked=_mask(jellyfin_key),
         omdb_configured=bool(omdb_key),
         omdb_api_key_masked=_mask(omdb_key),
-        radarr_url=overrides.get(
-            "radarr_url") or base.radarr_url or RADARR_DEFAULT_URL,
+        radarr_url=overrides.get("radarr_url") or base.radarr_url or RADARR_DEFAULT_URL,
         radarr_configured=bool(radarr_key),
         radarr_api_key_masked=_mask(radarr_key),
-        radarr_default_quality_profile_id=int(
-            profile_id) if profile_id else None,
-        radarr_default_root_folder_path=overrides.get(
-            "radarr_default_root_folder_path"),
-        seerr_url=overrides.get(
-            "seerr_url") or base.seerr_url or SEERR_DEFAULT_URL,
+        radarr_default_quality_profile_id=int(profile_id) if profile_id else None,
+        radarr_default_root_folder_path=overrides.get("radarr_default_root_folder_path"),
+        seerr_url=overrides.get("seerr_url") or base.seerr_url or SEERR_DEFAULT_URL,
         seerr_configured=bool(seerr_key),
         seerr_api_key_masked=_mask(seerr_key),
-        seerr_request_mode="prompt" if overrides.get(
-            "seerr_request_mode") == "prompt" else "auto",
+        seerr_request_mode="prompt" if overrides.get("seerr_request_mode") == "prompt" else "auto",
         seerr_user_id=int(seerr_user) if seerr_user else None,
         embedding_provider=embedding.provider,  # type: ignore[arg-type]
         embedding_base_url=embedding.base_url,
@@ -205,9 +204,15 @@ def _build_config(session: Session) -> IntegrationConfigOut:
         embedding_local_preset=embedding.local_preset,
         embedding_local_presets=[
             LocalPresetInfo(
-                key=preset.key, label=preset.label, badge=preset.badge,
-                description=preset.description, size_mb=preset.size_mb, hf_repo=preset.hf_repo,
-                recommended=preset.recommended, downloaded=preset.downloaded)
+                key=preset.key,
+                label=preset.label,
+                badge=preset.badge,
+                description=preset.description,
+                size_mb=preset.size_mb,
+                hf_repo=preset.hf_repo,
+                recommended=preset.recommended,
+                downloaded=preset.downloaded,
+            )
             for preset in embeddings.LOCAL_PRESETS.values()
         ],
         llm_provider=generative.provider,  # type: ignore[arg-type]
@@ -235,8 +240,10 @@ def update_integration_settings(
 ) -> IntegrationConfigOut:
     settings_repo.set_overrides(
         session,
-        {k: None if v is None else str(v)
-         for k, v in payload.model_dump(exclude_unset=True).items()},
+        {
+            k: None if v is None else str(v)
+            for k, v in payload.model_dump(exclude_unset=True).items()
+        },
     )
     return _build_config(session)
 
@@ -284,10 +291,12 @@ async def test_radarr_connection(
     session: Session = Depends(get_session),
     _admin: User = Depends(get_current_admin),
 ) -> ConnectivityTestResult:
-    stored = settings_repo.get_overrides(session).get(
-        "radarr_api_key") or get_settings().radarr_api_key
+    stored = (
+        settings_repo.get_overrides(session).get("radarr_api_key") or get_settings().radarr_api_key
+    )
     result = await check_radarr_connectivity(
-        request.app.state.http_client, payload.url, payload.api_key or stored)
+        request.app.state.http_client, payload.url, payload.api_key or stored
+    )
     return ConnectivityTestResult(**result)
 
 
@@ -298,10 +307,12 @@ async def test_seerr_connection(
     session: Session = Depends(get_session),
     _admin: User = Depends(get_current_admin),
 ) -> ConnectivityTestResult:
-    stored = settings_repo.get_overrides(session).get(
-        "seerr_api_key") or get_settings().seerr_api_key
+    stored = (
+        settings_repo.get_overrides(session).get("seerr_api_key") or get_settings().seerr_api_key
+    )
     result = await check_seerr_connectivity(
-        request.app.state.http_client, payload.url, payload.api_key or stored)
+        request.app.state.http_client, payload.url, payload.api_key or stored
+    )
     return ConnectivityTestResult(**result)
 
 
@@ -337,7 +348,9 @@ async def test_llm_generation(
         base_url=payload.llm_base_url or "",
         api_key=payload.llm_api_key or stored.api_key,
         model=payload.llm_model or "",
-        keep_alive_seconds=0 if payload.llm_keep_alive_seconds is None else payload.llm_keep_alive_seconds,
+        keep_alive_seconds=0
+        if payload.llm_keep_alive_seconds is None
+        else payload.llm_keep_alive_seconds,
     )
     return LlmTestResult(**await llm.check_connection(config))
 
@@ -359,7 +372,8 @@ class LlmDownloadStatus(BaseModel):
 def _llm_download_status(session: Session) -> LlmDownloadStatus:
     status = llm.local_model_status()
     latest = session.exec(
-        select(SystemTask).where(SystemTask.name == LLM_DOWNLOAD_TASK)
+        select(SystemTask)
+        .where(SystemTask.name == LLM_DOWNLOAD_TASK)
         .order_by(col(SystemTask.created_at).desc())
     ).first()
     out = LlmDownloadStatus(**status)
@@ -378,8 +392,13 @@ def _llm_download_status(session: Session) -> LlmDownloadStatus:
 
 def _download_llm_model(ctx: task_runner.TaskContext) -> dict:
     def report(done: int, total: int) -> None:
-        ctx.progress({"bytes_downloaded": done, "total_bytes": total,
-                      "percent": round(done * 100 / total, 1)})
+        ctx.progress(
+            {
+                "bytes_downloaded": done,
+                "total_bytes": total,
+                "percent": round(done * 100 / total, 1),
+            }
+        )
 
     try:
         llm.ensure_model_file(progress=report)
@@ -407,8 +426,14 @@ def start_llm_download(
     is already there or already downloading). Poll `download-status` for progress."""
     if not llm.local_model_status()["downloaded"]:
         task_runner.submit_task(
-            background_tasks, session, LLM_DOWNLOAD_TASK, _download_llm_model,
-            user_id=admin.id, dedupe_key=LLM_DOWNLOAD_TASK, label="Downloading Qwen 0.8B")
+            background_tasks,
+            session,
+            LLM_DOWNLOAD_TASK,
+            _download_llm_model,
+            user_id=admin.id,
+            dedupe_key=LLM_DOWNLOAD_TASK,
+            label="Downloading Qwen 0.8B",
+        )
     return _llm_download_status(session)
 
 
@@ -428,8 +453,7 @@ def get_solver_settings(
     overrides = settings_repo.get_overrides(session)
     raw = overrides.get("bridge_max_duration_seconds")
     return SolverConfigOut(
-        bridge_max_duration_seconds=int(
-            raw) if raw else get_settings().bridge_max_duration_seconds
+        bridge_max_duration_seconds=int(raw) if raw else get_settings().bridge_max_duration_seconds
     )
 
 
@@ -440,7 +464,6 @@ def update_solver_settings(
     _admin: User = Depends(get_current_admin),
 ) -> SolverConfigOut:
     settings_repo.set_overrides(
-        session, {"bridge_max_duration_seconds": str(
-            payload.bridge_max_duration_seconds)}
+        session, {"bridge_max_duration_seconds": str(payload.bridge_max_duration_seconds)}
     )
     return SolverConfigOut(bridge_max_duration_seconds=payload.bridge_max_duration_seconds)

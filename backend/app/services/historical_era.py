@@ -89,17 +89,18 @@ ALIASES: dict[str, str] = {
 
 _NON_SLUG = re.compile(r"[^a-z0-9]+")
 _CENTURY = re.compile(
-    r"\b(\d{1,2})(?:st|nd|rd|th)[\s-]+century(?:\s+(BCE?|B\.C\.E?\.?))?", re.IGNORECASE)
+    r"\b(\d{1,2})(?:st|nd|rd|th)[\s-]+century(?:\s+(BCE?|B\.C\.E?\.?))?", re.IGNORECASE
+)
 _BC_YEAR = re.compile(r"\b(\d{1,4})\s*(BCE?|B\.C\.E?\.?)(?!\w)", re.IGNORECASE)
 _AD_YEAR = re.compile(r"\b(\d{3,4})\s*(?:AD|A\.D\.|CE)\b")
 _PLAIN_YEAR = re.compile(r"\b(1[0-9]{3}|2[0-9]{3})\b")
 _JSON_OBJECT = re.compile(r"\{.*?\}", re.DOTALL)
 
 ERA_SYSTEM = (
-    "You date the setting of films. Reply with only a JSON object {\"year\": int, \"era\": str}: "
+    'You date the setting of films. Reply with only a JSON object {"year": int, "era": str}: '
     "the year the story takes place in (negative for BCE; the film's release year when it is set "
-    "in its own time) and a short era name of at most 4 words, such as \"Ancient Rome\" or "
-    "\"World War II\". No other text."
+    'in its own time) and a short era name of at most 4 words, such as "Ancient Rome" or '
+    '"World War II". No other text.'
 )
 
 
@@ -216,7 +217,8 @@ def effective_era(movie: CachedMovie) -> tuple[int, str]:
     """The stored era, else the contemporary default (never persisted by this call)."""
     if movie.narrative_year is not None:
         return movie.narrative_year, movie.narrative_era_label or era_label_for_year(
-            movie.narrative_year, parse_release_year(movie.release_date))
+            movie.narrative_year, parse_release_year(movie.release_date)
+        )
     return default_era(movie)
 
 
@@ -229,8 +231,12 @@ def _store(session: Session, movie: CachedMovie, year: int, label: str) -> None:
 
 
 async def _settle(
-    session: Session, tmdb: TMDBClient, movie: CachedMovie, keywords: list[str],
-    config: llm.LlmConfig | None, allow_llm: bool,
+    session: Session,
+    tmdb: TMDBClient,
+    movie: CachedMovie,
+    keywords: list[str],
+    config: llm.LlmConfig | None,
+    allow_llm: bool,
 ) -> tuple[int, str]:
     """Works out the movie's era from its keywords and plot and saves it - unless the answer is
     not trustworthy yet (no plot to read, or the model is on but skipped or failed), in which
@@ -257,8 +263,13 @@ async def _settle(
 
 
 async def ensure_narrative_era(
-    session: Session, tmdb: TMDBClient, movie: CachedMovie,
-    config: llm.LlmConfig | None = None, *, allow_llm: bool = True, force: bool = False,
+    session: Session,
+    tmdb: TMDBClient,
+    movie: CachedMovie,
+    config: llm.LlmConfig | None = None,
+    *,
+    allow_llm: bool = True,
+    force: bool = False,
 ) -> tuple[int, str]:
     """The movie's narrative era, resolving and saving it first when missing (or when `force`).
     TMDB's keywords being unreachable leaves the film unresolved (the default is returned)."""
@@ -273,8 +284,12 @@ async def ensure_narrative_era(
 
 
 async def ensure_narrative_eras(
-    session: Session, tmdb: TMDBClient, movies: Iterable[CachedMovie],
-    config: llm.LlmConfig | None = None, *, allow_llm: bool = False,
+    session: Session,
+    tmdb: TMDBClient,
+    movies: Iterable[CachedMovie],
+    config: llm.LlmConfig | None = None,
+    *,
+    allow_llm: bool = False,
 ) -> None:
     """Resolves every unresolved film (keywords fetched concurrently, saved one by one)."""
     pending = [m for m in movies if m.narrative_year is None]

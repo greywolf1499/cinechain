@@ -49,7 +49,9 @@ RESURGENCE_YEARS = 5
 RESURGENCE_BILLING = 4  # top-5 billed
 RESURGENCE_VOTE_TIERS = (100, 20)
 DOCUMENTARY, TV_MOVIE = 99, 10770
-_NOT_A_ROLE = re.compile(r"\b(self|himself|herself|themselves|archive footage|uncredited)\b", re.IGNORECASE)
+_NOT_A_ROLE = re.compile(
+    r"\b(self|himself|herself|themselves|archive footage|uncredited)\b", re.IGNORECASE
+)
 
 
 def _year(entry: dict) -> int:
@@ -92,15 +94,19 @@ def build_career_track(
     films = sorted(
         (
             {
-                "movie_id": c["id"], "title": c.get("title") or "", "release_date": c["release_date"],
-                "year": _year(c), "poster_path": c.get("poster_path"),
+                "movie_id": c["id"],
+                "title": c.get("title") or "",
+                "release_date": c["release_date"],
+                "year": _year(c),
+                "poster_path": c.get("poster_path"),
                 "character": c.get("character") or None,
                 "order": c["order"] if isinstance(c.get("order"), int) else 99,
                 "vote_average": float(c.get("vote_average") or 0.0),
                 "vote_count": int(c.get("vote_count") or 0),
                 "milestones": [],
             }
-            for c in credits if c.get("id") is not None and _is_feature_role(c, today)
+            for c in credits
+            if c.get("id") is not None and _is_feature_role(c, today)
         ),
         key=lambda f: (f["release_date"], f["movie_id"]),
     )
@@ -109,26 +115,38 @@ def build_career_track(
 
     films[0]["milestones"].append("debut")
     breakout = _first_with_tier(
-        [f for f in films if f["order"] <= BREAKOUT_BILLING], BREAKOUT_VOTE_TIERS,
-        lambda eligible: eligible[0])
+        [f for f in films if f["order"] <= BREAKOUT_BILLING],
+        BREAKOUT_VOTE_TIERS,
+        lambda eligible: eligible[0],
+    )
     if breakout is not None:
         breakout["milestones"].append("breakout")
     peak = _first_with_tier(
-        films, PRESTIGE_VOTE_TIERS,
-        lambda eligible: max(eligible, key=lambda f: (f["vote_average"], f["vote_count"])))
+        films,
+        PRESTIGE_VOTE_TIERS,
+        lambda eligible: max(eligible, key=lambda f: (f["vote_average"], f["vote_count"])),
+    )
     if peak is not None:
         peak["milestones"].append("prestige_peak")
     recent = _first_with_tier(
-        [f for f in films
-         if f["year"] >= today.year - RESURGENCE_YEARS and f["order"] <= RESURGENCE_BILLING],
-        RESURGENCE_VOTE_TIERS, lambda eligible: max(eligible, key=lambda f: f["vote_count"]))
+        [
+            f
+            for f in films
+            if f["year"] >= today.year - RESURGENCE_YEARS and f["order"] <= RESURGENCE_BILLING
+        ],
+        RESURGENCE_VOTE_TIERS,
+        lambda eligible: max(eligible, key=lambda f: f["vote_count"]),
+    )
     if recent is not None:
         recent["milestones"].append("modern_resurgence")
 
     # Curate: every milestone film, then the best-known leading roles, capped for a marathon.
     def keep_rank(f: dict) -> tuple:
-        return (bool(f["milestones"]), f["order"] <= TRACK_MAX_BILLING and f["vote_count"] >= TRACK_MIN_VOTES,
-                f["vote_count"])
+        return (
+            bool(f["milestones"]),
+            f["order"] <= TRACK_MAX_BILLING and f["vote_count"] >= TRACK_MIN_VOTES,
+            f["vote_count"],
+        )
 
     chosen = sorted(films, key=keep_rank, reverse=True)
     solid = [f for f in chosen if f["milestones"] or keep_rank(f)[1]]
@@ -153,9 +171,8 @@ class MethodActorEngine(TrackerEngine):
         rules = rules or {}
         actor_id = rules.get(ACTOR_ID_KEY)
         if (
-            (isinstance(actor_id, bool) or not isinstance(actor_id, int) or actor_id < 1)
-            and not isinstance((rules.get("actor") or {}).get("id"), int)
-        ):
+            isinstance(actor_id, bool) or not isinstance(actor_id, int) or actor_id < 1
+        ) and not isinstance((rules.get("actor") or {}).get("id"), int):
             problems.append(f"{ACTOR_ID_KEY} is required (search for an actor)")
         skip = rules.get(MAX_SKIP_KEY)
         if skip is not None and (
@@ -176,7 +193,8 @@ class MethodActorEngine(TrackerEngine):
         track = build_career_track(credits, person.get("birthday"))
         rest = {k: v for k, v in rules.items() if k != ACTOR_ID_KEY}
         return {
-            **rest, MAX_SKIP_KEY: rules.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP),
+            **rest,
+            MAX_SKIP_KEY: rules.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP),
             "actor": {"id": actor_id, "name": person.get("name") or str(actor_id)},
             "filmography": track,
         }
@@ -190,29 +208,41 @@ class MethodActorEngine(TrackerEngine):
     @staticmethod
     def _max_skip(rules: dict | None) -> int:
         skip = (rules or {}).get(MAX_SKIP_KEY)
-        return skip if isinstance(skip, int) and not isinstance(skip, bool) and skip >= 0 else DEFAULT_MAX_SKIP
+        return (
+            skip
+            if isinstance(skip, int) and not isinstance(skip, bool) and skip >= 0
+            else DEFAULT_MAX_SKIP
+        )
 
-    def _check(self, rules: dict | None, previous_id: int | None, movie_id: int) -> ValidationResult:
+    def _check(
+        self, rules: dict | None, previous_id: int | None, movie_id: int
+    ) -> ValidationResult:
         positions = self._positions(rules)
         track = (rules or {}).get("filmography") or []
         actor = ((rules or {}).get("actor") or {}).get("name", "this actor")
         if movie_id not in positions:
             title = self._title(movie_id)
             return ValidationResult(
-                valid=False, blocked=True,
-                reason=f"Off the track: {title} isn't on {actor}'s career track")
+                valid=False,
+                blocked=True,
+                reason=f"Off the track: {title} isn't on {actor}'s career track",
+            )
         position = positions[movie_id]
         before = positions.get(previous_id, -1) if previous_id is not None else -1
         title = track[position]["title"]
         if position <= before:
             return ValidationResult(
-                valid=False, reason=f"Career order: {title} comes before the film you just watched")
+                valid=False, reason=f"Career order: {title} comes before the film you just watched"
+            )
         skipped = position - before - 1
         if skipped > self._max_skip(rules):
             return ValidationResult(
                 valid=False,
-                reason=(f"Career order: {title} skips {skipped} films - at most "
-                        f"{self._max_skip(rules)} may be skipped"))
+                reason=(
+                    f"Career order: {title} skips {skipped} films - at most "
+                    f"{self._max_skip(rules)} may be skipped"
+                ),
+            )
         return ValidationResult(valid=True)
 
     def _title(self, movie_id: int) -> str:

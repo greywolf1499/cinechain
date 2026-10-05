@@ -142,9 +142,7 @@ def test_v2_game_terminates_by_the_documented_turn_bound():
         "target_lead": 4,
     }
     latest_turn = (
-        rules["sudden_death_after"]
-        + rules["sudden_death_every"] * (rules["target_lead"] - 1)
-        + 1
+        rules["sudden_death_after"] + rules["sudden_death_every"] * (rules["target_lead"] - 1) + 1
     )
 
     for seed in range(100):

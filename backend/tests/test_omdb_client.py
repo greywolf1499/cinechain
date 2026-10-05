@@ -72,8 +72,7 @@ async def test_disabled_without_api_key_makes_zero_http_calls():
 async def test_check_omdb_connectivity_success():
     with respx.mock:
         respx.get(OMDB_BASE).mock(
-            return_value=httpx.Response(
-                200, json={"Response": "True", "imdbRating": "8.8"})
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.8"})
         )
         async with httpx.AsyncClient() as client:
             result = await check_omdb_connectivity(client, "good-key", OMDB_BASE)
@@ -85,7 +84,8 @@ async def test_check_omdb_connectivity_failure_invalid_key():
     with respx.mock:
         respx.get(OMDB_BASE).mock(
             return_value=httpx.Response(
-                200, json={"Response": "False", "Error": "Invalid API key!"})
+                200, json={"Response": "False", "Error": "Invalid API key!"}
+            )
         )
         async with httpx.AsyncClient() as client:
             result = await check_omdb_connectivity(client, "bad-key", OMDB_BASE)

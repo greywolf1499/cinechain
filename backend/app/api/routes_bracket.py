@@ -46,7 +46,8 @@ COMMENTARY_KEY = "bracket_commentary"
 def _bracket_of(run: Run) -> dict:
     if run.game_type != march_madness.MARCH_MADNESS or not (run.rules_config or {}).get("bracket"):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="This run has no bracket")
+            status_code=status.HTTP_400_BAD_REQUEST, detail="This run has no bracket"
+        )
     return run.rules_config["bracket"]
 
 
@@ -55,7 +56,13 @@ def _bracket_error(exc: march_madness.BracketError) -> HTTPException:
 
 
 async def _decide(
-    session: Session, tmdb, run: Run, user: User, bracket: dict, matchup_id: str, winner_id: int,
+    session: Session,
+    tmdb,
+    run: Run,
+    user: User,
+    bracket: dict,
+    matchup_id: str,
+    winner_id: int,
 ) -> None:
     """Applies the result: moves the winner on, logs it as a watched step (once per film) and,
     if it was the final, crowns the champion and completes the run."""
@@ -65,12 +72,19 @@ async def _decide(
         raise _bracket_error(exc) from exc
     movie = await cache_repo.get_movie(session, tmdb, winner_id)
     already_logged = session.exec(
-        select(RunStep).where(RunStep.run_id == run.id, RunStep.movie_id == winner_id)).first()
+        select(RunStep).where(RunStep.run_id == run.id, RunStep.movie_id == winner_id)
+    ).first()
     if already_logged is None:
-        session.add(RunStep(
-            run_id=run.id, logged_by_user_id=user.id, status="watched", watched_at=utcnow(),
-            transition_metadata={"bracket_round": round_name, "matchup_id": matchup_id},
-            **_step_fields_from_movie(movie)))
+        session.add(
+            RunStep(
+                run_id=run.id,
+                logged_by_user_id=user.id,
+                status="watched",
+                watched_at=utcnow(),
+                transition_metadata={"bracket_round": round_name, "matchup_id": matchup_id},
+                **_step_fields_from_movie(movie),
+            )
+        )
     rules = copy.deepcopy(run.rules_config or {})
     rules["bracket"] = updated
     run.rules_config = rules
@@ -95,7 +109,9 @@ async def advance_bracket(
     the final crowns the champion and completes the run."""
     bracket = _bracket_of(run)
     _ensure_run_open(run)
-    await _decide(session, tmdb, run, current_user, bracket, payload.matchup_id, payload.winning_movie_id)
+    await _decide(
+        session, tmdb, run, current_user, bracket, payload.matchup_id, payload.winning_movie_id
+    )
     return _to_run_detail(session, run)
 
 
@@ -113,11 +129,14 @@ async def vote_in_bracket(
     _ensure_run_open(run)
     try:
         updated = march_madness.record_vote(
-            bracket, payload.matchup_id, current_user.id, payload.movie_id)
+            bracket, payload.matchup_id, current_user.id, payload.movie_id
+        )
     except march_madness.BracketError as exc:
         raise _bracket_error(exc) from exc
-    participant_ids = [p.user_id for p in session.exec(
-        select(RunParticipant).where(RunParticipant.run_id == run.id)).all()]
+    participant_ids = [
+        p.user_id
+        for p in session.exec(select(RunParticipant).where(RunParticipant.run_id == run.id)).all()
+    ]
     _, _, matchup = march_madness.find_matchup(updated, payload.matchup_id)
     winner = march_madness.majority_winner(matchup, participant_ids)
     if winner is not None:
@@ -149,12 +168,16 @@ async def matchup_commentary(
         raise _bracket_error(exc) from exc
     if matchup["a"] is None or matchup["b"] is None:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Both films must be in the matchup first")
+            status_code=status.HTTP_409_CONFLICT, detail="Both films must be in the matchup first"
+        )
     stored = (run.rules_config or {}).get(COMMENTARY_KEY) or {}
     if payload.matchup_id in stored:
         return CommentaryOut(
-            matchup_id=payload.matchup_id, commentary=stored[payload.matchup_id], enabled=True,
-            cached=True)
+            matchup_id=payload.matchup_id,
+            commentary=stored[payload.matchup_id],
+            enabled=True,
+            cached=True,
+        )
 
     config = llm.load_config(session)
     if not config.enabled:
@@ -162,9 +185,12 @@ async def matchup_commentary(
     films = (run.rules_config or {}).get("bracket_films") or {}
     try:
         text = await llm.generate_matchup_commentary(
-            films.get(str(matchup["a"]), {}), films.get(str(matchup["b"]), {}), config)
+            films.get(str(matchup["a"]), {}), films.get(str(matchup["b"]), {}), config
+        )
     except llm.LlmUnavailable as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
     session.refresh(run)  # a partner may have generated it meanwhile: the first one wins
     rules = copy.deepcopy(run.rules_config or {})
     kept = rules.setdefault(COMMENTARY_KEY, {})

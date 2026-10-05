@@ -41,14 +41,12 @@ class JellyfinClient:
 
     @property
     def _url(self) -> str:
-        url = self._overrides.get(
-            "jellyfin_url") or self._settings.jellyfin_url
+        url = self._overrides.get("jellyfin_url") or self._settings.jellyfin_url
         return url.strip().rstrip("/")
 
     @property
     def _api_key(self) -> str:
-        key = self._overrides.get(
-            "jellyfin_api_key") or self._settings.jellyfin_api_key
+        key = self._overrides.get("jellyfin_api_key") or self._settings.jellyfin_api_key
         return key.strip()
 
     @property
@@ -70,8 +68,7 @@ class JellyfinClient:
         if not tmdb_ids:
             return {}
         if not self._enabled:
-            logger.warning(
-                "Jellyfin lookup skipped - JELLYFIN_URL is not configured")
+            logger.warning("Jellyfin lookup skipped - JELLYFIN_URL is not configured")
             return dict.fromkeys(tmdb_ids, JellyfinItemSummary(on_server=None))
 
         now = time.monotonic()
@@ -104,8 +101,7 @@ class JellyfinClient:
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPError as exc:
-            logger.warning(
-                "Jellyfin lookup failed, degrading to unknown: %s", exc)
+            logger.warning("Jellyfin lookup failed, degrading to unknown: %s", exc)
             for tmdb_id in to_query:
                 results[tmdb_id] = JellyfinItemSummary(on_server=None)
             return results

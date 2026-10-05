@@ -72,13 +72,63 @@ class TugTally:
 
 
 # US plus Europe, including the countries TMDB still files older films under.
-WESTERN_COUNTRIES = frozenset({
-    "US",
-    "AD", "AL", "AT", "BA", "BE", "BG", "BY", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI",
-    "FR", "GB", "GR", "HR", "HU", "IE", "IS", "IT", "LI", "LT", "LU", "LV", "MC", "MD", "ME",
-    "MK", "MT", "NL", "NO", "PL", "PT", "RO", "RS", "RU", "SE", "SI", "SK", "SM", "UA", "VA",
-    "XK", "SU", "DD", "XG", "CS", "XC", "YU",
-})
+WESTERN_COUNTRIES = frozenset(
+    {
+        "US",
+        "AD",
+        "AL",
+        "AT",
+        "BA",
+        "BE",
+        "BG",
+        "BY",
+        "CH",
+        "CY",
+        "CZ",
+        "DE",
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GB",
+        "GR",
+        "HR",
+        "HU",
+        "IE",
+        "IS",
+        "IT",
+        "LI",
+        "LT",
+        "LU",
+        "LV",
+        "MC",
+        "MD",
+        "ME",
+        "MK",
+        "MT",
+        "NL",
+        "NO",
+        "PL",
+        "PT",
+        "RO",
+        "RS",
+        "RU",
+        "SE",
+        "SI",
+        "SK",
+        "SM",
+        "UA",
+        "VA",
+        "XK",
+        "SU",
+        "DD",
+        "XG",
+        "CS",
+        "XC",
+        "YU",
+    }
+)
 
 
 def tug_config(rules: dict | None) -> dict[str, Any]:
@@ -90,10 +140,8 @@ def tug_config(rules: dict | None) -> dict[str, Any]:
         "era_b_after": rules.get("era_b_after") or DEFAULT_ERA_B_AFTER,
         "steal_enabled": rules.get("steal_enabled", True),
         "momentum_cap": rules.get("momentum_cap", DEFAULT_MOMENTUM_CAP),
-        "sudden_death_after": rules.get(
-            "sudden_death_after", DEFAULT_SUDDEN_DEATH_AFTER),
-        "sudden_death_every": rules.get(
-            "sudden_death_every", DEFAULT_SUDDEN_DEATH_EVERY),
+        "sudden_death_after": rules.get("sudden_death_after", DEFAULT_SUDDEN_DEATH_AFTER),
+        "sudden_death_every": rules.get("sudden_death_every", DEFAULT_SUDDEN_DEATH_EVERY),
     }
 
 
@@ -107,9 +155,7 @@ def team_of(players: dict[str, str | None], user_id: str | None) -> TugTeam | No
     return None
 
 
-def step_turn_team(
-    step: RunStep, players: dict[str, str | None]
-) -> TugTeam | None:
+def step_turn_team(step: RunStep, players: dict[str, str | None]) -> TugTeam | None:
     explicit_team = (step.transition_metadata or {}).get("tug_team")
     if explicit_team in (TEAM_A, TEAM_B):
         return explicit_team
@@ -153,9 +199,7 @@ def step_team(step: RunStep, rules: dict | None) -> TugTeam | None:
     return _territory(step.movie_release_year, step.movie_origin_country, rules)
 
 
-def _v1_compute_scores(
-    steps: Sequence[RunStep], rules: dict | None
-) -> dict[str, int]:
+def _v1_compute_scores(steps: Sequence[RunStep], rules: dict | None) -> dict[str, int]:
     scores = {TEAM_A: 0, TEAM_B: 0}
     for step in steps:
         if step.status != "watched":
@@ -208,15 +252,12 @@ def tally(
 
         territory = step_team(step, rules)
         turns += 1
-        next_team = (
-            TEAM_B
-            if puller == TEAM_A and players.get(TEAM_B) is not None
-            else TEAM_A
-        )
+        next_team = TEAM_B if puller == TEAM_A and players.get(TEAM_B) is not None else TEAM_A
         multiplier = 2 if anchor == puller else 1
         if territory is None:
-            kind: TugEffect = "sudden_neutral" if turns >= config[
-                "sudden_death_after"] else "neutral"
+            kind: TugEffect = (
+                "sudden_neutral" if turns >= config["sudden_death_after"] else "neutral"
+            )
             streak_team, streak = None, 0
             if kind == "sudden_neutral":
                 opponent = TEAM_B if puller == TEAM_A else TEAM_A
@@ -249,8 +290,7 @@ def tally(
             scores[opponent] = max(0, scores[opponent] - multiplier)
             anchor = None if anchor == puller else anchor
         else:
-            kind = "sudden_neutral" if turns >= config[
-                "sudden_death_after"] else "neutral"
+            kind = "sudden_neutral" if turns >= config["sudden_death_after"] else "neutral"
             streak_team, streak = None, 0
             if kind == "sudden_neutral":
                 opponent = TEAM_B if puller == TEAM_A else TEAM_A
@@ -261,20 +301,22 @@ def tally(
             anchor = puller
             multiplier = 1
 
-        pulls.append(Pull(
-            step_id=step.id,
-            puller=puller,
-            territory=territory,
-            kind=kind,
-            points=points,
-            streak=streak,
-            multiplier=multiplier,
-        ))
+        pulls.append(
+            Pull(
+                step_id=step.id,
+                puller=puller,
+                territory=territory,
+                kind=kind,
+                points=points,
+                streak=streak,
+                multiplier=multiplier,
+            )
+        )
         target = max(
             1,
-            config["target_lead"] - max(
-                (turns - config["sudden_death_after"])
-                // config["sudden_death_every"],
+            config["target_lead"]
+            - max(
+                (turns - config["sudden_death_after"]) // config["sudden_death_every"],
                 0,
             ),
         )
@@ -386,7 +428,11 @@ class TugOfWarEngine(CineChainEngine):
                     "sudden_death_every": (1, 10),
                 }
                 low, high = limits[key]
-                if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or not low <= value <= high
+                ):
                     problems.append(f"{key} must be a whole number from {low} to {high}")
         return problems
 
@@ -406,8 +452,10 @@ class TugOfWarEngine(CineChainEngine):
     def team_players(self, run: Run) -> dict[str, str | None]:
         """Team A = owner; Team B = the first other participant to join."""
         participants = self.session.exec(
-            select(RunParticipant).where(RunParticipant.run_id == run.id)
-            .order_by(RunParticipant.joined_at)).all()
+            select(RunParticipant)
+            .where(RunParticipant.run_id == run.id)
+            .order_by(RunParticipant.joined_at)
+        ).all()
         ordered = sorted(participants, key=lambda p: p.role != "owner")
         ids = [participant.user_id for participant in ordered]
         return {TEAM_A: ids[0] if ids else None, TEAM_B: ids[1] if len(ids) > 1 else None}
@@ -482,8 +530,7 @@ class TugOfWarEngine(CineChainEngine):
         players = rules.get(PLAYERS_KEY) or {}
         result = tally(history or [], rules, players)
         for candidate in candidates:
-            territory = _territory(
-                candidate.release_year, candidate.origin_country, rules)
+            territory = _territory(candidate.release_year, candidate.origin_country, rules)
             effect, points = preview_pull(result.next_team, territory, result, rules)
             candidate.tug_effect = effect
             candidate.tug_points = points

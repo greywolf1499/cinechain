@@ -40,8 +40,7 @@ def client(db_engine):
             "/api/auth/register",
             json={"username": "alice", "password": "password123", "display_name": "Alice"},
         )
-        test_client.post(
-            "/api/auth/login", json={"username": "alice", "password": "password123"})
+        test_client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
         yield test_client
     app.dependency_overrides.clear()
 
@@ -75,7 +74,9 @@ def test_dominant_color_rejects_garbage_bytes():
 def test_color_distance_is_euclidean_rgb():
     assert aesthetic.color_distance("#000000", "#000000") == 0
     assert aesthetic.color_distance("#000000", "#030400") == pytest.approx(5.0)
-    assert aesthetic.color_distance("#000000", "#ffffff") == pytest.approx(aesthetic.MAX_RGB_DISTANCE)
+    assert aesthetic.color_distance("#000000", "#ffffff") == pytest.approx(
+        aesthetic.MAX_RGB_DISTANCE
+    )
     assert aesthetic.color_distance("#zzzzzz", "#000000") is None
 
 
@@ -85,7 +86,9 @@ def test_embedding_round_trip_and_cosine():
     assert np.array_equal(restored, vector)
     assert embeddings.cosine_similarity(vector, vector) == pytest.approx(1.0)
     assert embeddings.cosine_similarity(vector, -vector) == pytest.approx(-1.0)
-    assert embeddings.decode_embedding(b"short") is None and embeddings.decode_embedding(None) is None
+    assert (
+        embeddings.decode_embedding(b"short") is None and embeddings.decode_embedding(None) is None
+    )
 
 
 def test_embed_texts_reports_an_unavailable_model(config_dir, monkeypatch):
@@ -119,8 +122,12 @@ def test_each_preset_is_downloaded_once_into_its_own_dir(config_dir, monkeypatch
     assert not preset.downloaded
     embeddings.ensure_model_files(preset)
     embeddings.ensure_model_files(preset)
-    assert sorted(fetched) == sorted([
-        (preset.model_url, embeddings.MODEL_FILE), (preset.tokenizer_url, embeddings.TOKENIZER_FILE)])
+    assert sorted(fetched) == sorted(
+        [
+            (preset.model_url, embeddings.MODEL_FILE),
+            (preset.tokenizer_url, embeddings.TOKENIZER_FILE),
+        ]
+    )
     assert (config_dir / "models" / preset.model_name / embeddings.MODEL_FILE).exists()
     assert preset.downloaded
 
@@ -165,40 +172,89 @@ def mock_universe(movies: dict[int, dict]) -> dict[int, respx.Route]:
     posters: dict[int, respx.Route] = {}
     for movie_id, m in movies.items():
         poster = f"/p{movie_id}.png" if m.get("color") else None
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(return_value=httpx.Response(200, json={
-            "id": movie_id, "title": m["title"], "release_date": "2000-01-01",
-            "poster_path": poster, "overview": m.get("overview", ""), "origin_country": ["US"],
-            "original_language": "en", "runtime": 100, "genres": [],
-            "popularity": m.get("popularity", 1.0), "status": "Released",
-        }))
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "title": m["title"],
+                    "release_date": "2000-01-01",
+                    "poster_path": poster,
+                    "overview": m.get("overview", ""),
+                    "origin_country": ["US"],
+                    "original_language": "en",
+                    "runtime": 100,
+                    "genres": [],
+                    "popularity": m.get("popularity", 1.0),
+                    "status": "Released",
+                },
+            )
+        )
         if poster:
             posters[movie_id] = respx.get(f"{IMAGE_BASE}{poster}").mock(
-                return_value=httpx.Response(200, content=png(m["color"])))
-        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(return_value=httpx.Response(200, json={
-            "id": movie_id,
-            "cast": [{"id": a, "name": f"Actor {a}", "profile_path": None,
-                      "character": f"Role {a}", "order": i} for i, a in enumerate(m["cast"])],
-            "crew": [],
-        }))
+                return_value=httpx.Response(200, content=png(m["color"]))
+            )
+        respx.get(f"{TMDB_BASE}/movie/{movie_id}/credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": movie_id,
+                    "cast": [
+                        {
+                            "id": a,
+                            "name": f"Actor {a}",
+                            "profile_path": None,
+                            "character": f"Role {a}",
+                            "order": i,
+                        }
+                        for i, a in enumerate(m["cast"])
+                    ],
+                    "crew": [],
+                },
+            )
+        )
     for person in people:
         respx.get(f"{TMDB_BASE}/person/{person}/movie_credits").mock(
-            return_value=httpx.Response(200, json={
-                "id": person,
-                "cast": [{
-                    "id": i, "title": m["title"], "release_date": "2000-01-01",
-                    "poster_path": f"/p{i}.png" if m.get("color") else None, "genre_ids": [],
-                    "original_language": "en", "popularity": m.get("popularity", 1.0),
-                    "character": "x",
-                } for i, m in movies.items() if person in m["cast"]],
-                "crew": [],
-            }))
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": person,
+                    "cast": [
+                        {
+                            "id": i,
+                            "title": m["title"],
+                            "release_date": "2000-01-01",
+                            "poster_path": f"/p{i}.png" if m.get("color") else None,
+                            "genre_ids": [],
+                            "original_language": "en",
+                            "popularity": m.get("popularity", 1.0),
+                            "character": "x",
+                        }
+                        for i, m in movies.items()
+                        if person in m["cast"]
+                    ],
+                    "crew": [],
+                },
+            )
+        )
     return posters
 
 
 def create_run(client, game_type, **extra_rules):
-    resp = client.post("/api/runs", json={"name": "Run", "game_type": game_type, "rules_config": {
-        "allow_repeats": "strict", "no_consecutive_actor": False, "min_runtime": 0,
-        "wildcards_budget": 2, **extra_rules}})
+    resp = client.post(
+        "/api/runs",
+        json={
+            "name": "Run",
+            "game_type": game_type,
+            "rules_config": {
+                "allow_repeats": "strict",
+                "no_consecutive_actor": False,
+                "min_runtime": 0,
+                "wildcards_budget": 2,
+                **extra_rules,
+            },
+        },
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -251,6 +307,7 @@ def test_aesthetic_blocks_distant_colors_even_with_a_wildcard(client, db_engine)
 
 def aesthetic_threshold() -> float:
     from app.engines.algorithms import COLOR_DISTANCE_THRESHOLD
+
     return COLOR_DISTANCE_THRESHOLD
 
 
@@ -269,8 +326,12 @@ def test_aesthetic_hybrid_pool_is_filtered_and_annotated(client):
     with respx.mock:
         mock_universe(COLORS)
         log(client, run_id, 1)
-        pool = {c["movie_id"]: c for c in client.get(
-            f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}).json()}
+        pool = {
+            c["movie_id"]: c
+            for c in client.get(
+                f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}
+            ).json()
+        }
         constraint = client.get(f"/api/runs/{run_id}/constraint").json()
 
     assert set(pool) == {2, 4}  # Azure is too far away
@@ -335,8 +396,12 @@ def test_semantic_hybrid_pool_is_filtered_and_scored(client, fake_model):
     with respx.mock:
         mock_universe(PLOTS)
         log(client, run_id, 1)
-        pool = {c["movie_id"]: c for c in client.get(
-            f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}).json()}
+        pool = {
+            c["movie_id"]: c
+            for c in client.get(
+                f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}
+            ).json()
+        }
         constraint = client.get(f"/api/runs/{run_id}/constraint").json()
 
     assert set(pool) == {2, 4}  # Love Story is a poor plot match
@@ -417,10 +482,14 @@ def test_semantic_never_compares_vectors_from_different_models():
     vector = embeddings.encode_embedding(unit(1, 0, 0))
     local = CachedMovie(tmdb_id=1, title="A", overview_embedding=vector)
     same = CachedMovie(
-        tmdb_id=2, title="B", overview_embedding=vector,
-        overview_embedding_model=embeddings.LOCAL_FINGERPRINT)
+        tmdb_id=2,
+        title="B",
+        overview_embedding=vector,
+        overview_embedding_model=embeddings.LOCAL_FINGERPRINT,
+    )
     other = CachedMovie(
-        tmdb_id=3, title="C", overview_embedding=vector, overview_embedding_model="ollama:x")
+        tmdb_id=3, title="C", overview_embedding=vector, overview_embedding_model="ollama:x"
+    )
     engine = SemanticTropeEngine(None, None)
     assert engine.measure(local, same) == pytest.approx(1.0)  # NULL model = the local one
     assert engine.measure(local, other) is None  # different vector spaces: can't tell

@@ -114,13 +114,19 @@ def component_deltas(a: RouterFilm, b: RouterFilm) -> Deltas:
     genre = 1.0 - jaccard(a.genres, b.genres) if a.genres and b.genres else NEUTRAL_DELTA
     year = (
         min(abs(a.year - b.year) / YEAR_SPAN, 1.0)
-        if a.year is not None and b.year is not None else NEUTRAL_DELTA)
+        if a.year is not None and b.year is not None
+        else NEUTRAL_DELTA
+    )
     runtime = (
         min(abs(a.runtime - b.runtime) / RUNTIME_SPAN, 1.0)
-        if a.runtime and b.runtime else NEUTRAL_DELTA)
+        if a.runtime and b.runtime
+        else NEUTRAL_DELTA
+    )
     rating = (
         min(abs(a.rating - b.rating) / RATING_SPAN, 1.0)
-        if a.rating is not None and b.rating is not None else NEUTRAL_DELTA)
+        if a.rating is not None and b.rating is not None
+        else NEUTRAL_DELTA
+    )
     return Deltas(genre, year, runtime, rating)
 
 
@@ -173,7 +179,7 @@ def _relocate_improves(matrix: list[list[float]], order: list[int]) -> bool:
     base = path_cost(matrix, order)
     for i in range(n):
         film = order[i]
-        rest = order[:i] + order[i + 1:]
+        rest = order[:i] + order[i + 1 :]
         for j in range(n):
             if j == i:
                 continue
@@ -192,15 +198,20 @@ def _local_descent(matrix: list[list[float]], order: list[int]) -> None:
         for i in range(n - 1):
             for j in range(i + 1, n):
                 if _reversal_delta(matrix, order, i, j) < -_EPSILON:
-                    order[i:j + 1] = reversed(order[i:j + 1])
+                    order[i : j + 1] = reversed(order[i : j + 1])
                     improved = True
         if not improved and not _relocate_improves(matrix, order):
             return
 
 
 def _anneal(
-    matrix: list[list[float]], n: int, rng: random.Random,
-    *, t0: float = T0, alpha: float = ALPHA, iterations: int = ITERATIONS,
+    matrix: list[list[float]],
+    n: int,
+    rng: random.Random,
+    *,
+    t0: float = T0,
+    alpha: float = ALPHA,
+    iterations: int = ITERATIONS,
 ) -> list[int]:
     order = list(range(n))
     cost = path_cost(matrix, order)
@@ -210,7 +221,7 @@ def _anneal(
         i, j = sorted(rng.sample(range(n), 2))
         delta = _reversal_delta(matrix, order, i, j)
         if delta < 0 or rng.random() < math.exp(-delta / temperature):
-            order[i:j + 1] = reversed(order[i:j + 1])
+            order[i : j + 1] = reversed(order[i : j + 1])
             cost += delta
             if cost < best_cost - _EPSILON:
                 best, best_cost = order[:], cost
@@ -230,7 +241,11 @@ def _decade(year: int) -> str:
 
 
 def describe_transition(
-    a: RouterFilm, b: RouterFilm, deltas: Deltas, weights: Weights, label: str,
+    a: RouterFilm,
+    b: RouterFilm,
+    deltas: Deltas,
+    weights: Weights,
+    label: str,
     genre_names: Mapping[int, str] | None = None,
 ) -> str:
     """A short reason for the hop: what the films share when it is smooth, else the biggest gap."""
@@ -247,8 +262,10 @@ def describe_transition(
         return f"{era}Tonal Harmony".strip()
 
     contributions = {
-        "genre": weights.genre * deltas.genre, "year": weights.year * deltas.year,
-        "runtime": weights.runtime * deltas.runtime, "rating": weights.rating * deltas.rating,
+        "genre": weights.genre * deltas.genre,
+        "year": weights.year * deltas.year,
+        "runtime": weights.runtime * deltas.runtime,
+        "rating": weights.rating * deltas.rating,
     }
     biggest = max(contributions, key=lambda key: contributions[key])
     if biggest == "genre" and a.genres and b.genres:
@@ -265,24 +282,36 @@ def describe_transition(
 
 
 def build_transitions(
-    films: Sequence[RouterFilm], weights: Weights,
+    films: Sequence[RouterFilm],
+    weights: Weights,
     genre_names: Mapping[int, str] | None = None,
 ) -> list[Transition]:
     transitions = []
     for a, b in itertools.pairwise(films):
         deltas = component_deltas(a, b)
         cost = (
-            weights.genre * deltas.genre + weights.year * deltas.year
-            + weights.runtime * deltas.runtime + weights.rating * deltas.rating)
+            weights.genre * deltas.genre
+            + weights.year * deltas.year
+            + weights.runtime * deltas.runtime
+            + weights.rating * deltas.rating
+        )
         label = label_for(cost)
-        transitions.append(Transition(
-            from_movie_id=a.movie_id, to_movie_id=b.movie_id, cost=round(cost, 4), label=label,
-            summary=describe_transition(a, b, deltas, weights, label, genre_names), deltas=deltas))
+        transitions.append(
+            Transition(
+                from_movie_id=a.movie_id,
+                to_movie_id=b.movie_id,
+                cost=round(cost, 4),
+                label=label,
+                summary=describe_transition(a, b, deltas, weights, label, genre_names),
+                deltas=deltas,
+            )
+        )
     return transitions
 
 
 def optimize(
-    films: Sequence[RouterFilm], weights: Weights | None = None,
+    films: Sequence[RouterFilm],
+    weights: Weights | None = None,
     genre_names: Mapping[int, str] | None = None,
 ) -> RouterResult:
     """The smoothest order of `films` (4 to 25, distinct). Deterministic for a given input."""
@@ -306,11 +335,15 @@ def optimize(
         order, optimized_cost = list(range(n)), initial_cost
 
     ordered = [films[i] for i in order]
-    improvement = (initial_cost - optimized_cost) / initial_cost * 100.0 if initial_cost > _EPSILON else 0.0
+    improvement = (
+        (initial_cost - optimized_cost) / initial_cost * 100.0 if initial_cost > _EPSILON else 0.0
+    )
     return RouterResult(
         ordered_movie_ids=[film.movie_id for film in ordered],
         initial_whiplash_score=round(initial_cost, 3),
         optimized_whiplash_score=round(optimized_cost, 3),
         improvement_percentage=round(max(improvement, 0.0), 1),
         transitions=build_transitions(ordered, w, genre_names),
-        method=method, weights=w)
+        method=method,
+        weights=w,
+    )

@@ -159,8 +159,7 @@ class RunSummary(BaseModel):
     # 1 = legacy run (V2 rules bypassed), 2 = Challenge Engine V2.
     engine_version: int = 1
     status_reason: str | None = None
-    rules_config: dict[str, Any] = Field(
-        default_factory=lambda: dict(DEFAULT_RULES_CONFIG))
+    rules_config: dict[str, Any] = Field(default_factory=lambda: dict(DEFAULT_RULES_CONFIG))
     created_at: datetime
     completed_at: datetime | None
 

@@ -43,9 +43,7 @@ OVERRIDABLE_KEYS = (
 
 def get_overrides(session: Session) -> dict[str, str]:
     """Returns whichever of OVERRIDABLE_KEYS currently have a non-empty DB override."""
-    rows = session.exec(
-        select(SystemSetting).where(SystemSetting.key.in_(OVERRIDABLE_KEYS))
-    ).all()
+    rows = session.exec(select(SystemSetting).where(SystemSetting.key.in_(OVERRIDABLE_KEYS))).all()
     return {row.key: row.value for row in rows if row.value}
 
 

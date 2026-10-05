@@ -50,14 +50,35 @@ POOL_PAIR_GENRES = 3
 
 # TMDB's fixed movie genre ids: they never change, so no lookup is needed to resolve a name.
 TMDB_GENRE_IDS: dict[str, int] = {
-    "Action": 28, "Adventure": 12, "Animation": 16, "Comedy": 35, "Crime": 80,
-    "Documentary": 99, "Drama": 18, "Family": 10751, "Fantasy": 14, "History": 36,
-    "Horror": 27, "Music": 10402, "Mystery": 9648, "Romance": 10749,
-    "Science Fiction": 878, "TV Movie": 10770, "Thriller": 53, "War": 10752, "Western": 37,
+    "Action": 28,
+    "Adventure": 12,
+    "Animation": 16,
+    "Comedy": 35,
+    "Crime": 80,
+    "Documentary": 99,
+    "Drama": 18,
+    "Family": 10751,
+    "Fantasy": 14,
+    "History": 36,
+    "Horror": 27,
+    "Music": 10402,
+    "Mystery": 9648,
+    "Romance": 10749,
+    "Science Fiction": 878,
+    "TV Movie": 10770,
+    "Thriller": 53,
+    "War": 10752,
+    "Western": 37,
 }
 _BY_LOWER = {name.lower(): name for name in TMDB_GENRE_IDS}
-_ALIASES = {"sci-fi": "Science Fiction", "scifi": "Science Fiction", "sci fi": "Science Fiction",
-            "science-fiction": "Science Fiction", "tv": "TV Movie", "doc": "Documentary"}
+_ALIASES = {
+    "sci-fi": "Science Fiction",
+    "scifi": "Science Fiction",
+    "sci fi": "Science Fiction",
+    "science-fiction": "Science Fiction",
+    "tv": "TV Movie",
+    "doc": "Documentary",
+}
 
 
 def canonical_genre(name: object) -> str | None:
@@ -95,8 +116,12 @@ def pendulum_state(rules: dict | None, steps_logged: int) -> PendulumState:
     cycle, frequency = pendulum_config(rules)
     swing = steps_logged // frequency
     return PendulumState(
-        target=cycle[swing % len(cycle)], next_target=cycle[(swing + 1) % len(cycle)],
-        position=steps_logged % frequency + 1, frequency=frequency, swing=swing)
+        target=cycle[swing % len(cycle)],
+        next_target=cycle[(swing + 1) % len(cycle)],
+        position=steps_logged % frequency + 1,
+        frequency=frequency,
+        swing=swing,
+    )
 
 
 def movie_genres(row: CachedMovie) -> set[int]:
@@ -135,13 +160,17 @@ class GenrePendulumEngine(MutatorEngine):
                 if unknown:
                     problems.append(
                         f"Unknown genre(s) in {GENRE_CYCLE_KEY}: {', '.join(map(str, unknown))}. "
-                        f"Use TMDB genres: {', '.join(TMDB_GENRE_IDS)}")
+                        f"Use TMDB genres: {', '.join(TMDB_GENRE_IDS)}"
+                    )
         frequency = rules.get(SWING_FREQUENCY_KEY)
         if frequency is not None and (
-            isinstance(frequency, bool) or not isinstance(frequency, int)
+            isinstance(frequency, bool)
+            or not isinstance(frequency, int)
             or not 1 <= frequency <= MAX_SWING_FREQUENCY
         ):
-            problems.append(f"{SWING_FREQUENCY_KEY} must be a whole number from 1 to {MAX_SWING_FREQUENCY}")
+            problems.append(
+                f"{SWING_FREQUENCY_KEY} must be a whole number from 1 to {MAX_SWING_FREQUENCY}"
+            )
         return problems
 
     def prepare_rules_config(self, rules: dict) -> dict:
@@ -157,11 +186,13 @@ class GenrePendulumEngine(MutatorEngine):
         if earlier is not None and not movie_genres(earlier) & movie_genres(later):
             return (
                 f"Genre Pendulum: {later.title} shares no genre with {earlier.title} - "
-                "each film must overlap the last in at least one genre")
+                "each film must overlap the last in at least one genre"
+            )
         if state.target_id not in movie_genres(later):
             return (
                 f"Genre Pendulum: this swing needs a {state.target} film "
-                f"(step {state.position} of {state.frequency}), but {later.title} isn't tagged {state.target}")
+                f"(step {state.position} of {state.frequency}), but {later.title} isn't tagged {state.target}"
+            )
         return None
 
     def pair_violation(
@@ -198,8 +229,13 @@ class GenrePendulumEngine(MutatorEngine):
     ) -> ValidationResult:
         self._steps_logged = len(history or [])
         return await super().validate_next_step(
-            from_movie_id, to_movie_id, cast_limit=cast_limit, rules=rules,
-            previous_transition=previous_transition, history=history)
+            from_movie_id,
+            to_movie_id,
+            cast_limit=cast_limit,
+            rules=rules,
+            previous_transition=previous_transition,
+            history=history,
+        )
 
     async def describe_run_constraint(
         self,
@@ -210,19 +246,22 @@ class GenrePendulumEngine(MutatorEngine):
     ) -> ConstraintInfo | None:
         self._steps_logged = len(history or [])
         return await super().describe_run_constraint(
-            tail_movie_id, previous_transition, rules, history)
+            tail_movie_id, previous_transition, rules, history
+        )
 
     async def describe_constraint(
-        self, tail_movie_id: int | None, previous_transition: dict | None,
+        self,
+        tail_movie_id: int | None,
+        previous_transition: dict | None,
         rules: dict | None = None,
     ) -> ConstraintInfo | None:
         state = pendulum_state(rules, self._steps_logged)
-        overlap = (
-            " and share a genre with the last film" if tail_movie_id is not None else "")
+        overlap = " and share a genre with the last film" if tail_movie_id is not None else ""
         return ConstraintInfo(
             kind="genre",
             title=f"Current swing: {state.target} (step {state.position} of {state.frequency})",
-            detail=f"The next film must be {state.target}{overlap}. Next swing: {state.next_target}.")
+            detail=f"The next film must be {state.target}{overlap}. Next swing: {state.next_target}.",
+        )
 
     # --- Pick Next ---
 
@@ -237,10 +276,13 @@ class GenrePendulumEngine(MutatorEngine):
     ) -> list[DiscoveryCandidate]:
         self._steps_logged = len(history or [])
         return await super().discover_candidates(
-            frontier_movie_id, mode, cast_limit, rules, previous_transition, history)
+            frontier_movie_id, mode, cast_limit, rules, previous_transition, history
+        )
 
     async def discover_rule_candidates(
-        self, frontier: CachedMovie, rules: dict | None,
+        self,
+        frontier: CachedMovie,
+        rules: dict | None,
         history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
         """Films carrying the target genre that overlap the frontier's genres: cached ones first,
@@ -249,9 +291,11 @@ class GenrePendulumEngine(MutatorEngine):
         rows: dict[int, CachedMovie] = {}
         statement = (
             select(CachedMovie)
-            .where(text(
-                "EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g WHERE g.value = :genre)"
-            ).bindparams(genre=state.target_id))
+            .where(
+                text(
+                    "EXISTS (SELECT 1 FROM json_each(cached_movies.genre_ids) AS g WHERE g.value = :genre)"
+                ).bindparams(genre=state.target_id)
+            )
             .order_by(CachedMovie.popularity.desc())  # type: ignore[union-attr]
             .limit(RULE_POOL_SIZE * 2)
         )
@@ -270,8 +314,11 @@ class GenrePendulumEngine(MutatorEngine):
             except POOL_FETCH_ERRORS:
                 break
 
-        pool = [candidate_from_row(row) for row in rows.values()
-                if row.tmdb_id != frontier.tmdb_id and is_reality_eligible(row)]
+        pool = [
+            candidate_from_row(row)
+            for row in rows.values()
+            if row.tmdb_id != frontier.tmdb_id and is_reality_eligible(row)
+        ]
         pool = await self._filter_pool(frontier, pool, rules)
         pool.sort(key=lambda c: -(c.popularity or 0.0))
         return pool[:RULE_POOL_SIZE]

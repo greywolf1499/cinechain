@@ -91,10 +91,11 @@ async def ensure_embeddings(session: Session, movies: Iterable[CachedMovie]) -> 
     suspended = embeddings.external_suspended(config)
     pending = [m for m in movies if _needs_embedding(m, config, suspended)]
     for start in range(0, len(pending), EMBED_BATCH_SIZE):
-        batch = pending[start: start + EMBED_BATCH_SIZE]
+        batch = pending[start : start + EMBED_BATCH_SIZE]
         try:
             result = await embeddings.embed_batch(
-                config, [(m.overview or "").strip() for m in batch])
+                config, [(m.overview or "").strip() for m in batch]
+            )
         except embeddings.EmbeddingUnavailable as exc:
             logger.warning("Semantic embeddings unavailable: %s", exc)
             return False
@@ -125,9 +126,13 @@ async def ensure_tropes(session: Session, movies: Iterable[CachedMovie]) -> None
     config = llm.load_config(session)
     if not config.enabled:
         return
-    pending = list({
-        m.tmdb_id: m for m in movies
-        if m.extracted_tropes is None and (m.overview or "").strip()}.values())
+    pending = list(
+        {
+            m.tmdb_id: m
+            for m in movies
+            if m.extracted_tropes is None and (m.overview or "").strip()
+        }.values()
+    )
     if not pending:
         return
     gate = asyncio.Semaphore(TROPE_CONCURRENCY)

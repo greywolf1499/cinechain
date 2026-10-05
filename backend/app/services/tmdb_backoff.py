@@ -36,7 +36,8 @@ async def fetch_with_backoff[T](
             return await fetch()
         except TMDBRateLimitError as exc:
             wait = min(
-                pause if exc.retry_after is None else exc.retry_after, MAX_RATE_LIMIT_PAUSE_SECONDS)
+                pause if exc.retry_after is None else exc.retry_after, MAX_RATE_LIMIT_PAUSE_SECONDS
+            )
             logger.warning("TMDB rate limit hit; pausing %.1fs", wait)
             if on_pause is not None:
                 on_pause(wait)

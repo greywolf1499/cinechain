@@ -204,3 +204,26 @@ class TunnelState(BaseModel):
     distance_hops: int | None = None
     searched_depth: int = 0
     message: str | None = None
+    hints_remaining: int = 0
+
+
+class TunnelHintRequest(BaseModel):
+    side: Literal["head", "tail"]
+    level: Literal["actor", "film"]
+
+
+class TunnelHintActor(BaseModel):
+    actor_id: int
+    actor_name: str
+
+
+class TunnelHintFilm(BaseModel):
+    movie_id: int
+    title: str
+
+
+class TunnelHintResponse(BaseModel):
+    level: Literal["actor", "film"]
+    actor: TunnelHintActor | None = None
+    film: TunnelHintFilm | None = None
+    tokens_remaining: int

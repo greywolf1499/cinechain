@@ -114,6 +114,7 @@ export default function RunDetailPage() {
 
   const [activeActor, setActiveActor] = useState<ActorClickPayload | null>(null);
   const [confirmDeleteStepId, setConfirmDeleteStepId] = useState<string | null>(null);
+  const [afterStepDelete, setAfterStepDelete] = useState<(() => void) | null>(null);
   const [confirmDeleteRun, setConfirmDeleteRun] = useState(false);
   const [confirmForfeit, setConfirmForfeit] = useState(false);
 
@@ -157,6 +158,14 @@ export default function RunDetailPage() {
     if (!confirmDeleteStepId) return;
     await deleteStep.mutateAsync(confirmDeleteStepId);
     setConfirmDeleteStepId(null);
+    const afterDelete = afterStepDelete;
+    setAfterStepDelete(null);
+    afterDelete?.();
+  }
+
+  function requestDeleteStep(stepId: string, afterDelete?: () => void) {
+    setAfterStepDelete(() => afterDelete ?? null);
+    setConfirmDeleteStepId(stepId);
   }
 
   async function handleSetStatus(status: RunStatus) {
@@ -228,7 +237,7 @@ export default function RunDetailPage() {
       )}
 
       <ForkOfferPanel run={run} users={users} frontier={lastStep} />
-      <GoldenVetoBar run={run} users={users} />
+      {run.game_type !== MEET_IN_THE_MIDDLE && <GoldenVetoBar run={run} users={users} />}
 
       {run.game_type === MARCH_MADNESS && run.rules_config.bracket ? (
         <BracketView run={run} users={users} currentUserId={currentUser?.id} />
@@ -246,7 +255,7 @@ export default function RunDetailPage() {
             runId={run.id}
             steps={run.steps}
             locked={locked}
-            onRequestDeleteStep={setConfirmDeleteStepId}
+            onRequestDeleteStep={requestDeleteStep}
           />
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
             <TunnelFrontierCard
@@ -254,6 +263,7 @@ export default function RunDetailPage() {
               steps={run.steps}
               rulesConfig={run.rules_config}
               locked={locked}
+              onRequestDeleteStep={requestDeleteStep}
             />
             <MiniPassportWidget stats={stats} rules={run.rules_config} castLinked={castLinked} />
             <RulesSummaryCard
@@ -352,7 +362,10 @@ export default function RunDetailPage() {
 
       <Modal
         open={!!confirmDeleteStepId}
-        onClose={() => setConfirmDeleteStepId(null)}
+        onClose={() => {
+          setConfirmDeleteStepId(null);
+          setAfterStepDelete(null);
+        }}
         title="Remove this step?"
         widthClassName="max-w-sm"
       >
@@ -362,7 +375,10 @@ export default function RunDetailPage() {
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
-            onClick={() => setConfirmDeleteStepId(null)}
+            onClick={() => {
+              setConfirmDeleteStepId(null);
+              setAfterStepDelete(null);
+            }}
             className="rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-app-surface-hover"
           >
             Cancel

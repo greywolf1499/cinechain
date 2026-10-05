@@ -56,6 +56,10 @@ from app.schemas.engine import (
     RunStats,
     Suggestion,
     SuggestionFilters,
+    TunnelHintActor,
+    TunnelHintFilm,
+    TunnelHintRequest,
+    TunnelHintResponse,
     TunnelState,
     ValidationResult,
 )
@@ -120,7 +124,7 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
 # Metadata keys only the server may set: a client-supplied `collision` would be a free win.
 SERVER_OWNED_METADATA = (
     "tunnel_side", "collision", "collision_with", "golden_reunion", "character_hop",
-    "tug_team", "seed", "life_lost",
+    "near_miss_with", "tug_team", "seed", "life_lost",
     # Bounty Board awards and Rotten Tomatoes Split settlements: a client could mint wildcards/points.
     "completed_bounty", "bounty_replacement",
     "household_score", "critic_score", "audience_score", "divergence", "point_to")
@@ -318,6 +322,10 @@ async def _enforce_run_rules(
         ):
             extra_metadata["collision"] = True
             extra_metadata["collision_with"] = opposing_steps[-1].movie_id
+        elif result.valid and isinstance(engine, MeetInTheMiddleEngine):
+            near_miss = await engine.near_miss(movie.tmdb_id, opposing_steps, rules)
+            if near_miss is not None:
+                extra_metadata["near_miss_with"] = near_miss.movie_id
         if result.valid and rules.get("no_consecutive_actor", True):
             # Crew & Craft links name a person (any role); the classic ones an actor.
             chosen = (
@@ -1115,6 +1123,11 @@ def golden_veto(
         fork = _require_fork(run)
         _require_partner_of_offer(fork, current_user)
     else:
+        if run.game_type == MEET_IN_THE_MIDDLE:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Meet in the Middle is co-op - use Undo on your own side",
+            )
         steps = _run_history(session, run.id)
         seeds = 2 if run.game_type == MEET_IN_THE_MIDDLE else 1
         if len(steps) <= seeds:
@@ -1197,20 +1210,161 @@ async def get_tunnel_state(
         head_steps=len(head), tail_steps=len(tail),
         collided=run.status == RUN_STATUS_COMPLETED and any(
             (s.transition_metadata or {}).get("collision") for s in steps),
+        hints_remaining=_run_rules(run).get("tunnel_hints_remaining", 2),
     )
     if state.collided:
         return state.model_copy(update={"distance_hops": 0})
     if not head or not tail:
         return state.model_copy(update={"message": "Both partners need a starting film."})
+    head_id, tail_id = head[-1].movie_id, tail[-1].movie_id
+    cached = _run_rules(run).get("tunnel_distance")
+    if (
+        isinstance(cached, dict)
+        and cached.get("head_id") == head_id
+        and cached.get("tail_id") == tail_id
+    ):
+        return state.model_copy(update={
+            "distance_hops": cached.get("hops"),
+            "searched_depth": cached.get("depth_reached", 0),
+            "message": cached.get("message"),
+        })
     try:
         distance = await engine.distance(
-            head[-1].movie_id, tail[-1].movie_id, {s.movie_id for s in steps},
+            head_id, tail_id, {s.movie_id for s in steps},
             cast_limit=_run_rules(run).get("max_cast_order"))
     except Exception as exc:  # noqa: BLE001 - the indicator is advisory; never fail the page
         return state.model_copy(update={"message": f"Couldn't measure the distance: {exc}"})
+    rules = _run_rules(run)
+    run.rules_config = {
+        **rules,
+        "tunnel_distance": {
+            "head_id": head_id,
+            "tail_id": tail_id,
+            "hops": distance.hops,
+            "depth_reached": distance.searched_depth,
+            "message": distance.message,
+        },
+    }
+    session.add(run)
+    session.commit()
     return state.model_copy(update={
         "distance_hops": distance.hops, "searched_depth": distance.searched_depth,
         "message": distance.message})
+
+
+@router.post("/{run_id}/tunnel/hint", response_model=TunnelHintResponse)
+async def request_tunnel_hint(
+    payload: TunnelHintRequest,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> TunnelHintResponse:
+    """Search deeper toward the opposite frontier and spend a hint only if a path is found."""
+    engine = get_engine(run.game_type, session, tmdb)
+    if not isinstance(engine, MeetInTheMiddleEngine):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hints are only available in Meet in the Middle runs",
+        )
+    steps = _run_history(session, run.id)
+    head, tail = split_sides(steps)
+    collided = any((step.transition_metadata or {}).get("collision") for step in steps)
+    if run.status != RUN_STATUS_ACTIVE or collided:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This tunnel is already closed",
+        )
+    if not head or not tail:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Both partners need a starting film before using a hint",
+        )
+
+    cost = 1 if payload.level == "actor" else 2
+    rules = _run_rules(run)
+    remaining = rules.get("tunnel_hints_remaining", 2)
+    if remaining < cost:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Not enough hint tokens ({cost} required, {remaining} remaining)",
+        )
+
+    head_id, tail_id = head[-1].movie_id, tail[-1].movie_id
+    distance = await engine.distance(
+        head_id,
+        tail_id,
+        {step.movie_id for step in steps},
+        cast_limit=rules.get("max_cast_order"),
+        max_depth=7,
+        max_seconds=20,
+    )
+    if distance.hops is None or not distance.path_movie_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{distance.message} No token spent."
+                if distance.message
+                else "No route found within the hint search budget. No token spent."
+            ),
+        )
+    if payload.level == "film" and distance.hops < 2:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The shortest route has no hidden film to reveal. No token spent.",
+        )
+
+    session.refresh(run)
+    latest_steps = _run_history(session, run.id)
+    latest_head, latest_tail = split_sides(latest_steps)
+    if (
+        run.status != RUN_STATUS_ACTIVE
+        or not latest_head
+        or not latest_tail
+        or latest_head[-1].movie_id != head_id
+        or latest_tail[-1].movie_id != tail_id
+        or any((step.transition_metadata or {}).get("collision") for step in latest_steps)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The tunnel changed during the search; no token spent. Try again.",
+        )
+    rules = _run_rules(run)
+    remaining = rules.get("tunnel_hints_remaining", 2)
+    if remaining < cost:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another hint used the remaining tokens during the search; no token spent",
+        )
+
+    path_ids = distance.path_movie_ids
+    edge_index = 0 if payload.side == SIDE_HEAD else -1
+    actor_hint = None
+    film_hint = None
+    if payload.level == "actor":
+        connections = distance.connections or []
+        if not connections:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The found route has no actor connection to reveal; no token spent",
+            )
+        connection = connections[edge_index]
+        actor_hint = TunnelHintActor(
+            actor_id=connection.actor_id, actor_name=connection.actor_name)
+    else:
+        film_id = path_ids[1] if payload.side == SIDE_HEAD else path_ids[-2]
+        film = session.get(CachedMovie, film_id)
+        film_hint = TunnelHintFilm(
+            movie_id=film_id, title=film.title if film is not None else str(film_id))
+
+    run.rules_config = {**rules, "tunnel_hints_remaining": remaining - cost}
+    session.add(run)
+    session.commit()
+    return TunnelHintResponse(
+        level=payload.level,
+        actor=actor_hint,
+        film=film_hint,
+        tokens_remaining=remaining - cost,
+    )
 
 
 @router.get("/{run_id}/constraint", response_model=ConstraintInfo | None)

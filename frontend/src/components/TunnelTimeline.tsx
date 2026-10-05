@@ -1,9 +1,10 @@
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Loader2, Swords, Trash2 } from "lucide-react";
 import MoviePoster from "./MoviePoster";
 import ClampedLabel from "./ui/ClampedLabel";
 import PitchButton from "./PitchButton";
 import { cn } from "../lib/cn";
-import { useTunnelState } from "../lib/queries";
+import { useTunnelHint, useTunnelState } from "../lib/queries";
 import { SIDE_LABELS, splitSides } from "../lib/tunnel";
 import type { RunStep, TunnelSide, TunnelState } from "../types/api";
 
@@ -35,14 +36,15 @@ export default function TunnelTimeline({
 }) {
   const { head, tail } = splitSides(steps);
   const lastStepId = steps[steps.length - 1]?.id;
-  const tunnel = useTunnelState(runId, steps.length);
+  const tunnel = useTunnelState(runId);
+  const titles = new Map(steps.map((step) => [step.movie_id, step.movie_title]));
 
   return (
     <div className="rounded-xl border border-app-border bg-app-surface p-4">
       <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-        <Track side="head" steps={head} lastStepId={lastStepId} locked={locked} onRemove={onRequestDeleteStep} />
-        <Trench state={tunnel.data} loading={tunnel.isLoading} />
-        <Track side="tail" steps={tail} lastStepId={lastStepId} locked={locked} onRemove={onRequestDeleteStep} />
+        <Track side="head" steps={head} titles={titles} lastStepId={lastStepId} locked={locked} onRemove={onRequestDeleteStep} />
+        <Trench runId={runId} state={tunnel.data} loading={tunnel.isFetching} locked={locked} />
+        <Track side="tail" steps={tail} titles={titles} lastStepId={lastStepId} locked={locked} onRemove={onRequestDeleteStep} />
       </div>
     </div>
   );
@@ -51,12 +53,14 @@ export default function TunnelTimeline({
 function Track({
   side,
   steps,
+  titles,
   lastStepId,
   locked,
   onRemove,
 }: {
   side: TunnelSide;
   steps: RunStep[];
+  titles: Map<number, string>;
   lastStepId: string | undefined;
   locked: boolean;
   onRemove: (stepId: string) => void;
@@ -85,6 +89,7 @@ function Track({
                 step={step}
                 previous={previous}
                 side={side}
+                titles={titles}
                 isSeed={chronologicalIndex === 0}
                 removable={!locked && step.id === lastStepId && chronologicalIndex > 0}
                 onRemove={() => onRemove(step.id)}
@@ -101,6 +106,7 @@ function TunnelCard({
   step,
   previous,
   side,
+  titles,
   isSeed,
   removable,
   onRemove,
@@ -108,6 +114,7 @@ function TunnelCard({
   step: RunStep;
   previous: RunStep | null;
   side: TunnelSide;
+  titles: Map<number, string>;
   isSeed: boolean;
   removable: boolean;
   onRemove: () => void;
@@ -116,6 +123,7 @@ function TunnelCard({
   const meta = step.transition_metadata;
   const collided = !!meta?.collision;
   const via = typeof meta?.actor_name === "string" ? meta.actor_name : null;
+  const nearMissId = typeof meta?.near_miss_with === "number" ? meta.near_miss_with : null;
 
   return (
     <div
@@ -146,6 +154,15 @@ function TunnelCard({
             💥 Collision
           </span>
         )}
+        {nearMissId !== null && (
+          <span
+            title={`Almost connected to ${titles.get(nearMissId) ?? `film ${nearMissId}`}`}
+            aria-label={`Near miss with ${titles.get(nearMissId) ?? `film ${nearMissId}`}`}
+            className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300"
+          >
+            💫 Near miss
+          </span>
+        )}
       </div>
       {previous && (
         <div className="flex flex-col gap-1 border-t border-dashed border-app-border pt-1.5">
@@ -168,13 +185,41 @@ function TunnelCard({
   );
 }
 
-function Trench({ state, loading }: { state: TunnelState | undefined; loading: boolean }) {
+function Trench({
+  runId,
+  state,
+  loading,
+  locked,
+}: {
+  runId: string;
+  state: TunnelState | undefined;
+  loading: boolean;
+  locked: boolean;
+}) {
+  const hint = useTunnelHint(runId);
+  const previousDistance = useRef<number | null>(null);
+  const previousRunId = useRef(runId);
+  const [trend, setTrend] = useState<"warmer" | "colder" | null>(null);
+  useEffect(() => {
+    if (previousRunId.current !== runId) {
+      previousRunId.current = runId;
+      previousDistance.current = null;
+      setTrend(null);
+    }
+    const current = state?.distance_hops;
+    if (current == null) return;
+    if (previousDistance.current !== null && previousDistance.current !== current) {
+      setTrend(current < previousDistance.current ? "warmer" : "colder");
+    }
+    previousDistance.current = current;
+  }, [runId, state?.distance_hops]);
+
   let headline: React.ReactNode;
   let detail: string | null = null;
 
   if (state?.collided) {
     headline = <span className="text-fuchsia-300">💥 The chains collided!</span>;
-  } else if (loading || !state) {
+  } else if (!state) {
     headline = (
       <span className="flex items-center justify-center gap-1.5 text-zinc-400">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -182,8 +227,14 @@ function Trench({ state, loading }: { state: TunnelState | undefined; loading: b
       </span>
     );
   } else if (state.distance_hops === null) {
-    headline = <span className="text-amber-300">Distance: unknown</span>;
-    detail = state.message ?? `No route within ${state.searched_depth} hops yet.`;
+    headline = state.searched_depth > 0 ? (
+      <span className="text-amber-300">Distance: ≥ {state.searched_depth} hops</span>
+    ) : (
+      <span className="text-amber-300">Distance: unknown</span>
+    );
+    detail = state.searched_depth > 0
+      ? `Still searching deeper next time. ${state.message ?? ""}`.trim()
+      : state.message ?? "No route found within the search limit.";
   } else {
     headline = (
       <span className="text-zinc-100">
@@ -205,8 +256,58 @@ function Trench({ state, loading }: { state: TunnelState | undefined; loading: b
       className="flex min-w-44 flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-app-border bg-app-bg/70 px-3 py-4 text-center text-xs lg:max-w-52"
     >
       <Swords className="h-4 w-4 text-zinc-600" aria-hidden />
-      <p className="font-semibold">{headline}</p>
+      <p className="flex items-center justify-center gap-1.5 font-semibold">
+        {headline}
+        {loading && state && (
+          <Loader2 className="h-3 w-3 animate-spin text-zinc-500" aria-label="Updating distance" />
+        )}
+      </p>
+      {trend && (
+        <p className={cn("font-semibold", trend === "warmer" ? "text-emerald-300" : "text-sky-300")}>
+          {trend === "warmer" ? "▲ Warmer" : "▼ Colder"}
+        </p>
+      )}
       {detail && <p className="text-[11px] leading-snug text-zinc-500">{detail}</p>}
+      {state && !locked && !state.collided && (
+        <>
+          <p className="mt-1 text-[10px] text-zinc-500">{state.hints_remaining} hint tokens left</p>
+          <div className="flex flex-wrap justify-center gap-1.5">
+            {(["head", "tail"] as const).map((side) => (
+              <div key={side} className="flex gap-1">
+                <button
+                  type="button"
+                  disabled={hint.isPending || state.hints_remaining < 1}
+                  onClick={() => hint.mutate({ side, level: "actor" })}
+                  className="rounded-md border border-app-border px-2 py-1 text-[10px] text-zinc-300 hover:bg-app-surface-hover disabled:opacity-50"
+                  title={`Reveal the next connecting actor from ${SIDE_LABELS[side]}'s side (1 token)`}
+                >
+                  💡 {side === "head" ? "A" : "B"} actor · 1
+                </button>
+                <button
+                  type="button"
+                  disabled={hint.isPending || state.hints_remaining < 2}
+                  onClick={() => hint.mutate({ side, level: "film" })}
+                  className="rounded-md border border-app-border px-2 py-1 text-[10px] text-zinc-300 hover:bg-app-surface-hover disabled:opacity-50"
+                  title={`Reveal the next film from ${SIDE_LABELS[side]}'s side (2 tokens)`}
+                >
+                  {side === "head" ? "A" : "B"} film · 2
+                </button>
+              </div>
+            ))}
+          </div>
+          {hint.data && (
+            <p role="status" className="text-[11px] text-amber-200">
+              {SIDE_LABELS[hint.variables?.side ?? "head"]}:{" "}
+              {hint.data.actor?.actor_name ?? hint.data.film?.title ?? "Hint found"}
+            </p>
+          )}
+          {hint.isError && (
+            <p role="alert" className="text-[10px] text-red-300">
+              {hint.error instanceof Error ? hint.error.message : "Couldn't get a hint."}
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }

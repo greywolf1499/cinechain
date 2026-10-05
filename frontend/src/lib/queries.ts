@@ -31,6 +31,7 @@ import type {
 	LlmStatus,
 	TunnelSide,
 	TunnelState,
+	TunnelHintResponse,
 	RawRulesConfig,
 	RunStatus,
 	RulesConfig,
@@ -100,15 +101,24 @@ export function useRunStats(runId: string | undefined) {
 	});
 }
 
-/** Meet in the Middle: both frontiers and the distance between them. Refetches whenever the
- * run changes (it lives under the run's key prefix) - `stepCount` keys it so each chain length
- * is measured once. */
-export function useTunnelState(runId: string | undefined, stepCount: number, enabled = true) {
+/** Meet in the Middle: both frontiers and their cached distance. */
+export function useTunnelState(runId: string | undefined, enabled = true) {
 	return useQuery({
-		queryKey: [...queryKeys.run(runId ?? ""), "tunnel", stepCount],
+		queryKey: [...queryKeys.run(runId ?? ""), "tunnel"],
 		queryFn: () => api.get<TunnelState>(`/runs/${runId}/tunnel`),
 		enabled: !!runId && enabled,
 		staleTime: 60_000,
+	});
+}
+
+export function useTunnelHint(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (payload: { side: "head" | "tail"; level: "actor" | "film" }) =>
+			api.post<TunnelHintResponse>(`/runs/${runId}/tunnel/hint`, payload),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+		},
 	});
 }
 

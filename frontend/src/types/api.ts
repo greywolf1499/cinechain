@@ -477,6 +477,14 @@ export interface TunnelState {
 	distance_hops: number | null;
 	searched_depth: number;
 	message: string | null;
+	hints_remaining: number;
+}
+
+export interface TunnelHintResponse {
+	level: "actor" | "film";
+	actor: { actor_id: number; actor_name: string } | null;
+	film: { movie_id: number; title: string } | null;
+	tokens_remaining: number;
 }
 
 export interface LlmStatus {

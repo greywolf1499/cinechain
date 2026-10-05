@@ -17,7 +17,7 @@ both ends, so they are off.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from app.engines.cinechain import CineChainEngine
@@ -29,7 +29,8 @@ from app.models.run import (
     Run,
     RunStep,
 )
-from app.services import pathfinder
+from app.schemas.engine import BridgeNode, SharedActorConnection
+from app.services import cache_repo, pathfinder
 
 MEET_IN_THE_MIDDLE = "meet_in_the_middle"
 SIDE_HEAD = "head"
@@ -64,6 +65,8 @@ class TunnelDistance:
     hops: int | None  # None = no route found within the search limits
     searched_depth: int
     message: str | None = None
+    path_movie_ids: list[int] = field(default_factory=list)
+    connections: list[SharedActorConnection] = field(default_factory=list)
 
 
 class MeetInTheMiddleEngine(CineChainEngine):
@@ -78,6 +81,14 @@ class MeetInTheMiddleEngine(CineChainEngine):
         "tunnel",
     ]
     supports_modifiers = False
+
+    def prepare_rules_config(self, rules: dict) -> dict:
+        hints = rules.get("tunnel_hints", 2)
+        try:
+            hints = int(hints)
+        except (TypeError, ValueError):
+            hints = 2
+        return {**rules, "tunnel_hints_remaining": max(0, min(hints, 5))}
 
     def evaluate_run_outcome(self, run: Run, steps: list[RunStep]) -> RunOutcome | None:
         """Collision Victory: complete the run when a logged step connects both ends."""
@@ -108,26 +119,71 @@ class MeetInTheMiddleEngine(CineChainEngine):
             history=list(opposing_steps))
         return result.valid
 
+    async def near_miss(
+        self,
+        movie_id: int,
+        opposing_steps: Sequence[RunStep],
+        rules: dict | None,
+    ) -> RunStep | None:
+        """Return the nearest earlier opposite-side film sharing cast with this pick.
+
+        The current opposing frontier is excluded: a valid cast link to that film
+        would have completed the run as a collision, not a near miss.
+        """
+        if len(opposing_steps) < 2:
+            return None
+        cast_limit = (rules or {}).get("max_cast_order")
+        candidate_cast = await cache_repo.get_movie_cast(
+            self.session, self.tmdb, movie_id, cast_limit)
+        candidate_ids = {member["actor_id"] for member in candidate_cast}
+        if not candidate_ids:
+            return None
+        for step in reversed(opposing_steps[:-1]):
+            previous_cast = await cache_repo.get_movie_cast(
+                self.session, self.tmdb, step.movie_id, cast_limit)
+            if candidate_ids.intersection(member["actor_id"] for member in previous_cast):
+                return step
+        return None
+
     async def distance(
         self, head_movie_id: int, tail_movie_id: int, excluded_movie_ids: set[int],
-        cast_limit: int | None = None,
+        cast_limit: int | None = None, max_depth: int = DISTANCE_MAX_DEPTH,
+        max_seconds: int = DISTANCE_MAX_SECONDS,
     ) -> TunnelDistance:
         """Movie-hops between the two frontiers (1 = they already share cast), via a quick
         bidirectional BFS that avoids every film already in the run."""
         if head_movie_id == tail_movie_id:
             return TunnelDistance(hops=0, searched_depth=0)
         hops: int | None = None
+        path_movie_ids: list[int] = []
+        connections: list[SharedActorConnection] = []
+        searched_depth = 0
         message: str | None = None
         async for event in pathfinder.solve_bridge_bipartite(
             self.session, self.tmdb, head_movie_id, tail_movie_id,
-            max_depth=DISTANCE_MAX_DEPTH, cast_limit=cast_limit,
-            excluded_movie_ids=excluded_movie_ids, max_duration_seconds=DISTANCE_MAX_SECONDS,
+            max_depth=max_depth, cast_limit=cast_limit,
+            excluded_movie_ids=excluded_movie_ids, max_duration_seconds=max_seconds,
         ):
             if event["type"] == "result":
                 hops = event["hops"]
+                path_movie_ids = [
+                    node.movie_id if isinstance(node, BridgeNode) else node["movie_id"]
+                    for node in event["path"]
+                ]
+                connections = [
+                    connection if isinstance(connection, SharedActorConnection)
+                    else SharedActorConnection.model_validate(connection)
+                    for connection in event["connections"]
+                ]
+                searched_depth = hops
             elif event["type"] == "timeout":
-                message = "The quick search timed out - the ends may still be close."
+                searched_depth = event.get("depth_reached", searched_depth)
+                message = event.get("message") or "The search timed out - the ends may still be close."
             elif event["type"] == "exhausted":
-                message = f"No route within {DISTANCE_MAX_DEPTH} hops yet."
+                searched_depth = event.get("depth_reached", max_depth)
+                message = f"No route within {searched_depth} hops yet."
+            elif event["type"] == "error":
+                message = event.get("message", "The search failed.")
         return TunnelDistance(
-            hops=hops, searched_depth=DISTANCE_MAX_DEPTH, message=None if hops else message)
+            hops=hops, searched_depth=searched_depth, message=message,
+            path_movie_ids=path_movie_ids, connections=connections)

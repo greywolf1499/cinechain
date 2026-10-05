@@ -237,6 +237,7 @@ async def solve_bridge_bipartite(
                     yield {
                         "type": "exhausted",
                         "reason": "budget_exceeded",
+                        "depth_reached": forward.hops + backward.hops,
                         "tmdb_calls": stats.tmdb_calls,
                         "elapsed_ms": (time.monotonic() - start) * 1000,
                     }
@@ -264,6 +265,7 @@ async def solve_bridge_bipartite(
             yield {
                 "type": "exhausted",
                 "reason": "max_depth_reached",
+                "depth_reached": forward.hops + backward.hops,
                 "tmdb_calls": stats.tmdb_calls,
                 "elapsed_ms": (time.monotonic() - start) * 1000,
             }

@@ -8,9 +8,8 @@ import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
-import { useCreateStep } from "../lib/queries";
+import { useCreateStep, useJellyfinLookup } from "../lib/queries";
 import type {
-  JellyfinItemSummary,
   MovieSummary,
   RulesConfig,
   RunStep,
@@ -103,14 +102,7 @@ export default function ForkInTheRoadModal({
   });
 
   const tmdbIds = credits?.map((m) => m.tmdb_id) ?? [];
-  const { data: jellyfinStatus } = useQuery({
-    queryKey: ["jellyfin", "lookup", tmdbIds],
-    queryFn: () =>
-      api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
-        tmdb_ids: tmdbIds,
-      }),
-    enabled: tmdbIds.length > 0,
-  });
+  const { data: jellyfinStatus } = useJellyfinLookup(tmdbIds);
 
   async function handleLog(
     movie: MovieSummary,

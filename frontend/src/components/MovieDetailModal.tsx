@@ -16,9 +16,15 @@ import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
 import { profileUrl } from "../lib/tmdbImage";
-import { useCanonBadgesBulk, useMovieDetail, useMovieTropes, useUpdateStep } from "../lib/queries";
+import {
+  useCanonBadgesBulk,
+  useJellyfinLookup,
+  useMovieDetail,
+  useMovieTropes,
+  useUpdateStep,
+} from "../lib/queries";
 import type { ActorClickPayload } from "./actorClickTypes";
-import type { GenreOut, JellyfinItemSummary, RunStep } from "../types/api";
+import type { GenreOut, RunStep } from "../types/api";
 
 interface TransitionMeta {
   actor_id?: number;
@@ -55,14 +61,7 @@ export default function MovieDetailModal({
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
     enabled: open,
   });
-  const { data: jellyfinStatus } = useQuery({
-    queryKey: ["jellyfin", "lookup", [step.movie_id]],
-    queryFn: () =>
-      api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
-        tmdb_ids: [step.movie_id],
-      }),
-    enabled: open,
-  });
+  const { data: jellyfinStatus } = useJellyfinLookup(open ? [step.movie_id] : []);
   const { data: badgesMap } = useCanonBadgesBulk(open ? [step.movie_id] : []);
   const { tropes, isExtracting } = useMovieTropes(step.movie_id, open);
 

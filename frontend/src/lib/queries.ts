@@ -40,6 +40,7 @@ import type {
 	SplitPool,
 	StepStatus,
 	UserSummary,
+	JellyfinItemSummary,
 } from "../types/api";
 
 export const queryKeys = {
@@ -123,6 +124,17 @@ export function useRunConstraint(runId: string | undefined) {
 		queryKey: [...queryKeys.run(runId ?? ""), "constraint"],
 		queryFn: () => api.get<ConstraintInfo | null>(`/runs/${runId}/constraint`),
 		enabled: !!runId,
+	});
+}
+
+export function useJellyfinLookup(tmdbIds: number[]) {
+	return useQuery({
+		queryKey: ["jellyfin", "lookup", tmdbIds],
+		queryFn: () =>
+			api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
+				tmdb_ids: tmdbIds,
+			}),
+		enabled: tmdbIds.length > 0,
 	});
 }
 

@@ -9,8 +9,8 @@ import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
-import { useCanonBadgesBulk, useMovieDetail } from "../lib/queries";
-import type { GenreOut, JellyfinItemSummary } from "../types/api";
+import { useCanonBadgesBulk, useJellyfinLookup, useMovieDetail } from "../lib/queries";
+import type { GenreOut } from "../types/api";
 
 /** Lightweight, read-only movie preview - used for bridge path nodes (not yet
  * logged in any run, so the heavier step-editing MovieDetailModal doesn't apply). */
@@ -31,14 +31,7 @@ export default function MoviePreviewModal({
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
     enabled: open,
   });
-  const { data: jellyfinStatus } = useQuery({
-    queryKey: ["jellyfin", "lookup", [movieId]],
-    queryFn: () =>
-      api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
-        tmdb_ids: [movieId],
-      }),
-    enabled: open,
-  });
+  const { data: jellyfinStatus } = useJellyfinLookup(open ? [movieId] : []);
   const { data: badgesMap } = useCanonBadgesBulk(open ? [movieId] : []);
 
   const countries = parseOriginCountries(movie?.origin_country ?? null);

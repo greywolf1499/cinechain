@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { leapText, narrativeSettingText } from "../lib/historicalEra";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
@@ -11,6 +11,7 @@ import { roleBadgeText } from "../lib/crewRoles";
 import LinkBonusBadges from "./LinkBonusBadges";
 import { useCreateStep } from "../lib/queries";
 import MoviePoster from "./MoviePoster";
+import Popover from "./ui/Popover";
 import type { MovieSummary, RulesConfig, RunStep, ValidationResult } from "../types/api";
 
 interface MovieSearchAutocompleteProps {
@@ -36,6 +37,8 @@ export default function MovieSearchAutocomplete({
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebouncedValue(query, 300);
+  const [activeResultIndex, setActiveResultIndex] = useState(-1);
+  const [resultsDismissed, setResultsDismissed] = useState(false);
   const [picked, setPicked] = useState<MovieSummary | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
@@ -43,6 +46,8 @@ export default function MovieSearchAutocomplete({
   const [watchedDate, setWatchedDate] = useState(() => new Date().toISOString().slice(0, 10));
   // Underdog B-Sides: least popular matches first, dead entries hidden.
   const [underdog, setUnderdog] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultsId = useId();
 
   const createStep = useCreateStep(runId ?? "");
 
@@ -54,9 +59,12 @@ export default function MovieSearchAutocomplete({
       ),
     enabled: debouncedQuery.trim().length > 1 && !picked,
   });
+  const results = data?.results ?? [];
+  const resultsOpen = debouncedQuery.trim().length > 1 && !picked && !resultsDismissed;
 
   async function handlePick(movie: MovieSummary) {
     setQuery("");
+    setResultsDismissed(true);
     setPicked(movie);
     onSelect?.(movie);
 
@@ -248,8 +256,37 @@ export default function MovieSearchAutocomplete({
       <div className="flex items-center gap-2 rounded-md border border-app-border bg-app-bg px-3 py-2">
         <Search className="h-4 w-4 text-zinc-500" />
         <input
+          ref={inputRef}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={resultsOpen}
+          aria-controls={resultsOpen ? resultsId : undefined}
+          aria-activedescendant={
+            activeResultIndex >= 0 ? `${resultsId}-option-${activeResultIndex}` : undefined
+          }
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setResultsDismissed(false);
+            setActiveResultIndex(-1);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && resultsOpen) {
+              event.preventDefault();
+              event.stopPropagation();
+              setResultsDismissed(true);
+            } else if (event.key === "ArrowDown" && resultsOpen && results.length > 0) {
+              event.preventDefault();
+              setActiveResultIndex((index) => (index + 1) % results.length);
+            } else if (event.key === "ArrowUp" && resultsOpen && results.length > 0) {
+              event.preventDefault();
+              setActiveResultIndex((index) => (index <= 0 ? results.length - 1 : index - 1));
+            } else if (event.key === "Enter" && resultsOpen && activeResultIndex >= 0) {
+              event.preventDefault();
+              const activeMovie = results[activeResultIndex];
+              if (activeMovie) void handlePick(activeMovie);
+            }
+          }}
           placeholder={placeholder}
           className="w-full bg-transparent text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
         />
@@ -270,17 +307,36 @@ export default function MovieSearchAutocomplete({
         </button>
       </div>
 
-      {debouncedQuery.trim().length > 1 && (
-        <div className="absolute z-20 mt-1 max-h-80 w-full overflow-y-auto rounded-md border border-app-border bg-app-surface shadow-xl">
-          {data?.results.length === 0 && (
+      <Popover
+        anchorRef={inputRef}
+        open={resultsOpen}
+        onClose={() => setResultsDismissed(true)}
+        label="Movie search results"
+        placement="bottom"
+      >
+        <div
+          id={resultsId}
+          role="listbox"
+          aria-label="Movie search results"
+          aria-busy={isFetching}
+          className="max-h-80 overflow-y-auto"
+        >
+          {results.length === 0 && !isFetching && (
             <p className="px-3 py-3 text-sm text-zinc-500">No films found.</p>
           )}
-          {data?.results.map((movie) => (
+          {results.map((movie, index) => (
             <button
               key={movie.tmdb_id}
+              id={`${resultsId}-option-${index}`}
               type="button"
-              onClick={() => handlePick(movie)}
-              className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-app-surface-hover"
+              role="option"
+              tabIndex={-1}
+              aria-selected={index === activeResultIndex}
+              onMouseEnter={() => setActiveResultIndex(index)}
+              onClick={() => void handlePick(movie)}
+              className={`flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-app-surface-hover ${
+                index === activeResultIndex ? "bg-app-surface-hover" : ""
+              }`}
             >
               <MoviePoster path={movie.poster_path} title={movie.title} className="w-9" />
               <span className="min-w-0 truncate text-sm text-zinc-200">
@@ -292,7 +348,7 @@ export default function MovieSearchAutocomplete({
             </button>
           ))}
         </div>
-      )}
+      </Popover>
     </div>
   );
 }

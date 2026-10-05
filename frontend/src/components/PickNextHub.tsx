@@ -49,6 +49,7 @@ import {
   useCreateStep,
   useOfferFork,
   useDiscoverCandidates,
+  useJellyfinLookup,
   useMovieDetail,
   useMovieTropes,
   useRunConstraint,
@@ -62,7 +63,6 @@ import type {
   DiscoveryCandidate,
   DiscoveryConnection,
   GenreOut,
-  JellyfinItemSummary,
   MovieRatings,
   MovieSummary,
   RulesConfig,
@@ -369,14 +369,7 @@ function DiscoveryGrid({
     (candidates?.length ?? 0) === 0;
 
   const tmdbIds = candidates?.map((c) => c.movie_id) ?? [];
-  const { data: jellyfinStatus } = useQuery({
-    queryKey: ["jellyfin", "lookup", tmdbIds],
-    queryFn: () =>
-      api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
-        tmdb_ids: tmdbIds,
-      }),
-    enabled: tmdbIds.length > 0,
-  });
+  const { data: jellyfinStatus } = useJellyfinLookup(tmdbIds);
   const { data: ratingsMap } = useQuery({
     queryKey: ["movies", "ratings", "bulk", tmdbIds],
     queryFn: () =>
@@ -1324,13 +1317,7 @@ function MovieScreenView({
     queryKey: ["movies", screen.movieId, "cast", 20],
     queryFn: () => api.get<CastMember[]>(`/movies/${screen.movieId}/cast?limit=20`),
   });
-  const { data: jellyfinStatus } = useQuery({
-    queryKey: ["jellyfin", "lookup", [screen.movieId]],
-    queryFn: () =>
-      api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
-        tmdb_ids: [screen.movieId],
-      }),
-  });
+  const { data: jellyfinStatus } = useJellyfinLookup([screen.movieId]);
   const { data: badgesMap } = useCanonBadgesBulk([screen.movieId]);
 
   const createStep = useCreateStep(runId);
@@ -1627,14 +1614,7 @@ function ActorScreenView({
     queryFn: () => api.get<MovieSummary[]>(`/people/${screen.actorId}/credits`),
   });
   const tmdbIds = credits?.map((m) => m.tmdb_id) ?? [];
-  const { data: jellyfinStatus } = useQuery({
-    queryKey: ["jellyfin", "lookup", tmdbIds],
-    queryFn: () =>
-      api.post<Record<string, JellyfinItemSummary>>("/integrations/jellyfin/lookup", {
-        tmdb_ids: tmdbIds,
-      }),
-    enabled: tmdbIds.length > 0,
-  });
+  const { data: jellyfinStatus } = useJellyfinLookup(tmdbIds);
 
   const sorted = useMemo(
     () => [...(credits ?? [])].sort((a, b) => (b.release_year ?? 0) - (a.release_year ?? 0)),
@@ -1711,4 +1691,3 @@ function ActorScreenView({
     </div>
   );
 }
-

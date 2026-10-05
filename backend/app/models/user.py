@@ -18,3 +18,6 @@ class User(SQLModel, table=True):
     # first authenticated request after the window lapses (there is no background job).
     veto_tokens: int = Field(default=1)
     last_veto_reset_at: datetime = Field(default_factory=utcnow)
+    letterboxd_username: str | None = None
+    watchlist_synced_at: datetime | None = None
+    watchlist_sync_error: str | None = None

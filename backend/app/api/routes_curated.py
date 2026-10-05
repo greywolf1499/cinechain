@@ -12,6 +12,7 @@ import functools
 import json
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
@@ -351,6 +352,45 @@ class WatchlistSyncRequest(BaseModel):
     letterboxd_username: str
 
 
+class WatchlistStatus(BaseModel):
+    letterboxd_username: str | None
+    synced_at: datetime | None
+    total_items: int
+    last_error: str | None = None
+
+
+@router.get("/watchlist/status", response_model=WatchlistStatus)
+def get_watchlist_status(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> WatchlistStatus:
+    """Returns the current user's last successful watchlist sync metadata."""
+    total_items, aggregate_synced_at = session.exec(
+        select(
+            func.count(LetterboxdWatchlist.id),
+            func.max(LetterboxdWatchlist.synced_at),
+        ).where(LetterboxdWatchlist.user_id == current_user.id)
+    ).one()
+    username = current_user.letterboxd_username
+    synced_at = current_user.watchlist_synced_at
+    if total_items:
+        aggregate_username = session.exec(
+            select(LetterboxdWatchlist.letterboxd_username)
+            .where(LetterboxdWatchlist.user_id == current_user.id)
+            .order_by(col(LetterboxdWatchlist.synced_at).desc())
+            .limit(1)
+        ).first()
+        username = username or aggregate_username
+        synced_at = synced_at or aggregate_synced_at
+
+    return WatchlistStatus(
+        letterboxd_username=username,
+        synced_at=synced_at,
+        total_items=total_items,
+        last_error=current_user.watchlist_sync_error,
+    )
+
+
 @router.post("/watchlist/sync", status_code=status.HTTP_202_ACCEPTED, response_model=TaskOut)
 def sync_watchlist(
     payload: WatchlistSyncRequest,
@@ -370,8 +410,24 @@ def sync_watchlist(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
-        result = letterboxd.scrape_letterboxd_watchlist(
-            username, tmdb_api_key=tmdb_api_key, progress_callback=ctx.progress)
+        try:
+            result = letterboxd.scrape_letterboxd_watchlist(
+                username, tmdb_api_key=tmdb_api_key, progress_callback=ctx.progress)
+        except letterboxd.WatchlistNotFound as exc:
+            try:
+                with ctx.session() as db:
+                    user = db.get(User, user_id)
+                    if user is None:
+                        raise RuntimeError("Watchlist owner no longer exists.")
+                    user.watchlist_sync_error = str(exc)
+                    db.add(user)
+                    db.commit()
+            except Exception as persist_error:
+                logger.exception("Could not persist watchlist sync warning for %s", username)
+                raise RuntimeError(
+                    f"Failed to save watchlist sync warning: {persist_error.__class__.__name__}"
+                ) from persist_error
+            raise
         try:
             with ctx.session() as db:
                 matched = _persist_watchlist(db, user_id, username, result["films"])
@@ -418,6 +474,13 @@ def _persist_watchlist(
             LetterboxdWatchlist.user_id == user_id)
     ).all():
         session.delete(old)
+    user = session.get(User, user_id)
+    if user is None:
+        raise RuntimeError("Watchlist owner no longer exists.")
+    user.letterboxd_username = username
+    user.watchlist_synced_at = utcnow()
+    user.watchlist_sync_error = None
+    session.add(user)
     session.add_all(rows)
     session.commit()
     return len(rows)

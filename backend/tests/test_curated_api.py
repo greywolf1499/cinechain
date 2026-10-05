@@ -183,6 +183,68 @@ def test_watchlist_sync_persists_for_current_user(client, monkeypatch):
     assert task["progress_data"]["result"] == {"matched": 1, "total_films": 1}
 
 
+def test_watchlist_status_is_persistent_isolated_and_keeps_last_success_on_failure(
+    client, monkeypatch
+):
+    _register_and_login(client, "alice")
+    never_synced = client.get("/api/curated/watchlist/status")
+    assert never_synced.status_code == 200
+    assert never_synced.json() == {
+        "letterboxd_username": None,
+        "synced_at": None,
+        "total_items": 0,
+        "last_error": None,
+    }
+
+    monkeypatch.setattr(
+        letterboxd,
+        "scrape_letterboxd_watchlist",
+        _fake_scrape([{"title": "Amelie", "year": 2001, "tmdb_id": 194}]),
+    )
+    _run_task(client, "/api/curated/watchlist/sync", {"letterboxd_username": "alice_lb"})
+    successful = client.get("/api/curated/watchlist/status").json()
+    assert successful["letterboxd_username"] == "alice_lb"
+    assert successful["synced_at"] is not None
+    assert successful["total_items"] == 1
+    assert successful["last_error"] is None
+
+    monkeypatch.setattr(
+        letterboxd,
+        "scrape_letterboxd_watchlist",
+        _fake_scrape([]),
+    )
+    _run_task(client, "/api/curated/watchlist/sync", {"letterboxd_username": "alice_empty"})
+    empty = client.get("/api/curated/watchlist/status").json()
+    assert empty["letterboxd_username"] == "alice_empty"
+    assert empty["synced_at"] is not None
+    assert empty["total_items"] == 0
+
+    def not_found(*args, **kwargs):
+        raise letterboxd.WatchlistNotFound("alice_missing")
+
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_watchlist", not_found)
+    _run_task(
+        client,
+        "/api/curated/watchlist/sync",
+        {"letterboxd_username": "alice_missing"},
+        expected="failed",
+    )
+    after_failure = client.get("/api/curated/watchlist/status").json()
+    assert after_failure["letterboxd_username"] == empty["letterboxd_username"]
+    assert after_failure["synced_at"] == empty["synced_at"]
+    assert after_failure["total_items"] == empty["total_items"]
+    assert "not found" in after_failure["last_error"]
+
+    _register_and_login(client, "bob")
+    bob_status = client.get("/api/curated/watchlist/status").json()
+    assert bob_status["letterboxd_username"] is None
+    assert bob_status["total_items"] == 0
+
+    _register_and_login(client, "alice")
+    alice_status = client.get("/api/curated/watchlist/status").json()
+    assert alice_status == after_failure
+
+
 # ---------------------------------------------------------
 # 3-tier architecture: curator accounts -> published lists -> enabled canons
 # ---------------------------------------------------------

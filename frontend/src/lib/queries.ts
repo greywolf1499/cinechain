@@ -4,6 +4,7 @@ import type {
 	AcquisitionStatus,
 	CacheStats,
 	CanonBadge,
+	IntegrationStatus,
 	AccountKind,
 	AccountSort,
 	CuratedAccount,
@@ -41,6 +42,7 @@ import type {
 	StepStatus,
 	UserSummary,
 	JellyfinItemSummary,
+	WatchlistStatus,
 } from "../types/api";
 
 export const queryKeys = {
@@ -50,6 +52,8 @@ export const queryKeys = {
 	runStats: (id: string) => ["runs", id, "stats"] as const,
 	cacheStats: ["system", "cache-stats"] as const,
 	curatedLists: ["curated", "lists"] as const,
+	watchlistStatus: ["curated", "watchlist", "status"] as const,
+	integrationsStatus: ["integrations", "status"] as const,
 	curatedAccounts: ["curated", "accounts"] as const,
 	discover: (runId: string, frontierMovieId: number, mode: "or" | "and") =>
 		["runs", runId, "discover", frontierMovieId, mode] as const,
@@ -149,6 +153,22 @@ export function useCuratedLists() {
 	return useQuery({
 		queryKey: queryKeys.curatedLists,
 		queryFn: () => api.get<CuratedListSummary[]>("/curated/lists"),
+	});
+}
+
+export function useWatchlistStatus() {
+	return useQuery({
+		queryKey: queryKeys.watchlistStatus,
+		queryFn: () => api.get<WatchlistStatus>("/curated/watchlist/status"),
+		staleTime: 30_000,
+	});
+}
+
+export function useIntegrationStatus() {
+	return useQuery({
+		queryKey: queryKeys.integrationsStatus,
+		queryFn: () => api.get<IntegrationStatus>("/integrations/status"),
+		staleTime: 30_000,
 	});
 }
 

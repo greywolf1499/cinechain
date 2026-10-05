@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Compass, Loader2, Search, X, Zap } from "lucide-react";
@@ -238,11 +238,21 @@ export default function MarathonRouterPage() {
             emptyMessage={
               source === "watchlist"
                 ? watchlistFilms.length === 0
-                  ? "No synced watchlist yet - sync your Letterboxd watchlist from Settings, or use Search Films."
+                  ? "No synced watchlist yet, or no films match your filter."
                   : "No watchlist film matches that filter."
                 : debouncedFilter
                   ? "No films found."
                   : "Type a title to search."
+            }
+            emptyAction={
+              source === "watchlist" && watchlistFilms.length === 0 ? (
+                <Link
+                  to="/settings/integrations#watchlist"
+                  className="font-medium text-accent hover:underline"
+                >
+                  Sync your watchlist
+                </Link>
+              ) : undefined
             }
           />
         </section>
@@ -320,12 +330,14 @@ function FilmPicker({
   onToggle,
   loading,
   emptyMessage,
+  emptyAction,
 }: {
   films: PickedFilm[];
   pickedIds: Set<number>;
   onToggle: (film: PickedFilm) => void;
   loading: boolean;
   emptyMessage: string;
+  emptyAction?: ReactNode;
 }) {
   if (loading) {
     return (
@@ -334,7 +346,14 @@ function FilmPicker({
       </p>
     );
   }
-  if (films.length === 0) return <p className="py-6 text-center text-xs text-zinc-500">{emptyMessage}</p>;
+  if (films.length === 0) {
+    return (
+      <div className="py-6 text-center text-xs text-zinc-500">
+        <p>{emptyMessage}</p>
+        {emptyAction && <div className="mt-2">{emptyAction}</div>}
+      </div>
+    );
+  }
   return (
     <ul className="grid max-h-96 grid-cols-3 gap-2 overflow-y-auto pr-1 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6">
       {films.map((film) => {

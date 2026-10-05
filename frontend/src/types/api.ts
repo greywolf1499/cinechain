@@ -20,6 +20,13 @@ export interface UserSummary {
 	display_name: string;
 }
 
+export interface WatchlistStatus {
+	letterboxd_username: string | null;
+	synced_at: string | null;
+	total_items: number;
+	last_error: string | null;
+}
+
 // --- runs (schemas/runs.py) ---
 
 export type RunStatus = "active" | "completed" | "forfeited" | "failed";

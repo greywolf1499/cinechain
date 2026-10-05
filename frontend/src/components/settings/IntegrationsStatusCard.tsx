@@ -4,11 +4,11 @@ import { CheckCircle2, HelpCircle, Loader2, Search, XCircle } from "lucide-react
 import Toast, { type ToastState } from "../Toast";
 import { SettingsCard, inputClass } from "./shared";
 import { ApiError, api } from "../../lib/api";
+import { useIntegrationStatus } from "../../lib/queries";
 import { useAuthStore } from "../../store/authStore";
 import type {
   ConnectivityTestResult,
   IntegrationConfig,
-  IntegrationStatus,
   JellyfinTestLookupResult,
   RequestClientStatus,
 } from "../../types/api";
@@ -16,10 +16,7 @@ import type {
 /** Jellyfin/Radarr/Seerr reachability rows, plus (admins) the TMDB/OMDb/Jellyfin credential editor. */
 export default function IntegrationsStatusCard() {
   const currentUser = useAuthStore((s) => s.user);
-  const { data, isLoading } = useQuery({
-    queryKey: ["integrations", "status"],
-    queryFn: () => api.get<IntegrationStatus>("/integrations/status"),
-  });
+  const { data, isLoading } = useIntegrationStatus();
 
   return (
     <SettingsCard title="Connections">

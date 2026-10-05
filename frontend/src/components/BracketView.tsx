@@ -1,13 +1,21 @@
 import { useState } from "react";
-import { Loader2, Trophy, Vote } from "lucide-react";
+import { Loader2, Play, Trophy, Vote } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
 import ExpandableText from "./ui/ExpandableText";
+import AcquisitionControl from "./AcquisitionControl";
+import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { cn } from "../lib/cn";
 import { ApiError } from "../lib/api";
 import { BRACKET_ROUNDS, isActiveMatchup } from "../lib/bracket";
-import { useAdvanceBracket, useBracketVote, useLlmStatus, useMatchupCommentary } from "../lib/queries";
-import type { Bracket, BracketFilm, BracketMatchup, RunDetail } from "../types/api";
+import {
+  useAdvanceBracket,
+  useBracketVote,
+  useJellyfinLookup,
+  useLlmStatus,
+  useMatchupCommentary,
+} from "../lib/queries";
+import type { Bracket, BracketFilm, BracketMatchup, JellyfinItemSummary, RunDetail } from "../types/api";
 
 type Films = Record<string, BracketFilm>;
 
@@ -27,6 +35,8 @@ export default function BracketView({
 }) {
   const bracket = run.rules_config.bracket as Bracket;
   const films = (run.rules_config.bracket_films ?? {}) as Films;
+  const tmdbIds = Object.keys(films).map(Number);
+  const { data: server } = useJellyfinLookup(tmdbIds);
   const locked = run.status !== "active";
   const [openId, setOpenId] = useState<string | null>(null);
   const matchups = BRACKET_ROUNDS.flatMap((round) => bracket[round.key]);
@@ -34,6 +44,13 @@ export default function BracketView({
 
   return (
     <div className="flex flex-col gap-3">
+      {bracket.champion !== null && (
+        <ChampionBanner
+          movieId={bracket.champion}
+          film={filmOf(films, bracket.champion)}
+          availability={server?.[String(bracket.champion)]}
+        />
+      )}
       <div
         aria-label="Tournament bracket"
         className="flex min-h-[34rem] items-stretch gap-4 overflow-x-auto rounded-xl border border-app-border bg-app-surface/40 p-4"
@@ -49,6 +66,7 @@ export default function BracketView({
                   key={matchup.id}
                   matchup={matchup}
                   films={films}
+                  server={server}
                   interactive={!locked && isActiveMatchup(matchup)}
                   onOpen={() => setOpenId(matchup.id)}
                 />
@@ -56,7 +74,7 @@ export default function BracketView({
             </div>
           </section>
         ))}
-        <Podium champion={bracket.champion} films={films} />
+        <Podium champion={bracket.champion} films={films} server={server} />
       </div>
 
       {open && (
@@ -64,6 +82,7 @@ export default function BracketView({
           runId={run.id}
           matchup={open}
           films={films}
+          server={server}
           users={users}
           participantIds={run.participants.map((p) => p.user_id)}
           currentUserId={currentUserId}
@@ -75,14 +94,72 @@ export default function BracketView({
   );
 }
 
+function ChampionBanner({
+  movieId,
+  film,
+  availability,
+}: {
+  movieId: number;
+  film: BracketFilm | null;
+  availability: JellyfinItemSummary | undefined;
+}) {
+  if (!film) return null;
+
+  return (
+    <section
+      aria-label="Tournament champion"
+      className="flex flex-col gap-4 rounded-xl border border-amber-300/60 bg-amber-400/10 p-4 shadow-[0_0_30px_-8px_rgba(251,191,36,0.35)] sm:flex-row"
+    >
+      <MoviePoster path={film.poster_path} title={film.title} className="mx-auto w-28 shrink-0 sm:mx-0" />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <p className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-amber-300">
+          <Trophy className="h-4 w-4" /> March Madness Champion
+          <OnServerBadge onServer={availability?.on_server} />
+        </p>
+        <h3 className="text-lg font-bold text-amber-100">
+          {film.title}
+          {film.release_year ? <span className="ml-2 text-sm font-normal text-amber-200/70">({film.release_year})</span> : null}
+        </h3>
+        <ExpandableText
+          text={film.overview}
+          fallback="No logline available."
+          lines={3}
+          className="text-sm leading-relaxed text-zinc-300"
+        />
+        <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
+          {availability?.on_server && availability.play_url ? (
+            <a
+              href={availability.play_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex min-h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-500"
+            >
+              <Play className="h-3.5 w-3.5 fill-current" />
+              Play on Jellyfin
+            </a>
+          ) : (
+            <AcquisitionControl
+              tmdbId={movieId}
+              title={film.title}
+              onServer={availability?.on_server}
+            />
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function MatchupBox({
   matchup,
   films,
+  server,
   interactive,
   onOpen,
 }: {
   matchup: BracketMatchup;
   films: Films;
+  server: Record<string, JellyfinItemSummary> | undefined;
   interactive: boolean;
   onOpen: () => void;
 }) {
@@ -116,6 +193,13 @@ function MatchupBox({
             )}
           >
             <span className="min-w-0 flex-1 truncate">{film ? film.title : "TBD"}</span>
+            {id !== null && server?.[String(id)]?.on_server === true && (
+              <span
+                title="On Jellyfin"
+                aria-label="On Jellyfin"
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400"
+              />
+            )}
             {film?.release_year && <span className="shrink-0 text-[10px] text-zinc-500">{film.release_year}</span>}
             {won && <span aria-hidden>✓</span>}
           </span>
@@ -130,7 +214,15 @@ function MatchupBox({
   );
 }
 
-function Podium({ champion, films }: { champion: number | null; films: Films }) {
+function Podium({
+  champion,
+  films,
+  server,
+}: {
+  champion: number | null;
+  films: Films;
+  server: Record<string, JellyfinItemSummary> | undefined;
+}) {
   const film = filmOf(films, champion);
   return (
     <section aria-label="Champion podium" className="flex w-44 shrink-0 flex-col items-center justify-center gap-2">
@@ -149,6 +241,7 @@ function Podium({ champion, films }: { champion: number | null; films: Films }) 
             <MoviePoster path={film.poster_path} title={film.title} className="w-24" />
             <p className="text-sm font-semibold text-amber-100">{film.title}</p>
             <p className="text-[11px] text-amber-200/70">{film.release_year ?? ""}</p>
+            <OnServerBadge onServer={champion === null ? undefined : server?.[String(champion)]?.on_server} />
           </>
         ) : (
           <p className="text-xs text-zinc-600">To be crowned</p>
@@ -163,6 +256,7 @@ function MatchupCard({
   runId,
   matchup,
   films,
+  server,
   users,
   participantIds,
   currentUserId,
@@ -172,6 +266,7 @@ function MatchupCard({
   runId: string;
   matchup: BracketMatchup;
   films: Films;
+  server: Record<string, JellyfinItemSummary> | undefined;
   users: { id: string; display_name: string }[] | undefined;
   participantIds: string[];
   currentUserId: string | undefined;
@@ -207,6 +302,7 @@ function MatchupCard({
         {sides.map((id, index) => {
           if (id === null) return null;
           const film = filmOf(films, id) as BracketFilm;
+          const availability = server?.[String(id)];
           const votes = Object.entries(matchup.votes).filter(([, movieId]) => movieId === id);
           const myVote = currentUserId ? matchup.votes[currentUserId] === id : false;
           return (
@@ -243,7 +339,12 @@ function MatchupCard({
                   )}
                 </div>
               )}
-              <article className="flex flex-col gap-3 rounded-xl border border-app-border bg-app-bg p-3">
+              <article
+                className={cn(
+                  "flex flex-col gap-3 rounded-xl border p-3",
+                  onServerCardClass(availability?.on_server),
+                )}
+              >
                 <MoviePoster path={film.poster_path} title={film.title} className="mx-auto w-36" />
                 <div className="text-center">
                   <h4 className="text-sm font-semibold text-zinc-100">{film.title}</h4>
@@ -261,6 +362,10 @@ function MatchupCard({
                   lead={film.tagline ? <em className="text-zinc-300">&ldquo;{film.tagline}&rdquo;</em> : undefined}
                   className="text-xs leading-relaxed text-zinc-400"
                 />
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <OnServerBadge onServer={availability?.on_server} />
+                  <AcquisitionControl tmdbId={id} title={film.title} onServer={availability?.on_server} />
+                </div>
                 {partners && (
                   <p className="text-center text-[11px] text-zinc-500" aria-label="Votes">
                     🗳️ {votes.length} vote{votes.length === 1 ? "" : "s"}

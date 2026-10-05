@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Loader2 } from "lucide-react";
 import RequestOptionsModal from "./RequestOptionsModal";
 import Toast, { type ToastState } from "./Toast";
+import Popover from "./ui/Popover";
 import { ApiError, api } from "../lib/api";
 import { acquisitionKey, useAcquisitionStatus, useRequestConfig } from "../lib/queries";
 import type { AcquisitionStatus, RequestResult } from "../types/api";
@@ -28,16 +29,8 @@ export default function AcquisitionControl({
   const [menuOpen, setMenuOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    function onPointerDown(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
-    }
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [menuOpen]);
+  const menuId = useId();
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   function markRequested(result: RequestResult) {
     queryClient.setQueryData<AcquisitionStatus>(acquisitionKey(tmdbId), {
@@ -90,7 +83,7 @@ export default function AcquisitionControl({
 
   return (
     <>
-      <div ref={menuRef} className="relative inline-flex">
+      <div className="inline-flex">
         <button
           type="button"
           disabled={quickRequest.isPending}
@@ -105,27 +98,37 @@ export default function AcquisitionControl({
         {!promptMode && (
           <>
             <button
+              ref={menuButtonRef}
               type="button"
               aria-label="Request options"
+              aria-haspopup="dialog"
+              aria-expanded={menuOpen}
+              aria-controls={menuOpen ? menuId : undefined}
               onClick={() => setMenuOpen((v) => !v)}
               className="inline-flex items-center rounded-r-md border border-l-0 border-app-border px-1.5 text-zinc-400 transition-colors hover:bg-app-surface-hover"
             >
               <ChevronDown className="h-3 w-3" />
             </button>
-            {menuOpen && (
-              <div className="absolute right-0 top-full z-20 mt-1 min-w-40 rounded-md border border-app-border bg-app-surface py-1 shadow-xl shadow-black/50">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setModalOpen(true);
-                  }}
-                  className="block w-full px-3 py-1.5 text-left text-xs text-zinc-200 hover:bg-app-surface-hover"
-                >
-                  Custom Options...
-                </button>
-              </div>
-            )}
+            <Popover
+              anchorRef={menuButtonRef}
+              open={menuOpen}
+              onClose={() => setMenuOpen(false)}
+              label="Request options"
+              panelId={menuId}
+              matchAnchorWidth={false}
+              className="min-w-40 p-1"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setModalOpen(true);
+                }}
+                className="block w-full rounded-sm px-3 py-1.5 text-left text-xs text-zinc-200 hover:bg-app-surface-hover"
+              >
+                Custom Options...
+              </button>
+            </Popover>
           </>
         )}
       </div>

@@ -269,13 +269,23 @@ export default function BingoPage() {
                   From your watchlist ({selectedFilms.length})
                 </h3>
                 {selectedFilms.length === 0 ? (
-                  <p className="text-xs text-zinc-500">
-                    {films.length === 0
-                      ? "Nothing on your watchlist yet."
-                      : pending > 0
-                        ? "Nothing matches yet - still reading film details."
-                        : "No watchlist film fits this square - time to find one!"}
-                  </p>
+                  <div className="text-xs text-zinc-500">
+                    <p>
+                      {films.length === 0
+                        ? "Nothing on your watchlist yet."
+                        : pending > 0
+                          ? "Nothing matches yet - still reading film details."
+                          : "No watchlist film fits this square - time to find one!"}
+                    </p>
+                    {films.length === 0 && (
+                      <Link
+                        to="/settings/integrations#watchlist"
+                        className="mt-2 inline-block font-medium text-accent hover:underline"
+                      >
+                        Sync your watchlist
+                      </Link>
+                    )}
+                  </div>
                 ) : (
                   <ul className="flex max-h-96 flex-col gap-2 overflow-y-auto">
                     {selectedFilms.map((film) => (
@@ -306,4 +316,3 @@ export default function BingoPage() {
     </div>
   );
 }
-

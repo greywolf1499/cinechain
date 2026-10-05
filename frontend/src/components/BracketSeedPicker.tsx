@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Dices, Loader2, Search, X } from "lucide-react";
 import MoviePoster from "./MoviePoster";
@@ -64,6 +65,15 @@ export default function BracketSeedPicker({
           🎲 Seed Random 16 from Watchlist
         </button>
       </div>
+      <p className="text-[11px] text-zinc-500">
+        Need a watchlist?{" "}
+        <Link
+          to="/settings/integrations#watchlist"
+          className="font-medium text-accent hover:underline"
+        >
+          Sync it from Integrations
+        </Link>
+      </p>
       {error && <p className="text-[11px] text-red-300">{error}</p>}
 
       {!full && (

@@ -9,6 +9,7 @@ import SolverSettingsCard from "../../components/settings/SolverSettingsCard";
 import TasksPanel from "../../components/settings/TasksPanel";
 import ThemeCard from "../../components/settings/ThemeCard";
 import UsersCard from "../../components/settings/UsersCard";
+import WatchlistSyncCard from "../../components/settings/WatchlistSyncCard";
 import { useAuthStore } from "../../store/authStore";
 
 function Stack({ children }: { children: ReactNode }) {
@@ -51,6 +52,7 @@ export function IntegrationsSettings() {
   const isAdmin = !!useAuthStore((s) => s.user?.is_admin);
   return (
     <Stack>
+      <WatchlistSyncCard />
       <IntegrationsStatusCard />
       {isAdmin && <RadarrSettingsCard />}
       {isAdmin && <SeerrSettingsCard />}

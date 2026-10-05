@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import Toast, { type ToastState } from "./Toast";
 import { ApiError, api } from "../lib/api";
+import { useIntegrationStatus } from "../lib/queries";
 import type {
   ConnectivityTestResult,
   IntegrationConfig,
@@ -97,6 +98,7 @@ function useSaveConfig(onToast: (toast: ToastState) => void, successMessage: str
 
 export function RadarrSettingsCard() {
   const { data: config } = useIntegrationConfig();
+  const { data: integrationStatus, isError: integrationStatusError } = useIntegrationStatus();
   const [toast, setToast] = useState<ToastState | null>(null);
   const [url, setUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -114,7 +116,10 @@ export function RadarrSettingsCard() {
   const options = useQuery({
     queryKey: ["integrations", "radarr", "profiles"],
     queryFn: () => api.get<RadarrOptions>("/integrations/radarr/profiles"),
-    enabled: !!config?.radarr_configured,
+    enabled:
+      !!config?.radarr_configured &&
+      integrationStatus?.radarr.enabled === true &&
+      integrationStatus.radarr.reachable === true,
     retry: false,
   });
 
@@ -197,6 +202,16 @@ export function RadarrSettingsCard() {
           </Field>
         </div>
       )}
+      {config?.radarr_configured && integrationStatus && !integrationStatus.radarr.reachable && (
+        <p role="status" className="text-xs text-amber-400">
+          Unreachable: check URL/API key.
+        </p>
+      )}
+      {config?.radarr_configured && integrationStatusError && (
+        <p role="alert" className="text-xs text-amber-400">
+          Could not verify Radarr reachability; options were not requested.
+        </p>
+      )}
       {options.error && (
         <p className="text-xs text-amber-400">Could not load Radarr options: {(options.error as Error).message}</p>
       )}
@@ -218,6 +233,7 @@ export function RadarrSettingsCard() {
 
 export function SeerrSettingsCard() {
   const { data: config } = useIntegrationConfig();
+  const { data: integrationStatus, isError: integrationStatusError } = useIntegrationStatus();
   const [toast, setToast] = useState<ToastState | null>(null);
   const [url, setUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -235,7 +251,10 @@ export function SeerrSettingsCard() {
   const options = useQuery({
     queryKey: ["integrations", "seerr", "options"],
     queryFn: () => api.get<SeerrOptions>("/integrations/seerr/options"),
-    enabled: !!config?.seerr_configured,
+    enabled:
+      !!config?.seerr_configured &&
+      integrationStatus?.seerr.enabled === true &&
+      integrationStatus.seerr.reachable === true,
     retry: false,
   });
 
@@ -327,6 +346,16 @@ export function SeerrSettingsCard() {
             Detected folders: <span className="text-zinc-300">{folders.join(", ") || "none"}</span>
           </p>
         </div>
+      )}
+      {config?.seerr_configured && integrationStatus && !integrationStatus.seerr.reachable && (
+        <p role="status" className="text-xs text-amber-400">
+          Unreachable: check URL/API key.
+        </p>
+      )}
+      {config?.seerr_configured && integrationStatusError && (
+        <p role="alert" className="text-xs text-amber-400">
+          Could not verify Seerr reachability; options were not requested.
+        </p>
       )}
       {options.error && (
         <p className="text-xs text-amber-400">Could not load Seerr options: {(options.error as Error).message}</p>

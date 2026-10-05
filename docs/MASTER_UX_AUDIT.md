@@ -513,3 +513,75 @@ def get_watchlist_status(session=Depends(get_session), current_user=Depends(get_
 | 2 Text/UI | 0 | 3 | 2 | 1 | `CuratedListCard`, `BridgePathView` (❌); `PitchButton` (⚠️ clipping, not clamp) |
 | 3 Engines | 1 | 2 | 3 | 1 | MitM collision BFS (❌); Rabbit Hole "out of lives = failed" and Tier-5 difficulty (⚠️); Bounty Board conflict (⚠️) |
 | 4 Integrations | 0 | 2 | 2 | 2 | none; all confirmed, plus 4 new |
+
+---
+
+## Phase 5: Dynamic Live-Flow Audit (runtime verification)
+
+**Date:** 2026-10-05 · **Build:** `dd54626`
+**Stack:** backend `uvicorn app.main:app --port 8787` on a **scratch** `CONFIG_DIR` (fresh Alembic DB, so the user's real `config/cinechain.db` was untouched) with the **live TMDB key**; frontend Vite dev server on 5173 (proxy `/api`). The browser was driven via Playwright at 1920×1080 (living room), 1280×720 and 390×844 (phone).
+**Accounts:** `Ana` (admin, created through the first-run flow), `Ben` (non-admin, registered from Settings → General).
+**Not exercised:** LLM features (the model is off, so `PitchButton` doesn't render and P2-03 stays a static finding). Jellyfin/Radarr/Seerr were *configured but unreachable* from this host. No Request/Add actions were attempted, so the user's homelab was not touched. OMDb is not configured.
+
+### 5.1 Flows executed
+
+| # | Flow | Result |
+|---|---|---|
+| F1 | First-run admin creation → `/runs` empty state | ✅ Works. The empty state has no CTA and cast-only copy (P1-04 confirmed). |
+| F2 | Settings → General → register Ben | ✅ Works. |
+| F3 | New Run → Tug of War (Era, lead 4) → seed *The Godfather* via search → add Ben → Create | ⚠️ Works, with D-01, D-02, D-03, D-11 below. |
+| F4 | Tug: Pick Next → 70s filter → log *The Godfather Part II* (UI), then *Mean Streets*, *Alice Doesn't Live Here Anymore* (same `/steps` endpoint) as **Ana only** | 🔴 **"Tug of War won by Ana, 4-0!"** after 3 picks by one player; Ben never acted (P3-01/P3-02 reproduced). |
+| F5 | New Run → Meet in the Middle (*Heat* / *Spirited Away*) → Extend Partner A (UI) → log *Ronin* | ⚠️ Works, with D-05, D-13, D-14. |
+| F6 | Settings → Integrations → Watchlist sync (invalid name; then a valid but non-existent name; navigate away mid-sync) | ⚠️ D-15, D-16, D-17 (P4-01/P4-02 reproduced). |
+| F7 | Tools hub → Bridge, Daily, Map, Bingo, Router | ✅ All load with no console errors. Router/Bingo empty states depend on the watchlist (D-15). |
+| F8 | Log in as Ben (non-admin) → Settings, Meet in the Middle run | ⚠️ D-14, D-15. |
+| F9 | Viewports 1920×1080 / 1280×720 / 390×844 | ⚠️ D-01 (scroll depth); no horizontal overflow on the header or run page. |
+| F10 | Keyboard/remote: Tab/Shift+Tab/Esc in modals; nested drill-down | ❌ D-03, D-04. |
+
+### 5.2 Runtime findings
+
+| ID | Sev | Area | Finding (measured) | Root cause | Blueprint phase |
+|---|---|---|---|---|---|
+| D-01 | 🟠 | Run creation | Modal body is **2,533 px of content in a 756 px window (3.35×) at 1080p**, **5×** at 720p and **9.7×** on a phone. Selecting *Tug of War* gives no visible response: its config renders **2,171 px down** and nothing scrolls it into view. Create is disabled with no reason given (empty name). | P1-01/P1-02 confirmed at runtime | 1 |
+| D-02 | 🟠 🆕 | Run creation | The seed autocomplete results (`MovieSearchAutocomplete.tsx` L274, `absolute z-20 max-h-80`) render **entirely below the modal's visible area (0 of 320 px visible)**. Typing a seed looks like it does nothing until the user scrolls. | Absolute dropdown inside the `overflow-y-auto` modal body (the same class of bug as P2-03) | 0 + 1 |
+| D-03 | 🟠 🆕 | All modals | **No focus trap:** from the first field, Shift+Tab reaches *New Run* then **Logout** behind the backdrop. No `role="dialog"`/`aria-modal`. Initial focus stays on the trigger. The close ✕ has no accessible name. **No scroll lock:** the page behind scrolled 107 px under *Edit Rules* (`body` overflow `visible`). | `components/Modal.tsx` | 0 |
+| D-04 | 🟠 🆕 | Pick Next / nested modals | Esc (the "Back" key on most TV remotes) on a film's drill-down screen **closes the entire Pick Next modal**, losing the search text, filters and scroll position, instead of popping the in-modal stack (`PickNextHub` already has `stack`/`pop`, L158–L171). Every `Modal` adds its own `window` keydown listener, so one Esc also closes **all stacked modals** (e.g. `RequestOptionsModal` opened from `AcquisitionControl` inside Pick Next/MovieDetail). | `Modal.tsx` Esc handler: global, not top-of-stack, and not overridable | 0 + 3 |
+| D-05 | 🔴 🆕 | Pick Next performance | Godfather frontier: **914 cards, 20,150 DOM nodes, 1,777 `<img>` (only 890 lazy), 114,035 px scroll height**. Heat frontier: **1,332 cards**. Every candidate is rendered at once; only roulette mode paginates (`rouletteShown`, L309/L790). Smart TVs and streaming sticks will stutter. The default sort (Year ↓) also shows obscure brand-new titles first. | No pagination/windowing in `PickNextHub` grid (L789) | 3 |
+| D-06 | 🟠 🆕 | Backend cache | **HTTP 500** on `GET /movies/238/cast` during the first Pick Next: `IntegrityError UNIQUE(cached_movie_cast.movie_id, actor_id)`. A cold-cache race between the cast endpoint and discovery both upserting the same cast. | `cache_repo.upsert_cast` (L350–L395): the actor insert has a SAVEPOINT, the `CachedMovieCast` insert doesn't | 2d |
+| D-07 | 🟠 🆕 | Step data integrity | **2 of 6 logged steps have `movie_origin_country = null`** (*Heat*, the seed from search; *Godfather Part II*, logged from Pick Next), although `/movies/{id}` returns the country. In Tug **geography** mode those films silently score for **nobody**; Passport and the run's Passport card undercount (the Tunnel run shows 🇯🇵 only). The denormalised step is never healed. | `cache_repo.get_movie()` (L496) returns search/credit **stubs** without hydrating; `_step_fields_from_movie` (routes_runs L84) copies their null country | 2d |
+| D-08 | 🔴 | Tug of War | Reproduced: seed pre-scores Team A (**"Momentum +1" before anyone plays**), no turn order, solo win 4-0 in 3 picks. | P3-01/P3-02 | 2a |
+| D-09 | 🟡 🆕 | Tug copy | The meter caption reads "**Era: every film scores for one side.**" and the creation copy reads "Every watched film scores one point". Both are false for 1975–2005 films. | `TugOfWarMeter.tsx` / `lib/tugOfWar.ts`, `RunsPage.tsx` | 2a |
+| D-10 | 🟡 🆕 | Tug UX | No "whose pull is it?" indicator anywhere on the run page. Pick Next shows no team/territory chip, and its default Year↓ sort surfaces the **opponent's** era first for Team A. | Missing UI (pairs with the `tug_effect` work in P3-01) | 2a |
+| D-11 | 🟠 🆕 | Teams | `create_run` builds `participant_ids = {current_user.id, *payload.participant_user_ids}` (routes_runs L408), a **set**, so click order is discarded. With ≥ 3 players "the next participant you add is Team B" (Tug, RT Split) is decided by hash order. The header also lists the owner last ("Ben, Ana"). | Backend set + `joined_at` ties | 1 |
+| D-12 | 🟡 🆕 | Passport synergy | Seed films are stored as `status="watched"`, "Watched on <today>", `logged_by_user_id = creator`, so **every seed enters the creator's Passport** as a film watched today. This is the same shared-device/attribution theme as P3-03, and it doubles the Tug seed bug. | `create_run` seed insert (routes_runs L473–L481) | 2a (seed flag) |
+| D-13 | 🟡 🆕 | Meet in the Middle | With live TMDB, the 8 s quick BFS **timed out both at creation and after a step**: the trench reads "Distance: unknown" and **every page load blocks ~8 s on "Measuring the gap..."** (the query key includes `stepCount`, so a reload refetches). The indicator rarely delivers value on a real cache. | `distance()` budget, no persisted result, no partial "≥ N" depth | 2b |
+| D-14 | 🟠 🆕 | Co-op synergy | In **co-op** Meet in the Middle, Ben gets "*Ana logged Ronin. Not having it?* **Golden Veto (1 left)**", an adversarial tool that deletes a teammate's progress. "Partner A/B" are not bound to accounts, so either user can extend either side. | `GoldenVetoBar` shown for every multi-participant run | 2b |
+| D-15 | 🟠 🆕 | Watchlist access | The watchlist card is **admin-only** (`SettingsPages.tsx` L58 `{isAdmin && <CuratedCanonsCard/>}`) even though `/curated/watchlist/sync` is **per-user**. Ben's nav advertises "Integrations: … **Letterboxd**" and offers no sync. Router, Bingo and March Madness "seed from watchlist" dead-end for every non-admin, and their empty states say "sync … from Settings" with no link. | Watchlist UI coupled to the admin curated-lists card | 4a |
+| D-16 | 🟡 🆕 | Watchlist errors | An invalid username (hyphen; `USERNAME_RE = [A-Za-z0-9_]{1,40}`) returns **400 with a precise message**, but the UI shows a generic "Watchlist sync failed." (`onError` ignores the error). No client-side format hint. | `CuratedCanonsCard.tsx` L64 | 4a |
+| D-17 | 🟠 | Watchlist progress | Navigating away mid-sync: the server task stays `running`, but the card shows idle "Sync Watchlist" + "NEVER SYNCED". When the task later ends `failed / watchlist_not_found`, **the user never sees it**. | P4-01/P4-02 confirmed | 4a |
+| D-18 | ⚪ 🆕 | Integrations | Every visit to Settings → Integrations fires `GET /integrations/radarr/profiles` and `/seerr/options`, which 502 when the services are unreachable (console noise; slow page). | Cards fetch without gating on `status.reachable` | 4c |
+| D-19 | — | Auth | ~~Logout request not awaited.~~ **Withdrawn after code check:** `AppLayout.handleLogout` (L23–L30) awaits `POST /auth/logout` in `try/finally`. The `net::ERR_ABORTED` seen was most likely a race with the global 401 hard redirect (`lib/api.ts` L57–L61) during scripted input. The session ended correctly. | n/a | none |
+| D-20 | 🟡 🆕 | Mode availability | OMDb is not configured, yet RT Split (which scores on OMDb Tomatometer/IMDb) and IMDb-dependent rules are offered with no warning. The Rabbit Hole Tier 5 falls back **entirely** to TMDB `vote_average` (makes P3-06 more urgent). | No capability/integration gating in the mode grid | 1 |
+| D-21 | ⚪ | Run list | No game-mode chip on run cards (P1-06 confirmed). | | 1 |
+
+### 5.3 Corrections to earlier phases
+
+- **P3-05 (Rabbit Hole soft-lock): partially refuted.** `PickNextHub.tsx` L365–L369 already computes `deadEnd` (Rabbit Hole, 0 lives, empty pool) and renders "💀 Dead end … **Accept your fate**" (L768–L781). The remaining gap is that it only appears **inside Pick Next**: `RabbitHoleHud` doesn't show it, and a manual-search-only player never sees it. The blueprint item is reduced to surfacing the existing state in the HUD.
+- **P2-03 (PitchButton clipping)** could not be reproduced live (LLM off). D-02 shows the same bug class happening at runtime in `MovieSearchAutocomplete`, which strengthens the case for the shared `Popover` primitive.
+- **P1-05 (team order)** is not just a UI problem: D-11 shows the backend discards the order too.
+- **D-19 withdrawn** (see table). **D-18 refined:** `ArrIntegrationCards.tsx` gates the Radarr/Seerr option queries on `*_configured` (L117, L238), not on reachability.
+
+### 5.4 Synergy assessment (how the systems feel together)
+
+1. **Attribution is the cross-cutting fault line.** Seeds (D-12), Tug scoring (D-08), Golden Veto in co-op (D-14) and Passport history all use a single `logged_by_user_id` for three different meanings: *who is logged in*, *who watched*, and *who made the move*. The blueprint's `tug_team` fixes one symptom; a seed flag and mode-aware veto close the others.
+2. **Modals are the UX bottleneck.** Run creation, Pick Next, the Fork offer and bracket matchups all live in the same `Modal`. Its missing focus trap, scroll lock, stack-aware Esc and overflow-safe floating layers (D-02, D-03, D-04) degrade every mode at once. Fixing `Modal` in Phase 0 has the highest leverage in this audit.
+3. **Discovery volume works against decision quality.** Pick Next returns roughly 900–1,300 films with no prioritisation for the mode's goal (Tug territory, tunnel direction). Pagination (D-05) plus mode-aware chips/sorting (D-10, P3-04 hints) turn volume into guidance.
+4. **Household roles leak into personal features.** The watchlist is personal but admin-gated (D-15). Several Tools depend on it, so one admin decision silently disables them for everyone else.
+
+### 5.5 Phase 5 severity summary
+
+| 🔴 | 🟠 | 🟡 | ⚪ |
+|---|---|---|---|
+| 2 (D-05, D-08†) | 10 (D-01†, D-02, D-03, D-04, D-06, D-07, D-11, D-14, D-15, D-17†) | 6 (D-09, D-10, D-12, D-13, D-16, D-20) | 2 (D-18, D-21†) + D-19 withdrawn |
+
+† Runtime confirmation of an earlier static finding (P1-01/P1-02, P3-01/P3-02, P4-02, P1-06); not double-counted in the plan.

@@ -2,7 +2,7 @@
 
 **Status:** Ready for execution · **Date:** 2026-10-05
 **Source of truth:** [`MASTER_UX_AUDIT.md`](./MASTER_UX_AUDIT.md) (verified findings). This plan supersedes the earlier unverified draft of this file.
-**Finding IDs** (`P1-01` … `P4-06`) refer to the severity tables in the master audit.
+**Finding IDs:** `P1-01` … `P4-06` are static findings (master audit Phases 1–4). `D-01` … `D-21` are **runtime** findings from the live-flow audit (master audit Phase 5, 2026-10-05). Both kinds are traced in the matrix at the end.
 
 ---
 
@@ -29,19 +29,19 @@
         │ Run Creation│ │ Global UI   │ │ Integrations    │
         └─────────────┘ └─────────────┘ └─────────────────┘
 
-        ┌──────────────────────────────────────────────┐
-        │ Phase 2: Game Logic (2a Tug │ 2b MitM │ 2c RH) │  ← no dependency on anything
-        └──────────────────────────────────────────────┘
+        ┌──────────────────────────────────────────────────────────────┐
+        │ Phase 2: Game Logic (2a Tug │ 2b MitM │ 2c RH │ 2d Data)      │  ← no dependency on anything
+        └──────────────────────────────────────────────────────────────┘
 ```
 
-Phases 1, 3 and 4 depend **only** on Phase 0, never on each other. Phase 2 and its three sub-phases are fully independent and can ship in any order, in parallel with everything else.
+Phases 1, 3 and 4 depend **only** on Phase 0, never on each other. Phase 2 and its four sub-phases are fully independent and can ship in any order, in parallel with everything else. **Recommended order:** 0 → 2d → 2a → 1 → 3 → 4 → 2b → 2c. Phase 0 fixes every modal at once. Phase 2d removes the 500s and null countries that would otherwise make 2a's geography tests flaky.
 
 ---
 
 ## Phase 0: Shared UI Primitives (foundation, ~1 day)
 
 **Goal:** build, once, the primitives that Phases 1, 3 and 4 consume, so those phases never block on each other.
-**Findings enabled:** P1-02, P1-04, P2-01…P2-05, P4-04, P4-06.
+**Findings enabled:** P1-02, P1-04, P2-01…P2-05, P4-04, P4-06, **D-02, D-03, D-04**.
 
 | File | Component / function | Change |
 |---|---|---|
@@ -49,6 +49,9 @@ Phases 1, 3 and 4 depend **only** on Phase 0, never on each other. Phase 2 and i
 | `frontend/src/components/ui/ClampedLabel.tsx` **(new)** | `ClampedLabel` | `line-clamp-N break-words` and always `title={text}`. |
 | `frontend/src/components/ui/Popover.tsx` **(new)** | `Popover` | Portal to `document.body`. Positioned from `anchorRef.getBoundingClientRect()` with flip (top/bottom) and an 8 px viewport shift. Repositions on capture-phase scroll and resize. Closes on outside `pointerdown`, Esc and `focusout` of anchor+panel. `role="dialog"`, `max-h-[50vh] overflow-y-auto`, `max-w-[min(90vw,24rem)]`. No new npm dependency. |
 | `frontend/src/components/Modal.tsx` | `Modal` | Add optional `footer?: ReactNode` (rendered outside the scroll body) and `bodyClassName?: string` (defaults to `max-h-[70vh] overflow-y-auto px-5 py-4`). Backwards compatible. |
+| `frontend/src/components/Modal.tsx` | `Modal` **hardening (D-03)** | The panel gets `role="dialog" aria-modal="true" aria-labelledby={titleId}`. The close ✕ gets `aria-label="Close"`. **Focus trap:** on open, focus the first focusable element in the body (or the panel); Tab/Shift+Tab wrap inside the panel; on close, restore focus to the previously focused element. **Scroll lock:** set `document.body.style.overflow = "hidden"` while any modal is open (ref-counted for nested modals) and restore it on close. No new dependency. |
+| `frontend/src/components/modalStack.ts` **(new)** + `Modal.tsx` | `useModalStack()` **(D-04)** | A module-level stack of open modal ids. Only the **top** modal reacts to Esc. Add an optional `onEscape?: () => boolean` prop: if it returns `true` the modal stays open (used by `PickNextHub` to pop its drill-down stack, Phase 3). The `window` keydown listener becomes a single shared listener. |
+| `frontend/src/components/MovieSearchAutocomplete.tsx` | results dropdown (L274) **(D-02)** | Render the results list through `Popover` (anchored to the input, `placement="bottom"` with flip) so it is never clipped by a modal's `overflow-y-auto` body. Keep keyboard navigation (↑/↓/Enter/Esc) and `role="listbox"`/`role="option"`. |
 | `frontend/src/components/EmptyState.tsx` | `EmptyState` | Add optional `action?: { label: string; onClick: () => void; icon?: LucideIcon }` rendered as a primary button. |
 | `frontend/src/lib/queries.ts` | `useJellyfinLookup(tmdbIds: number[])` **(new)** | `useQuery({ queryKey: ["jellyfin","lookup",tmdbIds], queryFn: POST /integrations/jellyfin/lookup, enabled: tmdbIds.length > 0 })`. Same key shape as the 5 inline copies, so caches are shared. |
 
@@ -56,16 +59,19 @@ Phases 1, 3 and 4 depend **only** on Phase 0, never on each other. Phase 2 and i
 - `ExpandableText` shows no toggle for short text and shows one for long text, at both 1280 px and 1920 px widths. Keyboard: Tab focuses the toggle, Enter expands it, `aria-expanded` flips.
 - `Popover` stays fully on-screen when its anchor is in the right-most grid column and when the anchor is inside an `overflow-x-auto` scroller.
 - `Modal` and `EmptyState` callers that don't pass the new props render exactly as before.
+- **D-03:** with any modal open, Shift+Tab/Tab never moves focus outside the panel; the page behind doesn't scroll on wheel/touch; closing returns focus to the trigger; screen readers announce a dialog with its title.
+- **D-04:** with two stacked modals, one Esc closes only the top one.
+- **D-02:** in the New Run modal, typing a seed shows the results fully on-screen at 1920×1080, 1280×720 and 390×844 without manual scrolling.
 
-**Validate:** `just frontend-build`.
+**Validate:** `just frontend-build`, then the manual keyboard pass (Tab/Shift+Tab/Esc) on New Run, Pick Next and Edit Rules.
 **Commit:** `feat(ui): add ExpandableText, ClampedLabel, Popover primitives and Modal/EmptyState slots`
 
 ---
 
 ## Phase 1: Critical Run Creation (2-Step Creator)
 
-**Depends on:** Phase 0 (`Modal.footer`, `EmptyState.action`, `ExpandableText`, `useJellyfinLookup`).
-**Findings:** P1-01, P1-02, P1-03, P1-04, P1-05, P1-06.
+**Depends on:** Phase 0 (`Modal.footer`, `EmptyState.action`, `ExpandableText`, `useJellyfinLookup`, modal hardening, `Popover`-based autocomplete).
+**Findings:** P1-01, P1-02, P1-03, P1-04, P1-05, P1-06, **D-01, D-11, D-20, D-21**.
 
 ### 1.1 Files & functions
 
@@ -83,7 +89,11 @@ Phases 1, 3 and 4 depend **only** on Phase 0, never on each other. Phase 2 and i
 | `frontend/src/components/run-creator/shared.tsx` **(new)** | `Field`, `inputClass`, `DECADES`, `TRACKER_RULES` | Moved out of `RunsPage.tsx` (L627–L649). |
 | `frontend/src/components/GameModePicker.tsx` | `GameModePicker` | Add `showModifierDrawer?: boolean` (default `true`, so legacy behaviour is untouched). The wizard passes `false`. Export `MODE_ORDER`. |
 | `frontend/src/lib/gameModes.ts` | `GameModeStyle`, `GAME_MODE_STYLES` | Add `category` per mode and export `MODE_CATEGORIES`. |
-| `frontend/src/pages/RunsPage.tsx` | `RunsPage`, delete `NewRunModal` | Render `<NewRunWizard>`. `EmptyState` gets `action={{ label: "Start your first run", onClick: open }}` and mode-neutral copy. Run cards show a mode chip from `gameModeStyle(run.game_type)`. |
+| `frontend/src/pages/RunsPage.tsx` | `RunsPage`, delete `NewRunModal` | Render `<NewRunWizard>`. `EmptyState` gets `action={{ label: "Start your first run", onClick: open }}` and mode-neutral copy. Run cards show a mode chip from `gameModeStyle(run.game_type)` (D-21). |
+| `backend/app/api/routes_runs.py` | `create_run` (L408–L468) **(D-11)** | Replace the set `{current_user.id, *payload.participant_user_ids}` with an **order-preserving** de-duplicated list `[current_user.id, *dict.fromkeys(ids)]` (owner first, then click order). Give each `RunParticipant` a strictly increasing `joined_at` (`base + timedelta(microseconds=i)`) so `TugOfWarEngine.team_players` / RT Split's ordering by `joined_at` is deterministic. Test: three participants submitted as `[C, B]` → Team B is `C`. |
+| `backend/app/api/routes_engine.py` | `EngineMeta` (L48), `list_engines` (L67) **(D-20)** | Add `requires: list[str]` (declared per engine class as `requires: ClassVar[list[str]] = []`; RT Split → `["omdb"]`) and `unavailable_reason: str \| None`, computed from the resolved settings (OMDb key present; for LLM-only options, `llm_provider != "off"`). This is not admin-gated, so every user sees it. |
+| `frontend/src/components/run-creator/Step1ModeSelect.tsx` | mode card **(D-20)** | Cards with `unavailable_reason` render dimmed with a "Needs OMDb – ask your admin" chip and can't advance to Step 2 (admins get a link to Settings → Integrations). |
+| `frontend/src/components/run-creator/NewRunWizard.tsx` | Step transition **(D-01)** | On Next, focus the Step 2 heading and scroll the body to the top, so mode configuration never renders off-screen. Any blocker clicked in `CreateBlockers` scrolls its field into view and focuses it. |
 
 ### 1.2 Invariants (regression checklist, from master audit §1.6)
 Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifierPayload` is merged last · Raw JSON is admin + `json_rules` only (MitM still needs both seeds) · `tail_seed_movie_id` is sent only for MitM and differs from the head seed · no server-owned keys are built on the client · participant order decides Team B · closing resets the draft.
@@ -93,7 +103,9 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 - On a 1080p screen, every mode's configuration plus the seed preview is visible in Step 2 with at most one scroll. The Create button is always visible (footer).
 - The disabled Create button always shows at least one blocker reason.
 - Choosing a seed shows synopsis, runtime and ratings without leaving the wizard.
-- Create a run for each of the 20 modes. Payloads are byte-identical to the pre-refactor `NewRunModal` for the same inputs (compare in the DevTools network tab).
+- Create a run for each of the 20 modes. Payloads are byte-identical to the pre-refactor `NewRunModal` for the same inputs (compare in the DevTools network tab). Exception: `participant_user_ids` order now matters (D-11).
+- **D-01 (re-measure):** at 1920×1080 / 1280×720 / 390×844, the Step 2 scroll depth is ≤ 1.5× / ≤ 2× / ≤ 4× the visible body height (it was 3.35× / 5× / 9.7×).
+- **D-20:** with no OMDb key, RT Split is visibly unavailable with a reason.
 
 **Validate:** `just frontend-build`, then the manual 20-mode creation pass.
 **Commit:** `feat(runs): 2-step run creator wizard with hero seed preview and explicit blockers`
@@ -102,10 +114,10 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 
 ## Phase 2: Game Logic & Stalemate Resolution
 
-**Depends on:** nothing. The sub-phases 2a/2b/2c are mutually independent.
+**Depends on:** nothing. The sub-phases 2a/2b/2c/2d are mutually independent.
 **Shared backend touch-point:** `routes_runs.py` `_enforce_run_rules` / `_log_step`. Each sub-phase only edits its own `game_type` branch.
 
-### Phase 2a: Tug of War (P3-01, P3-02, P3-03)
+### Phase 2a: Tug of War (P3-01, P3-02, P3-03, D-08, D-09, D-10, D-12)
 
 | File | Function / symbol | Change |
 |---|---|---|
@@ -128,12 +140,17 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 | `frontend/src/lib/tugOfWar.ts` | `tugTarget`, new `tugNextTeam`, `tugEffectLabel` | Read `effective_target`. Labels: "+2 🔥", "⚔️ Steal", "⚓ Anchor". |
 | `frontend/src/components/TugOfWarMeter.tsx` | `TugOfWarMeter` | Shrinking end-zones (`effective_target`), streak flames, anchor icon, "Next pull: <name>", Sudden Death banner. |
 | `frontend/src/components/PickNextHub.tsx` | candidate card (~L995) | `tug_effect` chip. Logging sends `tug_team = tugNextTeam(rules)`. |
+| `backend/app/api/routes_runs.py` | `create_run` seed insert (L473–L481) **(D-12)** | Stamp server-owned `transition_metadata["seed"] = True` on every seed step (head and tail). Add `"seed"` to `SERVER_OWNED_METADATA`. `tally()` skips seed steps by this flag (not by index, because MitM has two seeds). |
+| `backend/app/services/passport.py` | aggregate queries (L67, L127) **(D-12)** | Exclude steps whose `transition_metadata.seed` is true **unless** the user explicitly marked them watched (`watched_at` edited through `PATCH step`). Migration-free: JSON check in SQL (`json_extract(transition_metadata,'$.seed') IS NOT 1`). Legacy seeds (no flag) keep counting; this is documented, not back-filled. |
+| `frontend/src/lib/tugOfWar.ts`, `frontend/src/components/TugOfWarMeter.tsx` (caption), `run-creator/mode-config/TugConfig.tsx` **(D-09)** | copy | Replace "every film scores for one side" / "Every watched film scores one point" with "Films from 1975–2005 (or with no country on record) are ⚓ neutral". |
+| `frontend/src/pages/RunDetailPage.tsx`, `frontend/src/components/TugOfWarMeter.tsx` **(D-10)** | turn banner | "🪢 Ana's pull (Team A · Pre-1975)" above the frontier card, from `tug_momentum.next_team`. |
+| `frontend/src/components/PickNextHub.tsx` **(D-10)** | default sort/filter for Tug | When `gameType === tug_of_war`, preselect the decade/territory filter matching `next_team` (era: ≤1970s for Team A, ≥2000s for Team B) and sort `tug_points` desc. The user can clear it. |
 | `backend/tests/test_tug_momentum.py` **(new)** | | Pure `tally()` table tests: seed ignored; alternation enforced (409); home/invasion/neutral/anchor/streak cap; Sudden Death shrink; **termination by turn `S + E·(target−1) + 1`** (property test over random home/neutral sequences); shared-device `tug_team`; fork attribution to the offerer; forging `tug_team`/`tug_momentum` is stripped; v1 runs unchanged. |
 
-**Acceptance:** under strict alternating home pulls with defaults, the run completes by turn 19. Existing `test_fork_veto_tug.py` stays green (v1 path).
+**Acceptance:** under strict alternating home pulls with defaults, the run completes by turn 19. Existing `test_fork_veto_tug.py` stays green (v1 path). **Live re-check of D-08:** a freshly created Tug run shows `0–0` / "Momentum 0", and a second consecutive pick by the same team gets a 409 with "It's Ben's pull".
 **Commit:** `feat(tug): attribution, turn order, steal/momentum/anchor and sudden death`
 
-### Phase 2b: Meet in the Middle (P3-04)
+### Phase 2b: Meet in the Middle (P3-04, D-13, D-14)
 
 | File | Function / symbol | Change |
 |---|---|---|
@@ -148,6 +165,11 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 | `frontend/src/lib/queries.ts` | `useTunnelHint(runId)` **(new)**, `useTunnelState` | Hint mutation invalidates the tunnel key. Keep the previous `distance_hops` for the trend. |
 | `frontend/src/components/TunnelTimeline.tsx` | trench | ▲ warmer / ▼ colder trend; "💡 Hint" buttons per side with token count; near-miss "💫" chip on `TunnelCard`. |
 | `frontend/src/components/TunnelFrontierCard.tsx` | `TunnelFrontierCard` | "↔ Swap frontier" = existing step delete, then open `PickNextHub` on the previous frontier of that side. No backend rule. |
+| `backend/app/api/routes_runs.py` | `get_tunnel_state` (L1055) **(D-13)** | Cache the last result as server-owned `rules_config["tunnel_distance"] = {head_id, tail_id, hops, depth_reached, message}`. If the current frontier pair matches, return it **without searching** (instant reloads). Recompute only when a frontier changes. Add `"tunnel_distance"` to `SERVER_OWNED_RULES`. |
+| `backend/app/services/pathfinder.py` | `solve_bridge_bipartite` timeout event **(D-13)** | Include `depth_reached` (`forward.hops + backward.hops`) on `timeout`/`exhausted` events. `TunnelDistance` exposes it, and the trench says "**≥ N hops** (still searching deeper next time)" instead of "unknown". |
+| `frontend/src/components/TunnelTimeline.tsx` **(D-13)** | trench | Render a cached distance immediately; show "Measuring…" only while a recompute is in flight, as a small spinner next to the last known value. |
+| `backend/app/api/routes_runs.py` | `POST /runs/{id}/veto` (L985), `target: "step"` branch (~L1006) **(D-14)** | Refuse with 409 "Meet in the Middle is co-op – use Undo on your own side" when `"tunnel" in engine.capabilities`. Pre-check before spending (the token is not consumed). |
+| `frontend/src/pages/RunDetailPage.tsx` | `GoldenVetoBar` (defined L875, rendered L231) **(D-14)** | render gate | Don't render the Golden Veto prompt for `meet_in_the_middle` runs. |
 | `backend/tests/test_meet_in_the_middle.py` | extend | Hint pre-checks don't spend; actor/film levels; no-path refund; forged `tunnel_hints_remaining`/`near_miss_with` stripped; near-miss stamping; collision rules unchanged. |
 
 **Commit:** `feat(tunnel): bridge hint tokens, near-miss detection and warmer/colder trend`
@@ -163,28 +185,43 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 | same | `sync_run_state` **(override)** | Drop a stale `tier_override` once `len(steps) > override.depth`. |
 | same | `evaluate_run_outcome` **(override)** | Optional `escape_depth` (25–60) → `COMPLETED` "Escaped the Rabbit Hole at Depth N with ❤️×k". |
 | same | `validate_rules_config` | Validate `escape_depth`. |
-| same | `discover_candidates` | When `kept == []` and lives are 0, flag `dead_end`. |
+| same | `discover_candidates` | When `kept == []` and lives are 0, flag `dead_end` on the `/constraint` state. **Note (master audit §5.3):** `PickNextHub.tsx` L365–L381 already shows a client-side "💀 Dead end – Accept your fate" inside Pick Next. Reuse that copy/action; this item only makes the state server-known so the HUD can show it. |
 | `backend/app/schemas/engine.py` | `RabbitHoleState` | `dead_end: bool = False`, `tier_override: int \| None`. |
 | `backend/app/api/routes_runs.py` | `POST /runs/{id}/rabbit-hole/reroll` **(new)** | Pre-checks: active, lives ≥ 2, tier > 1, no override at this depth. Then pick a different tier from 2–5 and spend 1 life. |
 | `backend/app/services/blind_fork.py` | `SERVER_OWNED_RULES` | Add `"tier_override"` (and `"lives_remaining"` for defence in depth). |
 | `backend/app/models/cache.py` + `backend/migrations/versions/<new>_add_vote_count.py` | `CachedMovie.vote_count` | New nullable int column. |
 | `backend/app/services/cache_repo.py` | L106, L137 | Store `vote_count` next to `vote_average`. |
 | `backend/app/services/movie_filters.py` | `rating_of` (L52) | Ignore `vote_average` when `vote_count` is `None` or `< 10` (→ `None` = unverified). |
-| `frontend/src/components/RabbitHoleHud.tsx` | `RabbitHoleHud` | "🎲 Re-roll tier (−1 ❤️)" button; a dead-end panel with "Accept your fate" (forfeit) / "Search manually". |
+| `frontend/src/components/RabbitHoleHud.tsx` | `RabbitHoleHud` | "🎲 Re-roll tier (−1 ❤️)" button. When `rabbit_hole.dead_end`, show the **existing** Pick Next dead-end panel copy ("Accept your fate" forfeit + "Search manually") in the HUD, so players who never open Pick Next see it too. |
 | `frontend/src/components/BountyBoardPanel.tsx`, `frontend/src/lib/bounties.ts`, `frontend/src/lib/rabbitHole.ts` | reward copy | "❤️ +1 life" for Rabbit Hole runs. Remove `rabbit_hole` from `NO_BOUNTY_MODES`. |
 | `backend/tests/test_rabbit_hole.py` | extend | Life award capped; re-roll pre-checks and no spend on refusal; override scoped to one depth; dead-end flag; escape victory; `vote_count < 10` ⇒ unverified; forged `tier_override` stripped. |
 
 **Pre-work (no code):** run the telemetry query in master audit §3.3.3 against a real DB to confirm where lives are actually lost before tuning tier thresholds.
 **Commit:** `feat(rabbit-hole): life bounties, sacrificial re-roll, dead-end detection, escape depth, rating accuracy`
 
+### Phase 2d: Engine Data Integrity (D-06, D-07)
+
+Small, backend-only and independent; **land it first in Phase 2** so 2a's geography scoring and the Passport tests run on complete data.
+
+| File | Function / symbol | Change |
+|---|---|---|
+| `backend/app/services/cache_repo.py` | `CacheRepo.upsert_cast` (L350–L395) **(D-06)** | Wrap the `CachedMovieCast` insert in the same `session.begin_nested()` SAVEPOINT pattern the actor insert already uses. On `IntegrityError`, re-`get` the row and update `cast_order`/`character_name`. Also de-duplicate `top` by `member["id"]` (TMDB can credit one actor twice). |
+| `backend/app/services/cache_repo.py` | `get_movie` (L496) **(D-07)** | Add `require_detail: bool = False`. When true and the cached row is a stub (`origin_country is None`, which mirrors `BaseChallengeEngine._needs_hydration`, `engines/base.py` L123), re-fetch `/movie/{id}` and upsert. Existing callers are unchanged. |
+| `backend/app/api/routes_runs.py` | `create_run` seed loop, `_log_step` (L627) **(D-07)** | Call `get_movie(..., require_detail=True)` before `_step_fields_from_movie`, so a step's denormalised `movie_origin_country`/`release_year` are never copied from a stub. A TMDB failure falls back to the stub (never blocks logging). |
+| `backend/app/api/routes_runs.py` | `_to_run_detail` / engine `sync_run_state` **(D-07, healing)** | When a step has `movie_origin_country is None` and the cached movie now has one, copy it onto the step (cheap, cache-only, no TMDB call). This heals existing runs on the next view. |
+| `backend/tests/test_cache_repo.py` (or new `test_data_integrity.py`) | | Concurrent `upsert_cast` for the same movie → no exception, one row per actor. Duplicate actor in one credits list → one row. Logging a stub-cached film stores its country. A step with a null country is healed once the cache has it. |
+
+**Live re-check:** repeat master audit F3/F5. No 500 on the first Pick Next (`GET /movies/{id}/cast`), and every step in `GET /runs/{id}` has a non-null `movie_origin_country` when TMDB has one.
+**Commit:** `fix(cache): savepoint cast upserts and hydrate stub films before logging steps`
+
 **Phase 2 validate:** `just backend-test`, `just backend-lint`, `uv run alembic heads` (single head), `just frontend-build`.
 
 ---
 
-## Phase 3: Global UI Expansion (text truncation & popovers)
+## Phase 3: Global UI Expansion (text truncation, popovers & Pick Next ergonomics)
 
-**Depends on:** Phase 0 (`ExpandableText`, `ClampedLabel`, `Popover`).
-**Findings:** P2-01 … P2-06.
+**Depends on:** Phase 0 (`ExpandableText`, `ClampedLabel`, `Popover`, modal stack `onEscape`).
+**Findings:** P2-01 … P2-06, **D-04, D-05**.
 
 | File | Location | Change |
 |---|---|---|
@@ -202,12 +239,17 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 | `frontend/src/components/BridgeSwapPanel.tsx` | L137 | `ClampedLabel`. |
 | `frontend/src/pages/DailyBridgePage.tsx` | L236 | `ClampedLabel`. |
 | `frontend/src/components/PitchButton.tsx` | popover (`absolute … w-60`) | Render the `PitchState` inside `<Popover anchorRef=…>`. Change `role="tooltip"` to `role="dialog"`, and give the button `aria-haspopup="dialog"`. Remove the local `mousedown` listener (the Popover owns dismissal). |
+| `frontend/src/components/PickNextHub.tsx` | grid render (L789–L790) **(D-05)** | Generalise the roulette paging (`rouletteShown`, L309/L837) to every mode: render the first `PAGE = 48` of `filtered`, then a "Show 48 more (N remaining)" button and an `IntersectionObserver` sentinel for auto-load. Reset the page when filters/sort change. No virtualisation library. Every candidate `<img>` gets `loading="lazy" decoding="async"` (check `MoviePoster` and the actor strip; only 890 of 1,777 were lazy). |
+| `frontend/src/components/PickNextHub.tsx` | default sort **(D-05)** | Default to "Best match" (server order) when the engine provides one, else popularity, instead of Year ↓, which surfaced obscure new releases first. |
+| `frontend/src/components/PickNextHub.tsx` | Esc / Back **(D-04)** | Pass `onEscape={() => { if (stack.length > 1) { pop(); return true; } return false; }}` to the hosting `Modal`, so Esc / remote-Back on a drill-down returns to the grid with filters intact. Only Esc on the grid closes the modal. |
 | *(optional, mechanical)* 50 tooltip-less `truncate` sites | `grep -rn "\btruncate\b" frontend/src` | Add `title=` where the text is user content. |
 
 **Acceptance criteria**
 - `rg "line-clamp-[3-6]" frontend/src` returns only `ui/ExpandableText.tsx` and `GameModePicker.tsx` (grid cards, intentionally).
 - In a Meet in the Middle run, "✨ Why this link?" on a tunnel card shows the full pitch unclipped. On the right-most Pick Next column the popover stays on-screen.
 - Every expandable is reachable and togglable with keyboard only (living-room d-pad simulation: Tab / Enter / Esc).
+- **D-05 (re-measure):** opening Pick Next on *The Godfather* renders ≤ 48 cards initially, with DOM nodes < 3,000 and a "Show more" control; filters still search the full candidate list.
+- **D-04:** Esc on a Pick Next drill-down screen returns to the grid with the search text and filters preserved.
 
 **Validate:** `just frontend-build`, then the manual pass over the 15 listed surfaces.
 **Commit:** `feat(ui): replace hard line-clamps with ExpandableText and portal PitchButton popover`
@@ -217,9 +259,9 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 ## Phase 4: Integrations
 
 **Depends on:** Phase 0 (`Popover`, `ExpandableText`, `useJellyfinLookup`).
-**Findings:** P4-01 … P4-06.
+**Findings:** P4-01 … P4-06, **D-15, D-16, D-17, D-18**.
 
-### Phase 4a: Watchlist sync status (P4-01, P4-02, P4-03)
+### Phase 4a: Watchlist sync status & access (P4-01, P4-02, P4-03, D-15, D-16, D-17)
 
 | File | Function / symbol | Change |
 |---|---|---|
@@ -231,7 +273,12 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 | `frontend/src/lib/queries.ts` | `watchlistStatusKey`, `useWatchlistStatus()` | `staleTime: 30_000`. |
 | `frontend/src/components/CuratedCanonsCard.tsx` | `CuratedCanonsCard` (L27–L66, L220–L254) | Delete `watchlistSyncedAt`. `SyncBadge syncedAt={status?.synced_at}` plus "· N films". Pre-fill the username from status (only if the field is untouched). Replace `useMutation(runTask)` with `useTrackedTask({ resumeNames: ["watchlist_sync"], onFinished })`. `onFinished` invalidates `watchlistStatusKey` and keeps the `watchlist_not_found` warning / toast branches. |
 
-**Acceptance:** sync, navigate away, come back: the badge shows "Synced Xm ago · N films" and the username is pre-filled. Navigating away mid-sync and returning resumes the progress text.
+| `frontend/src/components/settings/WatchlistSyncCard.tsx` **(new)**, `frontend/src/components/CuratedCanonsCard.tsx` **(D-15)** | split | Move the "Sync My Letterboxd Watchlist" block (L220–L254 plus its state/mutation) out of the admin-only `CuratedCanonsCard` into its own `WatchlistSyncCard`. |
+| `frontend/src/pages/settings/SettingsPages.tsx` | `IntegrationsSettings` (L49–L60) **(D-15)** | Render `<WatchlistSyncCard />` for **every** user, first in the stack. `CuratedCanonsCard` stays admin-only. |
+| `frontend/src/pages/MarathonRouterPage.tsx`, `frontend/src/pages/BingoPage.tsx`, `frontend/src/components/BracketSeedPicker.tsx` **(D-15)** | empty states | Replace "sync … from Settings" text with an `EmptyState` `action` / `<Link to="/settings/integrations#watchlist">Sync your watchlist</Link>`. |
+| `frontend/src/components/settings/WatchlistSyncCard.tsx` **(D-16)** | errors | `onError` / failed start shows the server `ApiError.message` (e.g. "Invalid Letterboxd username"). Client-side hint under the input: "Letters, numbers and _ only" with `pattern="[A-Za-z0-9_]{1,40}"`. |
+
+**Acceptance:** sync, navigate away, come back: the badge shows "Synced Xm ago · N films" and the username is pre-filled. Navigating away mid-sync and returning resumes the progress text, **and a `watchlist_not_found` result that finished while the user was away is still shown** (D-17; take it from the latest finished `watchlist_sync` task via `useTrackedTask`'s resume, or store `last_error` beside the Option B user columns). **Live re-check (D-15):** log in as a non-admin and sync a watchlist from Settings → Integrations; Router "My Watchlist" then lists the films.
 **Commit:** `feat(watchlist): persistent sync status endpoint and resumable sync progress`
 
 ### Phase 4b: March Madness championship (P4-04, P4-05, P4-06)
@@ -248,6 +295,14 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 
 **Acceptance:** with Jellyfin configured, contenders on the server show the dot/badge. A crowned champion shows Play (on server) or Request (missing) without opening any other screen. With integrations off, the bracket renders exactly as today (badges return `null`).
 **Commit:** `feat(bracket): media-server visibility and actionable champion banner`
+
+### Phase 4c: Integration hygiene (D-18)
+
+| File | Function / component | Change |
+|---|---|---|
+| `frontend/src/components/ArrIntegrationCards.tsx` | `RadarrSettingsCard` options query (L114–L117), `SeerrSettingsCard` options query (L235–L238) **(D-18)** | These are gated on `config.*_configured` today. Also require reachability from the shared integrations status query (`GET /integrations/status`, already used by `IntegrationsStatusCard`), so an unreachable service doesn't fire a 502 on every visit. Show "Unreachable: check URL/API key" instead. |
+
+**Commit:** `fix(integrations): gate arr option fetches on reachability`
 
 **Phase 4 validate:** `just backend-test`, `just backend-lint`, `uv run alembic heads`, `just frontend-build`.
 
@@ -275,3 +330,15 @@ Modifiers are cleared on mode change · trackers send `TRACKER_RULES` · `modifi
 | P3-07 | Backlog |
 | P4-01, P4-02, P4-03 | 4a |
 | P4-04, P4-05, P4-06 | 0 (`useJellyfinLookup`) + 4b |
+| D-01 | 1 (re-measured in 1.3) |
+| D-02, D-03 | 0 |
+| D-04 | 0 (modal stack) + 3 (`PickNextHub` `onEscape`) |
+| D-05 | 3 |
+| D-06, D-07 | 2d |
+| D-08, D-09, D-10, D-12 | 2a |
+| D-11, D-20, D-21 | 1 |
+| D-13, D-14 | 2b |
+| D-15, D-16, D-17 | 4a |
+| D-18 | 4c |
+| D-19 | Withdrawn (master audit §5.3): not a product defect |
+| P3-05 (corrected, master audit §5.3) | 2c (HUD surfacing of the existing dead-end UI) |

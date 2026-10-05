@@ -24,10 +24,11 @@ export const BOUNTIES: Record<BountyId, BountyInfo> = {
   epic_odyssey: { id: "epic_odyssey", title: "Epic Odyssey", icon: "🏔️", criteria: "Runtime over 150 minutes" },
 };
 
-/** Modes that can't host a Bounty Board (the bracket logs films itself; the Rabbit Hole has lives). */
-export const NO_BOUNTY_MODES = new Set(["march_madness", "rabbit_hole"]);
+/** The bracket logs films itself, so it cannot host a Bounty Board. */
+export const NO_BOUNTY_MODES = new Set(["march_madness"]);
 
 export const WILDCARD_REWARD = "+1 🎟️ Wildcard";
+export const LIFE_REWARD = "❤️ +1 life";
 
 /** A bounty's display info: the static catalogue, or the run's stored AI definition. */
 export function bountyInfo(id: BountyId, rules: Pick<RulesConfig, "custom_bounties">): BountyInfo | null {

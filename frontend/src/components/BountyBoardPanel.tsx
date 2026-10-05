@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2 } from "lucide-react";
-import { WILDCARD_REWARD, bountyInfo, completedBountyOf, type BountyInfo } from "../lib/bounties";
+import { LIFE_REWARD, WILDCARD_REWARD, bountyInfo, completedBountyOf, type BountyInfo } from "../lib/bounties";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useLlmStatus, useRollCustomBounty } from "../lib/queries";
@@ -8,8 +8,8 @@ import type { BountyId, RunDetail } from "../types/api";
 
 const CELEBRATION_MS = 5000;
 
-/** "📜 Bounty Board": the three live bounties, each paying a wildcard. A step that completes one
- * triggers a celebration banner and the freshly drawn replacement slides in. */
+/** "📜 Bounty Board": three live bounties with a mode-specific reward. A completed bounty triggers
+ * a celebration banner and the freshly drawn replacement slides in. */
 export default function BountyBoardPanel({ run }: { run: RunDetail }) {
   const [open, setOpen] = useState(true);
   const [celebrating, setCelebrating] = useState<BountyInfo | null>(null);
@@ -24,6 +24,10 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
   const canRoll = !!llm?.enabled && run.status === "active" && !active.some((b) => b.ai);
   const completedCount = run.rules_config.completed_bounties?.length ?? 0;
   const wildcards = run.rules_config.wildcards_budget;
+  const rabbitHole = run.game_type === "rabbit_hole";
+  const lives = run.rules_config.lives_remaining ?? run.rules_config.max_lives ?? 3;
+  const maxLives = run.rules_config.max_lives ?? 3;
+  const reward = rabbitHole ? LIFE_REWARD : WILDCARD_REWARD;
 
   // Steps present on first load were completed before this visit: only later ones celebrate.
   useEffect(() => {
@@ -62,7 +66,9 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
         <span className="text-sm font-semibold text-zinc-100">📜 Bounty Board</span>
         <span className="flex items-center gap-3 text-xs text-zinc-400">
           <span className="font-semibold text-amber-300">
-            🎟️ {wildcards === -1 ? "∞" : wildcards} wildcard{wildcards === 1 ? "" : "s"}
+            {rabbitHole
+              ? `❤️ ${lives}/${maxLives} lives`
+              : `🎟️ ${wildcards === -1 ? "∞" : wildcards} wildcard${wildcards === 1 ? "" : "s"}`}
           </span>
           {completedCount > 0 && <span>{completedCount} completed</span>}
           <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
@@ -82,7 +88,7 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
             <p className="text-[11px] text-emerald-200/70">{celebrating.criteria}</p>
           </div>
           <span className="shrink-0 animate-bounce rounded-full bg-amber-400/20 px-2.5 py-1 text-xs font-bold text-amber-200">
-            {WILDCARD_REWARD}
+            {reward}
           </span>
         </div>
       )}
@@ -112,7 +118,7 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
                 )}
                 <p className="text-xs text-zinc-400">{bounty.criteria}</p>
                 <span className="mt-auto self-start rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
-                  {WILDCARD_REWARD}
+                  {reward}
                 </span>
               </li>
             );

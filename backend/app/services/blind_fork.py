@@ -14,7 +14,7 @@ PENDING_FORK_KEY = "pending_fork"
 OFFER_SIZE = 3
 SERVER_OWNED_RULES = (
     PENDING_FORK_KEY, "tug_scores", "tug_players", "tug_momentum", "tug_rules_version",
-    "tunnel_hints_remaining", "tunnel_distance",
+    "tunnel_hints_remaining", "tunnel_distance", "tier_override", "lives_remaining",
     # Built by the March Madness / Method Actor / Auteur Marathon / Regional Deep Dive engines
     # when the run is created.
     "bracket", "bracket_films", "actor", "filmography", "director", "expedition",

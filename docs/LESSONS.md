@@ -4,6 +4,12 @@
 - **Constraint:** Do not scrape Letterboxd for heavy metadata (overviews, posters). Only scrape for TMDB IDs, then use the TMDB API.
 - **Stack:** React 19, Tailwind v4, Vite 7, Python 3.12. Do not use legacy hooks or outdated syntax.
 
+## Phase 2c: Rabbit Hole Survival Mechanics
+- **Bounty rewards:** Challenge engines now own the reward policy through `BaseChallengeEngine.award_bounty`; Rabbit Hole converts the wildcard reward to one life (capped at `max_lives`). Store a server-owned per-step reward marker so undo reverses only a life that was actually awarded.
+- **Tier re-rolls:** The single-depth `tier_override` and `lives_remaining` values are server-owned run state. On step deletion, `sync_run_state` clears the override only after that depth's next film is present.
+- **Tier 5 ratings:** TMDB fallback ratings are unverified until `vote_count >= 10`; a cached IMDb rating remains authoritative regardless of TMDB vote count. This affects other uses of the shared `rating_of` helper too.
+- **Migration validation:** For SQLite migration checks, create the scratch `CONFIG_DIR` before `uv run alembic upgrade head`; Alembic's settings-derived database URL does not create missing parent directories.
+
 ## Phase 17a: Backend Bug Squashing
 - **Watchlist 404:** `letterboxd.scrape_letterboxd_watchlist` converts a page-1 `curl_requests.exceptions.HTTPError` 404 into `WatchlistNotFound`. SSE routes in `routes_curated.py` now emit structured error bodies (`{code, message, status?, username?}`) via `_error_payload`; `message` is kept for legacy consumers. Codes: `watchlist_not_found` (404), `cloudflare_block` (503), `scrape_failed`, `persist_failed`. Quirk: SSE responses are already HTTP 200 once streaming starts, so the frontend must branch on the `error` event's `code`, not the HTTP status.
 - **Metadata:** `overview` was already stored; `tagline` is new (`cached_movies.tagline`, migration `e5f6a7b8c9d0`, exposed on `MovieDetail`). `NULL` = not fetched / cached before taglines existed, `""` = TMDB has none; `GET /movies/{id}` JIT-refreshes rows with a NULL overview or tagline once.

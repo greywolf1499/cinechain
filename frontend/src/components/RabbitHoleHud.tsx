@@ -1,5 +1,6 @@
 import { cn } from "../lib/cn";
 import { rabbitHud } from "../lib/rabbitHole";
+import { useRabbitHoleReroll, useRunConstraint, useUpdateRun } from "../lib/queries";
 import type { RulesConfig } from "../types/api";
 
 const TIER_STYLES = [
@@ -36,16 +37,24 @@ export function Lives({ lives, maxLives, className }: { lives: number; maxLives:
 
 /** The Rabbit Hole's arcade status bar: depth, active tier, lives and the tier boundary ahead. */
 export default function RabbitHoleHud({
+  runId,
   rules,
   depth,
   finished,
+  onSearchManually,
 }: {
+  runId: string;
   rules: RulesConfig;
   depth: number;
   finished: boolean;
+  onSearchManually: () => void;
 }) {
   const hud = rabbitHud(rules, depth);
   const style = TIER_STYLES[hud.tier.number - 1];
+  const { data: constraint } = useRunConstraint(runId);
+  const reroll = useRabbitHoleReroll(runId);
+  const forfeit = useUpdateRun(runId);
+  const deadEnd = constraint?.rabbit_hole?.dead_end === true;
   return (
     <div className="mb-5 flex flex-col gap-2" aria-label="Rabbit Hole status">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-zinc-700 bg-zinc-950 px-5 py-3 font-mono shadow-[inset_0_0_24px_rgba(0,0,0,0.6)]">
@@ -58,9 +67,27 @@ export default function RabbitHoleHud({
         >
           [ Tier {hud.tier.number}: {hud.tier.name}
           {hud.tier.number > 1 && ` (${hud.tier.rule})`} ]
+          {hud.tierOverride && <span className="ml-1 text-fuchsia-200">Re-rolled</span>}
         </span>
         <Lives lives={hud.lives} maxLives={hud.maxLives} className="ml-auto" />
       </div>
+      {!finished && hud.tier.number > 1 && hud.lives >= 2 && !constraint?.rabbit_hole?.tier_override && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={reroll.isPending}
+            onClick={() => reroll.mutate()}
+            className="rounded-md border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-1.5 font-mono text-xs font-semibold text-fuchsia-200 transition-colors hover:bg-fuchsia-500/20 disabled:opacity-60"
+          >
+            {reroll.isPending ? "Re-rolling…" : "🎲 Re-roll tier (−1 ❤️)"}
+          </button>
+          {reroll.isError && (
+            <span role="alert" className="text-xs text-amber-300">
+              Could not re-roll this tier. Refresh and try again.
+            </span>
+          )}
+        </div>
+      )}
       {!finished && hud.warning && (
         <div
           role="alert"
@@ -73,6 +100,35 @@ export default function RabbitHoleHud({
         <p className="rounded-lg border border-red-900/60 bg-red-950/30 px-4 py-2 font-mono text-xs font-semibold text-red-300">
           💀 No lives left - only a film that obeys the tier rule can continue the descent.
         </p>
+      )}
+      {!finished && deadEnd && (
+        <section className="rounded-lg border border-red-700/60 bg-red-950/30 px-4 py-3 font-mono">
+          <p role="alert" className="text-sm font-semibold text-red-200">
+            🕳️ No way down: no valid cached links remain. A manual search may still find a film.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={forfeit.isPending}
+              onClick={() => forfeit.mutate({ status: "forfeited" })}
+              className="rounded-md bg-red-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-red-500 disabled:opacity-60"
+            >
+              Accept your fate
+            </button>
+            <button
+              type="button"
+              onClick={onSearchManually}
+              className="rounded-md border border-app-border px-3 py-2 text-xs font-semibold text-zinc-200 transition-colors hover:bg-app-surface-hover"
+            >
+              Search manually
+            </button>
+          </div>
+          {forfeit.isError && (
+            <p role="alert" className="mt-2 text-xs text-amber-300">
+              Could not forfeit the run. Refresh and try again.
+            </p>
+          )}
+        </section>
       )}
     </div>
   );

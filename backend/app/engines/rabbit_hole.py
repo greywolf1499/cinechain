@@ -28,7 +28,7 @@ from typing import ClassVar
 from app.engines.cinechain import CineChainEngine
 from app.engines.conditions import RunOutcome
 from app.models.cache import CachedMovie
-from app.models.run import RUN_STATUS_FAILED, Run, RunStep
+from app.models.run import RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, Run, RunStep
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import ConstraintInfo, RabbitHoleState, ValidationResult
 from app.services.movie_filters import rating_of
@@ -43,6 +43,10 @@ RETRO_CUTOFF_YEAR = 2000
 MICRO_CLOCK_MINUTES = 100
 B_MOVIE_RATING = 6.0
 WARNING_WINDOW = 2  # a tier boundary 1 or 2 hops ahead is announced
+TIER_OVERRIDE_KEY = "tier_override"
+ESCAPE_DEPTH_KEY = "escape_depth"
+MIN_ESCAPE_DEPTH = 25
+MAX_ESCAPE_DEPTH = 60
 
 
 @dataclass(frozen=True)
@@ -62,8 +66,18 @@ TIERS = (
 )
 
 
-def tier_for_depth(depth: int) -> Tier:
+def tier_for_depth(depth: int, rules: dict | None = None) -> Tier:
     """The tier governing the film that would become step `depth + 1`."""
+    override = (rules or {}).get(TIER_OVERRIDE_KEY)
+    if (
+        isinstance(override, dict)
+        and override.get("depth") == depth
+        and not isinstance(override.get("depth"), bool)
+        and isinstance(override.get("tier"), int)
+        and not isinstance(override.get("tier"), bool)
+        and 2 <= override["tier"] <= len(TIERS)
+    ):
+        return TIERS[override["tier"] - 1]
     return next(t for t in reversed(TIERS) if depth >= t.start_depth)
 
 
@@ -84,12 +98,16 @@ def lives_of(rules: dict | None) -> tuple[int, int]:
 
 
 def tier_state(depth: int, rules: dict | None) -> RabbitHoleState:
-    tier = tier_for_depth(depth)
+    tier = tier_for_depth(depth, rules)
+    scheduled_tier = tier_for_depth(depth)
     upcoming = next_tier_of(tier)
+    if tier.number != scheduled_tier.number:
+        upcoming = next_tier_of(scheduled_tier)
     remaining, max_lives = lives_of(rules)
     state = RabbitHoleState(
         depth=depth, tier=tier.number, tier_name=tier.name, tier_rule=tier.rule,
-        lives_remaining=remaining, max_lives=max_lives)
+        lives_remaining=remaining, max_lives=max_lives,
+        tier_override=tier.number if tier.number != scheduled_tier.number else None)
     if upcoming is not None:
         away = upcoming.start_depth - depth
         state.next_tier, state.next_tier_name = upcoming.number, upcoming.name
@@ -130,7 +148,7 @@ def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
 
 class RabbitHoleEngine(CineChainEngine):
     game_type = RABBIT_HOLE
-    supports_bounty_board = False
+    supports_bounty_board = True
     display_name = "The Rabbit Hole"
     description = (
         "Survive the descent: classic cast links, but every five films a nastier rule kicks in "
@@ -153,12 +171,60 @@ class RabbitHoleEngine(CineChainEngine):
             or not 1 <= max_lives <= MAX_LIVES_LIMIT
         ):
             problems.append(f"{MAX_LIVES_KEY} must be a whole number from 1 to {MAX_LIVES_LIMIT}")
+        escape_depth = (rules or {}).get(ESCAPE_DEPTH_KEY)
+        if escape_depth is not None and (
+            isinstance(escape_depth, bool) or not isinstance(escape_depth, int)
+            or not MIN_ESCAPE_DEPTH <= escape_depth <= MAX_ESCAPE_DEPTH
+        ):
+            problems.append(
+                f"{ESCAPE_DEPTH_KEY} must be a whole number from "
+                f"{MIN_ESCAPE_DEPTH} to {MAX_ESCAPE_DEPTH}")
         return problems
 
     def prepare_rules_config(self, rules: dict) -> dict:
         _, max_lives = lives_of(rules)
         # A new run always starts on full lives, whatever the client sent.
         return {**rules, MAX_LIVES_KEY: max_lives, LIVES_KEY: max_lives}
+
+    def award_bounty(
+        self,
+        rules: dict,
+        completed_id: str,
+        replacement_id: str | None,
+        custom: dict | None = None,
+    ) -> dict:
+        updated = super().award_bounty(rules, completed_id, replacement_id, custom)
+        lives, max_lives = lives_of(rules)
+        return {
+            **updated,
+            "wildcards_budget": rules.get("wildcards_budget", 0),
+            LIVES_KEY: min(max_lives, lives + 1),
+        }
+
+    def sync_run_state(self, run: Run, steps: Sequence[RunStep]) -> None:
+        rules = dict(run.rules_config or {})
+        override = rules.get(TIER_OVERRIDE_KEY)
+        depth = override.get("depth") if isinstance(override, dict) else None
+        if isinstance(depth, int) and not isinstance(depth, bool) and len(steps) > depth:
+            rules.pop(TIER_OVERRIDE_KEY, None)
+            run.rules_config = rules
+
+    def evaluate_run_outcome(self, run: Run, steps: list[RunStep]) -> RunOutcome | None:
+        outcome = super().evaluate_run_outcome(run, steps)
+        escape_depth = (run.rules_config or {}).get(ESCAPE_DEPTH_KEY)
+        if (
+            outcome is None
+            and run.engine_version > 1
+            and run.status == "active"
+            and isinstance(escape_depth, int)
+            and not isinstance(escape_depth, bool)
+            and len(steps) >= escape_depth
+        ):
+            remaining, _ = lives_of(run.rules_config)
+            return RunOutcome(
+                RUN_STATUS_COMPLETED,
+                f"Escaped the Rabbit Hole at Depth {len(steps)} with ❤️×{remaining}")
+        return outcome
 
     @classmethod
     def forfeit_outcome(cls, run: Run, steps: Sequence[RunStep]) -> RunOutcome | None:
@@ -169,10 +235,11 @@ class RabbitHoleEngine(CineChainEngine):
         depth = len(steps)
         return RunOutcome(
             RUN_STATUS_FAILED,
-            f"Succumbed to the Rabbit Hole at Depth {depth} ({tier_for_depth(depth).name})")
+            f"Succumbed to the Rabbit Hole at Depth {depth} "
+            f"({tier_for_depth(depth, run.rules_config).name})")
 
     def _needs_hydration(self, row: CachedMovie, rules: dict | None = None) -> bool:
-        tier = tier_for_depth(self._depth)
+        tier = tier_for_depth(self._depth, rules)
         needs = tier.number > 1 and compliance(self.session, tier, row) is None
         return needs or super()._needs_hydration(row, rules)
 
@@ -203,7 +270,7 @@ class RabbitHoleEngine(CineChainEngine):
         result = await super().validate_primary(
             from_movie_id, to_movie_id, cast_limit=cast_limit, rules=rules,
             previous_transition=previous_transition)
-        tier = tier_for_depth(self._depth)
+        tier = tier_for_depth(self._depth, rules)
         if tier.number == 1:
             return result
         later = await self._load(to_movie_id, hydrate=True, rules=rules)
@@ -257,7 +324,7 @@ class RabbitHoleEngine(CineChainEngine):
         be checked yet stay, flagged unverified)."""
         self._depth = len(history or [])
         state = tier_state(self._depth, rules)
-        tier = tier_for_depth(self._depth)
+        tier = tier_for_depth(self._depth, rules)
         pool = await super().discover_candidates(
             frontier_movie_id, mode, cast_limit, rules, previous_transition, history)
         rows = await self._hydrate_pool(pool, rules) if tier.number > 1 else {}

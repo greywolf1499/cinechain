@@ -9,7 +9,7 @@ from sqlmodel import Session
 
 from app.engines.rabbit_hole import RabbitHoleEngine, tier_for_depth, tier_state
 from app.models.cache import CachedActor, CachedMovie, CachedMovieCast, CachedMovieRating
-from app.models.run import RunStep
+from app.models.run import Run, RunStep
 from app.utils.ids import utcnow
 from tests.test_graph_mutators import TMDB_BASE, client, create_run, db_engine, log
 
@@ -21,12 +21,14 @@ ANCHOR = 1  # a film every run can already contain: modern, English, 120 min, we
 
 
 def add_film(
-    session, film_id, *, year=1990, lang="en", runtime=120, vote=7.0, imdb=None, actor=ACTOR,
+    session, film_id, *, year=1990, lang="en", runtime=120, vote=7.0, vote_count=100,
+    imdb=None, actor=ACTOR,
     title=None,
 ):
     session.add(CachedMovie(
         tmdb_id=film_id, title=title or f"Film {film_id}", release_date=f"{year}-06-01",
         status="Released", original_language=lang, runtime=runtime, vote_average=vote,
+        vote_count=vote_count,
         overview="x", popularity=10.0, origin_country='["US"]',
         cast_fetched_at=utcnow(), directors_fetched_at=utcnow()))
     session.flush()
@@ -67,6 +69,14 @@ def run_detail(client, run_id):
 
 def lives(client, run_id):
     return run_detail(client, run_id)["rules_config"]["lives_remaining"]
+
+
+def update_rules(db_engine, run_id, **updates):
+    with Session(db_engine) as session:
+        run = session.get(Run, run_id)
+        run.rules_config = {**(run.rules_config or {}), **updates}
+        session.add(run)
+        session.commit()
 
 
 def validate(client, run_id, film_id):
@@ -125,6 +135,26 @@ def test_a_new_run_starts_on_full_lives_whatever_the_client_sends(client):
     bad = client.post("/api/runs", json={
         "name": "x", "game_type": "rabbit_hole", "rules_config": {"max_lives": 0}})
     assert bad.status_code == 422
+
+
+@pytest.mark.parametrize("escape_depth,valid", [
+    (None, True), (25, True), (60, True), (24, False), (61, False), (True, False), (25.0, False),
+])
+def test_escape_depth_is_optional_and_bounded(client, escape_depth, valid):
+    rules = {"escape_depth": escape_depth} if escape_depth is not None else {}
+    response = client.post("/api/runs", json={
+        "name": "Escape", "game_type": "rabbit_hole", "rules_config": rules})
+    assert (response.status_code == 201) is valid
+
+
+def test_clients_cannot_forge_rabbit_hole_server_state(client):
+    run = rabbit_run(
+        client,
+        lives_remaining=0,
+        tier_override={"depth": 5, "tier": 5},
+    )
+    assert run_detail(client, run)["rules_config"]["lives_remaining"] == 3
+    assert "tier_override" not in run_detail(client, run)["rules_config"]
 
 
 # --- tier rules ---
@@ -220,6 +250,106 @@ def test_a_double_violation_still_costs_one_life(client, world):
     put_at_depth(world, run_id, 5)
     assert log(client, run_id, 41, force=True).status_code == 201
     assert lives(client, run_id) == 2
+
+
+def test_bounty_rewards_a_life_instead_of_a_wildcard_and_undo_restores_state(
+    client, world, db_engine
+):
+    run_id = rabbit_run(client, bounty_board=True)
+    add_film_in_run = 51
+    with Session(world) as session:
+        add_film(session, add_film_in_run, runtime=80)
+        session.commit()
+    update_rules(
+        db_engine,
+        run_id,
+        active_bounties=["short_king", "time_capsule", "hidden_gem"],
+        completed_bounties=[],
+        lives_remaining=2,
+        wildcards_budget=0,
+    )
+
+    step = log(client, run_id, add_film_in_run).json()
+    rules = run_detail(client, run_id)["rules_config"]
+    assert step["transition_metadata"]["completed_bounty"] == "short_king"
+    assert step["transition_metadata"]["bounty_life_awarded"] is True
+    assert rules["lives_remaining"] == 3 and rules["wildcards_budget"] == 0
+    assert client.delete(f"/api/runs/{run_id}/steps/{step['id']}").status_code == 204
+    rules = run_detail(client, run_id)["rules_config"]
+    assert rules["lives_remaining"] == 2 and rules["wildcards_budget"] == 0
+    assert "short_king" in rules["active_bounties"]
+
+
+def test_bounty_life_reward_is_capped_and_its_marker_cannot_be_forged(client, world):
+    run_id = rabbit_run(client, bounty_board=True)
+    with Session(world) as session:
+        add_film(session, 52, runtime=80)
+        session.commit()
+    update_rules(
+        world,
+        run_id,
+        active_bounties=["short_king", "time_capsule", "hidden_gem"],
+        completed_bounties=[],
+        lives_remaining=3,
+        wildcards_budget=0,
+    )
+    step = log(
+        client,
+        run_id,
+        52,
+        transition_metadata={"bounty_life_awarded": True, "life_lost": True},
+    ).json()
+    assert step["transition_metadata"]["bounty_life_awarded"] is False
+    assert "life_lost" not in step["transition_metadata"]
+    assert lives(client, run_id) == 3
+
+
+def test_tier_reroll_spends_one_life_and_only_affects_one_depth(client, world):
+    add_candidates(world)
+    run_id = rabbit_run(client)
+    put_at_depth(world, run_id, 5)
+    response = client.post(f"/api/runs/{run_id}/rabbit-hole/reroll")
+    assert response.status_code == 200, response.text
+    rules = response.json()["rules_config"]
+    override = rules["tier_override"]
+    assert override["depth"] == 5 and override["tier"] in {3, 4, 5}
+    assert rules["lives_remaining"] == 2
+    state = client.get(f"/api/runs/{run_id}/constraint").json()["rabbit_hole"]
+    assert state["tier"] == override["tier"] and state["tier_override"] == override["tier"]
+
+    legal_film = {2: 10, 3: 12, 4: 14, 5: 16}[override["tier"]]
+    assert log(client, run_id, legal_film).status_code == 201
+    assert "tier_override" not in run_detail(client, run_id)["rules_config"]
+    assert lives(client, run_id) == 2
+
+
+def test_tier_reroll_refusals_do_not_spend_lives(client, world):
+    tier_one = rabbit_run(client)
+    assert client.post(f"/api/runs/{tier_one}/rabbit-hole/reroll").status_code == 409
+    assert lives(client, tier_one) == 3
+
+    last_life = rabbit_run(client, max_lives=2)
+    put_at_depth(world, last_life, 5)
+    update_rules(world, last_life, lives_remaining=1)
+    assert client.post(f"/api/runs/{last_life}/rabbit-hole/reroll").status_code == 409
+    assert lives(client, last_life) == 1
+
+    inactive = rabbit_run(client)
+    put_at_depth(world, inactive, 5)
+    assert client.patch(f"/api/runs/{inactive}", json={"status": "forfeited"}).status_code == 200
+    assert client.post(f"/api/runs/{inactive}/rabbit-hole/reroll").status_code == 409
+    assert lives(client, inactive) == 3
+
+    already_rerolled = rabbit_run(client)
+    put_at_depth(world, already_rerolled, 5)
+    update_rules(
+        world,
+        already_rerolled,
+        lives_remaining=3,
+        tier_override={"depth": 5, "tier": 3},
+    )
+    assert client.post(f"/api/runs/{already_rerolled}/rabbit-hole/reroll").status_code == 409
+    assert lives(client, already_rerolled) == 3
 
 
 def test_with_no_lives_left_only_a_legal_film_continues(client, world):
@@ -329,12 +459,80 @@ def test_the_constraint_endpoint_describes_the_tier(client, world):
     assert "begins on the next hop" in state["upcoming_tier_warning"]
 
 
+def test_constraint_marks_a_zero_life_empty_pool_as_dead_end(client, world, monkeypatch):
+    run_id = rabbit_run(client, max_lives=1)
+    put_at_depth(world, run_id, 10)
+    update_rules(world, run_id, lives_remaining=0)
+
+    async def no_candidates(self, **kwargs):
+        return []
+
+    monkeypatch.setattr(RabbitHoleEngine, "discover_with_modifiers", no_candidates)
+    state = client.get(f"/api/runs/{run_id}/constraint").json()["rabbit_hole"]
+    assert state["dead_end"] is True
+
+
+def test_escape_depth_completes_the_run_with_remaining_lives(client, world):
+    run_id = rabbit_run(client, max_lives=4, escape_depth=25)
+    put_at_depth(world, run_id, 24)
+    with Session(world) as session:
+        add_film(session, 80, year=2015, vote=5.0)
+        session.commit()
+    response = log(client, run_id, 80)
+    assert response.status_code == 201
+    run = run_detail(client, run_id)
+    assert run["status"] == "completed"
+    assert run["status_reason"] == "Escaped the Rabbit Hole at Depth 25 with ❤️×4"
+    last_step_id = run["steps"][-1]["id"]
+    assert client.delete(f"/api/runs/{run_id}/steps/{last_step_id}").status_code == 204
+    assert run_detail(client, run_id)["status"] == "active"
+
+
+@pytest.mark.parametrize("vote_count", [None, 0, 9])
+def test_tier_five_tmdb_score_with_too_few_votes_is_unverified(client, world, vote_count):
+    with Session(world) as session:
+        add_film(session, 60 + (vote_count or 0), vote=4.2, vote_count=vote_count)
+        session.commit()
+    film_id = 60 + (vote_count or 0)
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/{film_id}").mock(return_value=httpx.Response(200, json={
+            "id": film_id, "title": f"Film {film_id}", "release_date": "2015-06-01",
+            "poster_path": None, "overview": "x", "origin_country": ["US"],
+            "original_language": "en", "runtime": 120, "genres": [], "popularity": 1.0,
+            "status": "Released", "vote_average": 4.2, "vote_count": vote_count,
+        }))
+        run_id = rabbit_run(client)
+        put_at_depth(world, run_id, 20)
+        result = validate(client, run_id, film_id)
+    assert result["valid"] is True
+
+
+def test_tier_five_tmdb_score_requires_ten_votes_and_imdb_still_takes_precedence(client, world):
+    with Session(world) as session:
+        add_film(session, 70, vote=6.0, vote_count=10)
+        add_film(session, 71, vote=4.2, vote_count=2, imdb="7.5")
+        session.commit()
+    run_id = rabbit_run(client)
+    put_at_depth(world, run_id, 20)
+    assert validate(client, run_id, 70)["valid"] is False
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/71").mock(return_value=httpx.Response(200, json={
+            "id": 71, "title": "Film 71", "release_date": "2015-06-01",
+            "poster_path": None, "overview": "x", "origin_country": ["US"],
+            "original_language": "en", "runtime": 120, "genres": [], "popularity": 1.0,
+            "status": "Released", "vote_average": 4.2, "vote_count": 2,
+        }))
+        assert validate(client, run_id, 71)["valid"] is False
+
+
 def test_tmdb_user_score_is_cached_with_the_movie(client, db_engine):
     with respx.mock:
         respx.get(f"{TMDB_BASE}/movie/50").mock(return_value=httpx.Response(200, json={
             "id": 50, "title": "Dud", "release_date": "2015-06-01", "poster_path": None,
             "overview": "x", "origin_country": ["US"], "original_language": "en", "runtime": 90,
-            "genres": [], "popularity": 1.0, "status": "Released", "vote_average": 4.2}))
+            "genres": [], "popularity": 1.0, "status": "Released", "vote_average": 4.2,
+            "vote_count": 13}))
         assert client.get("/api/movies/50").status_code == 200
     with Session(db_engine) as session:
         assert session.get(CachedMovie, 50).vote_average == 4.2
+        assert session.get(CachedMovie, 50).vote_count == 13

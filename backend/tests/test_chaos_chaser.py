@@ -78,7 +78,7 @@ def force_chaos(monkeypatch, handicap_id):
 def test_each_handicap_checks_its_criterion(db_engine, handicap, good, bad):
     rules = {"active_chaos": {"id": handicap, "label": "x"}}
     base = {"tmdb_id": 1, "title": "T", "release_date": "1990-01-01", "runtime": 100,
-            "original_language": "en", "vote_average": 7.0}
+            "original_language": "en", "vote_average": 7.0, "vote_count": 100}
     with Session(db_engine) as session:
         assert chaos.violation(session, CachedMovie(**{**base, **good}), rules) is None
         assert chaos.violation(session, CachedMovie(**{**base, **bad}), rules) is not None

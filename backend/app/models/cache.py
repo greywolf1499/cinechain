@@ -24,6 +24,7 @@ class CachedMovie(SQLModel, table=True):
     popularity: float | None = None
     # TMDB's 0-10 user score: only the Rabbit Hole's B-Movie Abyss reads it (when IMDb has no rating).
     vote_average: float | None = None
+    vote_count: int | None = None
     # TMDB release status ("Released", "Planned", "In Production", "Canceled",
     # etc) - used ONLY for the reality filter (unreleased/cancelled exclusion),
     # never for popularity/vote/quality filtering.

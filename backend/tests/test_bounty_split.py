@@ -133,9 +133,9 @@ def test_a_run_without_the_toggle_has_no_board_and_forged_state_is_dropped(clien
     assert "active_bounties" not in forged["rules_config"]
 
 
-def test_the_board_is_refused_where_it_cannot_work(client):
+def test_invalid_and_unsupported_boards_are_refused(client):
     assert make_run(client, bounty_board="yes").status_code == 422
-    assert make_run(client, "rabbit_hole", bounty_board=True).status_code == 422
+    assert make_run(client, "rabbit_hole", bounty_board=True).status_code == 201
     assert make_run(client, "march_madness", bounty_board=True).status_code == 422
 
 

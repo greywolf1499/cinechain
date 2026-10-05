@@ -111,7 +111,8 @@ export default function Step2RunSetup({
                 <span className="flex flex-col gap-0.5">
                   <span className="text-sm font-semibold text-zinc-100">📜 Bounty Board</span>
                   <span className="text-xs font-normal text-zinc-400">
-                    Start with 0 wildcards and 3 cinephile bounties. Each completed bounty earns a wildcard.
+                    Start with 3 cinephile bounties. Each completed bounty
+                    {draft.gameType === "rabbit_hole" ? " restores a life (up to your maximum)." : " earns a wildcard."}
                   </span>
                 </span>
               </label>

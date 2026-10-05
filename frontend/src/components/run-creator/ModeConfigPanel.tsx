@@ -16,6 +16,8 @@ import BracketConfig from "./mode-config/BracketConfig";
 import { DirectorConfig, MethodActorConfig } from "./mode-config/ActorConfig";
 import DiveConfig from "./mode-config/DiveConfig";
 import PendulumConfig from "./mode-config/PendulumConfig";
+import RabbitHoleConfig from "./mode-config/RabbitHoleConfig";
+import { RABBIT_HOLE } from "../../lib/rabbitHole";
 
 const MODE_CONFIG: Record<string, ComponentType<ModeConfigProps>> = {
   [TUG_OF_WAR]: TugConfig,
@@ -27,6 +29,7 @@ const MODE_CONFIG: Record<string, ComponentType<ModeConfigProps>> = {
   [AUTEUR_MARATHON]: DirectorConfig,
   [REGIONAL_DEEP_DIVE]: DiveConfig,
   [GENRE_PENDULUM]: PendulumConfig,
+  [RABBIT_HOLE]: RabbitHoleConfig,
 };
 
 export default function ModeConfigPanel({

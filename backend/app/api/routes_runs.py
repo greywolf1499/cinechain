@@ -1,3 +1,4 @@
+import random
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -13,6 +14,13 @@ from app.engines.meet_in_middle import (
     SIDE_TAIL,
     MeetInTheMiddleEngine,
     split_sides,
+)
+from app.engines.rabbit_hole import (
+    LIVES_KEY,
+    TIER_OVERRIDE_KEY,
+    RabbitHoleEngine,
+    lives_of,
+    tier_for_depth,
 )
 from app.engines.registry import ENGINE_REGISTRY, get_engine
 from app.engines.rt_split import RT_SPLIT, RottenTomatoesSplitEngine
@@ -124,7 +132,7 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
 # Metadata keys only the server may set: a client-supplied `collision` would be a free win.
 SERVER_OWNED_METADATA = (
     "tunnel_side", "collision", "collision_with", "golden_reunion", "character_hop",
-    "near_miss_with", "tug_team", "seed", "life_lost",
+    "near_miss_with", "tug_team", "seed", "life_lost", "bounty_life_awarded",
     # Bounty Board awards and Rotten Tomatoes Split settlements: a client could mint wildcards/points.
     "completed_bounty", "bounty_replacement",
     "household_score", "critic_score", "audience_score", "divergence", "point_to")
@@ -755,7 +763,18 @@ async def _log_step(
     session.add(step)
     session.flush()
     if bounty is not None:
-        run.rules_config = bounties.award(run.rules_config or {}, *bounty)
+        before_lives = (
+            lives_of(run.rules_config)[0] if run.game_type == rabbit_hole.RABBIT_HOLE else None)
+        awarded_rules = get_engine(run.game_type, session, tmdb).award_bounty(
+            run.rules_config or {}, *bounty)
+        if before_lives is not None:
+            extra_metadata["bounty_life_awarded"] = (
+                awarded_rules.get(LIVES_KEY, before_lives) > before_lives)
+            step.transition_metadata = {
+                **(step.transition_metadata or {}),
+                "bounty_life_awarded": extra_metadata["bounty_life_awarded"],
+            }
+        run.rules_config = awarded_rules
         session.add(run)
     if chaos.active(run.rules_config) is not None:
         # The handicap was for this step only.
@@ -879,11 +898,25 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
     collided = bool(metadata.get("collision"))
     session.delete(step)
     session.flush()
+    rules_before_revoke = dict(run.rules_config or {})
     if metadata.get(bounties.COMPLETED_METADATA_KEY):
         # The step earned a wildcard for a bounty: take both back.
         run.rules_config = bounties.revoke(
             run.rules_config or {}, metadata[bounties.COMPLETED_METADATA_KEY],
             metadata.get(bounties.REPLACEMENT_METADATA_KEY))
+        session.add(run)
+    if run.game_type == rabbit_hole.RABBIT_HOLE:
+        lives, max_lives = lives_of(rules_before_revoke)
+        if metadata.get("bounty_life_awarded"):
+            lives = max(0, lives - 1)
+        if metadata.get("life_lost"):
+            lives = min(max_lives, lives + 1)
+        restored_rules = {
+            **(run.rules_config or rules_before_revoke),
+            "wildcards_budget": rules_before_revoke.get("wildcards_budget", 0),
+            LIVES_KEY: lives,
+        }
+        run.rules_config = restored_rules
         session.add(run)
     reopen = collided and run.status == RUN_STATUS_COMPLETED
     remaining = _run_history(session, run.id)
@@ -910,6 +943,13 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
         and run.status == RUN_STATUS_COMPLETED
         and (run.status_reason or "").startswith(SPLIT_VICTORY_PREFIX)
         and split_winner(compute_split_scores(remaining), run.rules_config) is None
+    ):
+        reopen = True
+    if (
+        run.game_type == rabbit_hole.RABBIT_HOLE
+        and run.status == RUN_STATUS_COMPLETED
+        and (run.status_reason or "").startswith("Escaped the Rabbit Hole at Depth ")
+        and len(remaining) < (run.rules_config or {}).get("escape_depth", len(remaining) + 1)
     ):
         reopen = True
     if reopen:
@@ -1376,11 +1416,78 @@ async def get_run_constraint(
     """The rule shaping this run's next hop (e.g. "must be a Director"), or null."""
     engine = get_engine(run.game_type, session, tmdb)
     tail = _last_step(session, run.id)
-    return await engine.describe_run_constraint(
+    rules = _run_rules(run)
+    history = _run_history(session, run.id)
+    constraint = await engine.describe_run_constraint(
         tail.movie_id if tail is not None else None,
         tail.transition_metadata if tail is not None else None,
-        _run_rules(run),
-        _run_history(session, run.id))
+        rules,
+        history)
+    if (
+        isinstance(engine, RabbitHoleEngine)
+        and constraint is not None
+        and constraint.rabbit_hole is not None
+        and constraint.rabbit_hole.lives_remaining == 0
+        and tail is not None
+    ):
+        candidates = await engine.discover_with_modifiers(
+            frontier_movie_id=tail.movie_id,
+            cast_limit=rules.get("max_cast_order"),
+            rules=rules,
+            previous_transition=tail.transition_metadata,
+            history=history,
+        )
+        constraint = constraint.model_copy(update={
+            "rabbit_hole": constraint.rabbit_hole.model_copy(
+                update={"dead_end": not candidates})
+        })
+    return constraint
+
+
+@router.post("/{run_id}/rabbit-hole/reroll", response_model=RunDetail)
+def reroll_rabbit_hole_tier(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    """Spend one life to replace the tier requirement for the next depth only."""
+    if run.game_type != rabbit_hole.RABBIT_HOLE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tier re-rolls are only available in Rabbit Hole runs",
+        )
+    if run.status != RUN_STATUS_ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This run is no longer active")
+
+    rules = dict(_run_rules(run))
+    depth = len(_run_history(session, run.id))
+    lives, _ = lives_of(rules)
+    if lives < 2:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="At least two lives are needed to re-roll a tier",
+        )
+    if tier_for_depth(depth, rules).number <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tier re-rolls are available from Tier 2 onward",
+        )
+    override = rules.get(TIER_OVERRIDE_KEY)
+    if isinstance(override, dict) and override.get("depth") == depth:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This depth already has a re-rolled tier",
+        )
+
+    current_tier = tier_for_depth(depth).number
+    choices = [tier for tier in range(2, 6) if tier != current_tier]
+    rules[TIER_OVERRIDE_KEY] = {"depth": depth, "tier": random.choice(choices)}
+    rules[LIVES_KEY] = lives - 1
+    run.rules_config = rules
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
 
 
 @router.get("/{run_id}/suggestions", response_model=list[Suggestion])

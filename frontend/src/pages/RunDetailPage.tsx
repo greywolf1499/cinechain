@@ -98,6 +98,7 @@ export default function RunDetailPage() {
   const { data: stats } = useRunStats(id);
   const { data: engines } = useEngines();
   const { data: curatedLists } = useCuratedLists();
+  const [showDirectSearch, setShowDirectSearch] = useState(false);
   const deleteStep = useDeleteStep(id ?? "");
   const deleteRun = useDeleteRun();
   const updateRun = useUpdateRun(id ?? "");
@@ -228,7 +229,13 @@ export default function RunDetailPage() {
           {run.status === "failed" && (
             <RabbitHoleGameOver steps={run.steps} rules={run.rules_config} reason={run.status_reason} />
           )}
-          <RabbitHoleHud rules={run.rules_config} depth={run.steps.length} finished={locked} />
+          <RabbitHoleHud
+            runId={run.id}
+            rules={run.rules_config}
+            depth={run.steps.length}
+            finished={locked}
+            onSearchManually={() => setShowDirectSearch(true)}
+          />
         </>
       )}
 
@@ -295,6 +302,8 @@ export default function RunDetailPage() {
                 capabilities={capabilities}
                 gameType={run.game_type}
                 participantCount={run.participants.length}
+                showDirectSearch={showDirectSearch}
+                onDirectSearchChange={setShowDirectSearch}
               />
             </div>
           )}
@@ -313,6 +322,8 @@ export default function RunDetailPage() {
               capabilities={capabilities}
               gameType={run.game_type}
               participantCount={run.participants.length}
+              showDirectSearch={showDirectSearch}
+              onDirectSearchChange={setShowDirectSearch}
             />
             <MiniPassportWidget stats={stats} rules={run.rules_config} castLinked={castLinked} />
             <RulesSummaryCard
@@ -654,6 +665,8 @@ function ActiveFrontierCard({
   capabilities,
   gameType,
   participantCount,
+  showDirectSearch,
+  onDirectSearchChange,
 }: {
   runId: string;
   tailStep: RunStep | undefined;
@@ -663,6 +676,8 @@ function ActiveFrontierCard({
   capabilities: string[];
   gameType: string;
   participantCount: number;
+  showDirectSearch: boolean;
+  onDirectSearchChange: (open: boolean) => void;
 }) {
   const navigate = useNavigate();
   const [showHub, setShowHub] = useState(false);
@@ -671,7 +686,6 @@ function ActiveFrontierCard({
   const forkEnabled = !!rulesConfig.blind_fork;
   const forkPending = !!rulesConfig.pending_fork;
   const canFork = capabilities.includes("discover_candidates") && !capabilities.includes("tunnel");
-  const [showDirectSearch, setShowDirectSearch] = useState(false);
   const { data: constraint } = useRunConstraint(runId);
   const isRoulette = capabilities.includes("roulette_spin");
   const canDiscover = capabilities.includes("discover_candidates");
@@ -776,7 +790,7 @@ function ActiveFrontierCard({
         {canDiscover && (
         <button
           type="button"
-          onClick={() => setShowDirectSearch((v) => !v)}
+          onClick={() => onDirectSearchChange(!showDirectSearch)}
           className="text-xs text-zinc-500 transition-colors hover:text-zinc-300"
         >
           Or search for a specific film directly
@@ -797,7 +811,7 @@ function ActiveFrontierCard({
             tailMovieId={tailStep?.movie_id}
             rulesConfig={rulesConfig}
             steps={steps}
-            onLogged={() => setShowDirectSearch(false)}
+            onLogged={() => onDirectSearchChange(false)}
           />
         </div>
       )}

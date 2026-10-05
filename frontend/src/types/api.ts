@@ -53,6 +53,10 @@ export interface RulesConfig {
 	/** The Rabbit Hole: forced (rule-breaking) steps cost a life instead of a wildcard. */
 	lives_remaining?: number;
 	max_lives?: number;
+	/** The Rabbit Hole: optional depth at which escaping completes the run. */
+	escape_depth?: number | null;
+	/** Server-owned one-depth Rabbit Hole tier override. */
+	tier_override?: { depth: number; tier: number };
 	/** Canon-Only Island: the CuratedList every film must belong to. */
 	allowed_curated_list_id?: string;
 	/** Decade Sieve: the decade start (e.g. 1970) every film must fall in. */
@@ -444,6 +448,8 @@ export interface RabbitHoleState {
 	next_tier_rule: string | null;
 	steps_until_next: number | null;
 	upcoming_tier_warning: string | null;
+	dead_end: boolean;
+	tier_override: number | null;
 }
 
 export interface ValidationResult {

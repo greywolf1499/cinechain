@@ -540,6 +540,17 @@ export function useRollCustomBounty(runId: string) {
 	});
 }
 
+export function useRabbitHoleReroll(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => api.post<RunDetail>(`/runs/${runId}/rabbit-hole/reroll`),
+		onSuccess: (run) => {
+			queryClient.setQueryData(queryKeys.run(runId), run);
+			queryClient.invalidateQueries({ queryKey: [...queryKeys.run(runId), "constraint"] });
+		},
+	});
+}
+
 export function useMarkStepWatched(runId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({

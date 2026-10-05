@@ -118,6 +118,8 @@ class RabbitHoleState(BaseModel):
     steps_until_next: int | None = None
     # Set when the next tier is 1 or 2 hops away.
     upcoming_tier_warning: str | None = None
+    dead_end: bool = False
+    tier_override: int | None = None
 
 
 class ConstraintInfo(BaseModel):

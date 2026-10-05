@@ -26,7 +26,7 @@ from app.schemas.engine import (
     SuggestionFilters,
     ValidationResult,
 )
-from app.services import cache_repo
+from app.services import bounties, cache_repo
 from app.services.tmdb import TMDBClient
 from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
 
@@ -238,6 +238,16 @@ class BaseChallengeEngine(ABC):
         """Async, I/O-capable counterpart of `prepare_rules_config`, run once when a run is created
         (e.g. fetching an actor's filmography). Raises `RunSetupError` when the run can't start."""
         return rules
+
+    def award_bounty(
+        self,
+        rules: dict,
+        completed_id: str,
+        replacement_id: str | None,
+        custom: dict | None = None,
+    ) -> dict:
+        """Apply a completed Bounty Board reward (wildcard by default)."""
+        return bounties.award(rules, completed_id, replacement_id, custom)
 
     def sync_run_state(self, run: Run, steps: Sequence[RunStep]) -> None:
         """Refresh any state the engine derives from the steps and caches on the run (e.g. Tug of

@@ -58,4 +58,6 @@ def rating_of(session, row: CachedMovie) -> float | None:
             return float(rated.imdb_rating)
         except ValueError:
             pass
+    if row.vote_count is None or row.vote_count < 10:
+        return None
     return row.vote_average

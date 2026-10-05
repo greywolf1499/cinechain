@@ -22,7 +22,20 @@ export const RABBIT_TIERS: RabbitTier[] = [
 const DEFAULT_LIVES = 3;
 const WARNING_WINDOW = 2;
 
-export function tierForDepth(depth: number): RabbitTier {
+export function tierForDepth(
+  depth: number,
+  rules?: Pick<RulesConfig, "tier_override">,
+): RabbitTier {
+  const override = rules?.tier_override;
+  if (
+    override &&
+    override.depth === depth &&
+    Number.isInteger(override.tier) &&
+    override.tier >= 2 &&
+    override.tier <= RABBIT_TIERS.length
+  ) {
+    return RABBIT_TIERS[override.tier - 1];
+  }
   return [...RABBIT_TIERS].reverse().find((tier) => depth >= tier.startDepth) ?? RABBIT_TIERS[0];
 }
 
@@ -35,11 +48,16 @@ export interface RabbitHud {
   warning: string | null;
   lives: number;
   maxLives: number;
+  tierOverride: number | null;
 }
 
-export function rabbitHud(rules: Pick<RulesConfig, "lives_remaining" | "max_lives">, depth: number): RabbitHud {
-  const tier = tierForDepth(depth);
-  const next = RABBIT_TIERS[tier.number] ?? null;
+export function rabbitHud(
+  rules: Pick<RulesConfig, "lives_remaining" | "max_lives" | "tier_override">,
+  depth: number,
+): RabbitHud {
+  const tier = tierForDepth(depth, rules);
+  const scheduledTier = tierForDepth(depth);
+  const next = RABBIT_TIERS[scheduledTier.number] ?? null;
   const hopsUntilNext = next ? next.startDepth - depth : null;
   const maxLives = rules.max_lives ?? DEFAULT_LIVES;
   const lives = Math.max(0, Math.min(rules.lives_remaining ?? maxLives, maxLives));
@@ -49,7 +67,16 @@ export function rabbitHud(rules: Pick<RulesConfig, "lives_remaining" | "max_live
           hopsUntilNext === 1 ? "on the next hop" : `in ${hopsUntilNext} hops`
         }!`
       : null;
-  return { depth, tier, next, hopsUntilNext, warning, lives, maxLives };
+  return {
+    depth,
+    tier,
+    next,
+    hopsUntilNext,
+    warning,
+    lives,
+    maxLives,
+    tierOverride: tier.number !== scheduledTier.number ? tier.number : null,
+  };
 }
 
 export interface RabbitSummary {

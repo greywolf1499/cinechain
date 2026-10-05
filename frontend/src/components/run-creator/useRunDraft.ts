@@ -10,6 +10,7 @@ import { clearModifiers, modifierPayload } from "../../lib/modifiers";
 import { DEFAULT_TARGET_POINTS, RT_SPLIT } from "../../lib/splitScore";
 import { DEFAULT_TARGET_LEAD, TUG_OF_WAR } from "../../lib/tugOfWar";
 import { MEET_IN_THE_MIDDLE } from "../../lib/tunnel";
+import { RABBIT_HOLE } from "../../lib/rabbitHole";
 import { RULE_PRESETS } from "../RulesetFields";
 import { parseRawRules, RAW_RULES_EXAMPLE } from "../RawRulesEditor";
 import { TRACKER_RULES } from "./shared";
@@ -36,6 +37,7 @@ export interface RunDraft {
   diveDecade: string;
   bountyBoard: boolean;
   splitTarget: number;
+  escapeDepth: number | null;
   rawMode: boolean;
   rawText: string;
 }
@@ -64,6 +66,7 @@ export function initialDraft(): RunDraft {
     diveDecade: "",
     bountyBoard: false,
     splitTarget: DEFAULT_TARGET_POINTS,
+    escapeDepth: null,
     rawMode: false,
     rawText: "",
   };
@@ -118,6 +121,9 @@ export function useRunDraft(
     ...(isMethodActor && draft.actor ? { actor_id: draft.actor.person_id } : {}),
     ...(isAuteur && draft.director ? { director_id: draft.director.person_id } : {}),
     ...(isSplit ? { target_points: draft.splitTarget } : {}),
+    ...(draft.gameType === RABBIT_HOLE && draft.escapeDepth !== null
+      ? { escape_depth: draft.escapeDepth }
+      : {}),
     ...(draft.bountyBoard && canBounty ? { bounty_board: true } : {}),
     ...(isDive
       ? {
@@ -164,6 +170,13 @@ export function useRunDraft(
     if (isDive && !draft.diveListId) messages.push("Choose a canon list to slice.");
     if (isDive && !draft.diveCountry && !draft.diveDecade) {
       messages.push("Choose a country, a decade, or both for the slice.");
+    }
+    if (
+      draft.gameType === RABBIT_HOLE &&
+      draft.escapeDepth !== null &&
+      (!Number.isInteger(draft.escapeDepth) || draft.escapeDepth < 25 || draft.escapeDepth > 60)
+    ) {
+      messages.push("Set the Rabbit Hole escape depth between 25 and 60.");
     }
     if (rawEnabled && rawParse.error) messages.push(`Fix the raw rules JSON: ${rawParse.error}`);
     return messages;

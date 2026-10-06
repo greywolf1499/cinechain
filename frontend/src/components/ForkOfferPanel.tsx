@@ -14,6 +14,7 @@ import {
   useWithdrawFork,
 } from "../lib/queries";
 import { useAuthStore } from "../store/authStore";
+import { useTableSeat } from "../lib/tableMode";
 import type { PendingFork, PitchResult, RunDetail, RunStep, UserSummary } from "../types/api";
 
 function errorMessage(err: unknown): string {
@@ -34,11 +35,15 @@ export default function ForkOfferPanel({
 }) {
   const fork = run.rules_config.pending_fork;
   const meId = useAuthStore((s) => s.user?.id);
+  const seat = useTableSeat(run.id);
+  const actorId = run.rules_config.table_mode ? seat?.id : meId;
+  if (seat?.pending) return null;
   if (!fork || run.status !== "active") return null;
   const offerer = users?.find((u) => u.id === fork.offered_by_id)?.display_name ?? "Your partner";
-  if (fork.offered_by_id === meId) return <OfferWaitingBanner runId={run.id} fork={fork} />;
+  if (fork.offered_by_id === actorId) return <OfferWaitingBanner runId={run.id} fork={fork} />;
   return (
-    <PartnerOffer key={fork.offered_at} runId={run.id} fork={fork} offerer={offerer} frontier={frontier} />
+    <PartnerOffer key={`${fork.offered_at}:${actorId}`} runId={run.id} fork={fork} offerer={offerer} frontier={frontier}
+      tableTokens={run.rules_config.table_mode ? users?.find((u) => u.id === actorId)?.veto_tokens ?? 0 : undefined} />
   );
 }
 
@@ -79,11 +84,13 @@ function PartnerOffer({
   fork,
   offerer,
   frontier,
+  tableTokens,
 }: {
   runId: string;
   fork: PendingFork;
   offerer: string;
   frontier: RunStep | undefined;
+  tableTokens?: number;
 }) {
   const [open, setOpen] = useState(true);
   const [advice, setAdvice] = useState<Record<number, string>>({});
@@ -93,7 +100,8 @@ function PartnerOffer({
   const veto = useVetoForkMovie(runId);
   const accept = useAcceptForkMovie(runId);
   const goldenVeto = useGoldenVeto(runId);
-  const tokens = useAuthStore((s) => s.user?.veto_tokens ?? 0);
+  const ownTokens = useAuthStore((s) => s.user?.veto_tokens ?? 0);
+  const tokens = tableTokens ?? ownTokens;
   const vetoPhase = fork.movie_ids.length > 2;
   const busy = veto.isPending || accept.isPending || goldenVeto.isPending;
   const error = [veto, accept, goldenVeto].find((m) => m.isError)?.error;

@@ -86,6 +86,7 @@ export default function BracketView({
           users={users}
           participantIds={run.participants.map((p) => p.user_id)}
           currentUserId={currentUserId}
+          tableMode={!!run.rules_config.table_mode}
           cachedCommentary={run.rules_config.bracket_commentary?.[open.id] ?? null}
           onClose={() => setOpenId(null)}
         />
@@ -260,6 +261,7 @@ function MatchupCard({
   users,
   participantIds,
   currentUserId,
+  tableMode,
   cachedCommentary,
   onClose,
 }: {
@@ -270,6 +272,7 @@ function MatchupCard({
   users: { id: string; display_name: string }[] | undefined;
   participantIds: string[];
   currentUserId: string | undefined;
+  tableMode: boolean;
   /** The AI announcer's line for this matchup, if one was already generated. */
   cachedCommentary: string | null;
   onClose: () => void;
@@ -373,7 +376,7 @@ function MatchupCard({
                   </p>
                 )}
                 <div className="mt-auto flex flex-col gap-1.5">
-                  {partners && (
+                  {partners && !tableMode && (
                     <button
                       type="button"
                       disabled={pending}
@@ -409,6 +412,23 @@ function MatchupCard({
           );
         })}
       </div>
+      {tableMode && partners && <div className="mt-4 flex flex-col gap-2" aria-label="Table votes">
+        {participantIds.map((participantId) => <div key={participantId} className="flex flex-wrap items-center gap-2">
+          <span className="min-w-20 text-sm text-zinc-300">{nameOf(participantId)}:</span>
+          {sides.map((movieId, index) => movieId !== null && <button key={movieId} type="button"
+            aria-pressed={matchup.votes[participantId] === movieId} disabled={pending || !isActiveMatchup(matchup)}
+            className={cn("rounded border px-4 py-2 text-sm", matchup.votes[participantId] === movieId ? "border-accent text-accent" : "border-app-border")}
+            onClick={async () => {
+              setError(null);
+              try {
+                const updated = await castVote.mutateAsync({ matchup_id: matchup.id, movie_id: movieId, acting_participant_id: participantId });
+                const resolved = BRACKET_ROUNDS.flatMap((round) => updated.rules_config.bracket?.[round.key] ?? [])
+                  .find((item) => item.id === matchup.id)?.winner;
+                if (resolved) onClose();
+              } catch (cause) { setError(cause instanceof Error ? cause.message : "Vote failed."); }
+            }}>{index === 0 ? "A" : "B"} · {filmOf(films, movieId)?.title}</button>)}
+        </div>)}
+      </div>}
       {partners && (
         <p className="mt-3 text-center text-[11px] text-zinc-500">
           A majority of the table's votes decides the matchup; on a tie anyone can advance the winner.

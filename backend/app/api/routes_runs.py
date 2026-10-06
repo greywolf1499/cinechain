@@ -104,7 +104,7 @@ from app.services import blind_fork, bounties, cache_repo, pool_options
 from app.services.bridge_paths import parse_countries
 from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient
-from app.services.veto import consume_veto_token
+from app.services.veto import consume_veto_token, refresh_veto_tokens
 from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
 
@@ -227,6 +227,7 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
 
 # Metadata keys only the server may set: a client-supplied `collision` would be a free win.
 SERVER_OWNED_METADATA = (
+    "acting_participant_id",
     "tunnel_side",
     "collision",
     "collision_with",
@@ -274,6 +275,27 @@ def _run_rules(run: Run) -> dict:
     return run.rules_config or dict(DEFAULT_RULES_CONFIG)
 
 
+def _acting_user(
+    session: Session, run: Run, current_user: User, acting_participant_id: str | None,
+) -> User:
+    if acting_participant_id is None:
+        return current_user
+    if (
+        (run.rules_config or {}).get("table_mode") is not True
+        or session.get(RunParticipant, (run.id, current_user.id)) is None
+        or session.get(RunParticipant, (run.id, acting_participant_id)) is None
+    ):
+        raise HTTPException(403, detail="Acting identity requires Table Mode and run membership")
+    actor = session.get(User, acting_participant_id)
+    if actor is None:
+        raise HTTPException(403, detail="Acting participant is unavailable")
+    return actor
+
+
+def _step_actor_id(step: RunStep) -> str | None:
+    return (step.transition_metadata or {}).get("acting_participant_id") or step.logged_by_user_id
+
+
 def _count_wildcards_consumed(session: Session, run_id: str) -> int:
     steps = session.exec(select(RunStep).where(RunStep.run_id == run_id)).all()
     return sum(1 for step in steps if (step.transition_metadata or {}).get("wildcard_used"))
@@ -317,6 +339,7 @@ async def _enforce_run_rules(
     movie: CachedMovie,
     payload: RunStepCreate,
     user: User,
+    fork_team: str | None = None,
 ) -> dict:
     """Validates a candidate step against the run's rules_config.
 
@@ -333,7 +356,10 @@ async def _enforce_run_rules(
     if run.game_type == TUG_OF_WAR:
         tug_engine = TugOfWarEngine(session, tmdb)
         players = tug_engine.team_players(run)
-        team = payload.tug_team or team_of(players, user.id)
+        team = fork_team or (
+            team_of(players, user.id) if rules.get("table_mode") is True
+            else payload.tug_team or team_of(players, user.id)
+        )
         if team not in (TEAM_A, TEAM_B) or players.get(team) is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -628,6 +654,8 @@ async def create_run(
     rules_config = blind_fork.strip_server_rules(
         payload.rules_config if payload.rules_config is not None else dict(DEFAULT_RULES_CONFIG)
     )
+    if "table_mode" in rules_config and not isinstance(rules_config["table_mode"], bool):
+        raise HTTPException(422, detail="table_mode must be a boolean")
     engine_class = ENGINE_REGISTRY.get(payload.game_type)
     if engine_class is not None:
         engine = engine_class(session, tmdb)
@@ -906,8 +934,10 @@ async def _log_step(
     user: User,
     payload: RunStepCreate,
     omdb: OMDbClient | None = None,
+    fork_team: str | None = None,
 ) -> RunStep:
     """Validate and add one step, then evaluate the run's outcome. Caller commits."""
+    actor = _acting_user(session, run, user, payload.acting_participant_id)
     split = run.game_type == RT_SPLIT
     if payload.no_contest and not split:
         raise HTTPException(422, detail="No-contest is only available on Rotten Tomatoes Split runs")
@@ -923,8 +953,10 @@ async def _log_step(
         if omdb is not None:  # the scores the split is judged on come from OMDb
             await cache_repo.get_movie_ratings(session, tmdb, omdb, movie.tmdb_id)
     extra_metadata, linked_metadata = await _enforce_run_rules(
-        session, tmdb, run, movie, payload, user
+        session, tmdb, run, movie, payload, actor, fork_team
     )
+    if (run.rules_config or {}).get("table_mode") is True:
+        extra_metadata["acting_participant_id"] = actor.id
     if split:
         if payload.no_contest:
             extra_metadata["split_no_contest"] = True
@@ -1006,6 +1038,7 @@ def mark_step_watched(
     step_id: str,
     payload: MarkWatchedRequest,
     session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
 ):
@@ -1017,6 +1050,9 @@ def mark_step_watched(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Step is already marked as watched"
         )
+    actor = _acting_user(session, run, current_user, payload.acting_participant_id)
+    if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
+        raise HTTPException(403, detail="Switch to the participant who queued this film")
     if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3):
         players = TugOfWarEngine(session, tmdb).team_players(run)
         team = step_turn_team(step, players)
@@ -1046,14 +1082,18 @@ def update_step(
     step_id: str,
     payload: RunStepUpdate,
     session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
 ):
     step = session.get(RunStep, step_id)
     if step is None or step.run_id != run.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
+    actor = _acting_user(session, run, current_user, payload.acting_participant_id)
     if payload.watched_at is not None and step.status == "planned":
         _ensure_run_open(run)
+        if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
+            raise HTTPException(403, detail="Switch to the participant who queued this film")
         if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3):
             players = TugOfWarEngine(session, tmdb).team_players(run)
             team = step_turn_team(step, players)
@@ -1246,6 +1286,7 @@ async def offer_fork(
 ) -> RunDetail:
     """Blind Fork step 1: offer the partner three films that each legally follow the chain."""
     _ensure_run_open(run)
+    actor = _acting_user(session, run, current_user, payload.acting_participant_id)
     rules = _run_rules(run)
     if not rules.get(blind_fork.BLIND_FORK_KEY):
         raise HTTPException(
@@ -1266,7 +1307,7 @@ async def offer_fork(
         movie = await cache_repo.get_movie(session, tmdb, movie_id)
         try:
             await _enforce_run_rules(
-                session, tmdb, run, movie, RunStepCreate(movie_id=movie_id), current_user
+                session, tmdb, run, movie, RunStepCreate(movie_id=movie_id), actor
             )
         except HTTPException as exc:
             reason = exc.detail.get("reason") if isinstance(exc.detail, dict) else exc.detail
@@ -1276,7 +1317,7 @@ async def offer_fork(
     run.rules_config = blind_fork.with_fork(
         rules,
         blind_fork.new_offer(
-            current_user.id,
+            actor.id,
             payload.movie_ids,
             {
                 movie_id: _without_server_keys(meta) or {}
@@ -1292,13 +1333,15 @@ async def offer_fork(
 
 @router.delete("/{run_id}/fork", response_model=RunDetail)
 def withdraw_fork(
+    acting_participant_id: str | None = Query(default=None),
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
     run: Run = Depends(run_participant_guard),
 ) -> RunDetail:
     """The offering player takes their offer back (e.g. the partner is away)."""
+    actor = _acting_user(session, run, current_user, acting_participant_id)
     fork = _require_fork(run)
-    if fork.get("offered_by_id") != current_user.id:
+    if fork.get("offered_by_id") != actor.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the player who made the offer can withdraw it",
@@ -1321,7 +1364,8 @@ def veto_fork_movie(
     workflow; the Golden Veto token is for tearing up a whole offer or a step)."""
     _ensure_run_open(run)
     fork = _require_fork(run)
-    _require_partner_of_offer(fork, current_user)
+    actor = _acting_user(session, run, current_user, payload.acting_participant_id)
+    _require_partner_of_offer(fork, actor)
     movie_ids = list(fork["movie_ids"])
     if len(movie_ids) != blind_fork.OFFER_SIZE:
         raise HTTPException(
@@ -1338,7 +1382,7 @@ def veto_fork_movie(
             **fork,
             "movie_ids": movie_ids,
             "vetoed_movie_id": payload.movie_id,
-            "vetoed_by_id": current_user.id,
+            "vetoed_by_id": actor.id,
         },
     )
     session.add(run)
@@ -1360,7 +1404,8 @@ async def accept_fork_movie(
     """Blind Fork step 2b: the partner commits one of the two remaining films as the next step."""
     _ensure_run_open(run)
     fork = _require_fork(run)
-    _require_partner_of_offer(fork, current_user)
+    actor = _acting_user(session, run, current_user, payload.acting_participant_id)
+    _require_partner_of_offer(fork, actor)
     if len(fork["movie_ids"]) != blind_fork.OFFER_SIZE - 1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Veto one of the three films first"
@@ -1380,12 +1425,14 @@ async def accept_fork_movie(
         run,
         current_user,
         RunStepCreate(
+            acting_participant_id=payload.acting_participant_id,
             movie_id=payload.movie_id,
             transition_metadata=link,
             user_notes=payload.user_notes,
             status=payload.status,
             tug_team=tug_team,
         ),
+        fork_team=tug_team,
     )
     run.rules_config = blind_fork.with_fork(run.rules_config, None)
     session.add(run)
@@ -1405,9 +1452,10 @@ def golden_veto(
     """Spend one Golden Veto token (30-day refill) to overrule the partner: tear up their pending
     Blind Fork offer, or remove the step they just logged."""
     _ensure_run_open(run)
+    actor = _acting_user(session, run, current_user, payload.acting_participant_id)
     if payload.target == "fork":
         fork = _require_fork(run)
-        _require_partner_of_offer(fork, current_user)
+        _require_partner_of_offer(fork, actor)
     else:
         if run.game_type == MEET_IN_THE_MIDDLE:
             raise HTTPException(
@@ -1424,16 +1472,17 @@ def golden_veto(
         if run.game_type == TUG_OF_WAR:
             players = TugOfWarEngine(session, tmdb).team_players(run)
             target_team = step_turn_team(target_step, players)
-            current_team = team_of(players, current_user.id)
+            current_team = team_of(players, actor.id)
             is_own_team = target_team is None or current_team is None or target_team == current_team
         else:
-            is_own_team = target_step.logged_by_user_id in (None, current_user.id)
+            is_own_team = _step_actor_id(target_step) in (None, actor.id)
         if is_own_team:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="You can only veto a step your partner logged - delete your own instead",
             )
-    if not consume_veto_token(session, current_user):
+    refresh_veto_tokens(session, actor)
+    if not consume_veto_token(session, actor):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="No Golden Veto tokens left - you get one every 30 days",
@@ -1447,7 +1496,7 @@ def golden_veto(
     session.refresh(run)
     return GoldenVetoResult(
         target=payload.target,
-        veto_tokens=current_user.veto_tokens,
+        veto_tokens=actor.veto_tokens,
         run=_to_run_detail(session, run),
     )
 

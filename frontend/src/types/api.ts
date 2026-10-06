@@ -18,6 +18,7 @@ export interface UserSummary {
 	id: string;
 	username: string;
 	display_name: string;
+	veto_tokens?: number;
 }
 
 export interface WatchlistStatus {
@@ -44,6 +45,7 @@ export type ChronoDirection = "climb" | "descent";
 export type RuntimeStaircase = "ascending" | "descending";
 
 export interface RulesConfig {
+	table_mode?: boolean;
 	preset: RulesPreset;
 	allow_repeats: RepeatPolicy;
 	no_consecutive_actor: boolean;

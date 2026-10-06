@@ -6,12 +6,16 @@ export default function ParticipantPicker({
   owner,
   showTeams,
   onToggle,
+  tableMode,
+  onTableMode,
 }: {
   users: UserSummary[] | undefined;
   selectedIds: string[];
   owner: UserSummary | null | undefined;
   showTeams: boolean;
   onToggle: (id: string) => void;
+  tableMode: boolean;
+  onTableMode: (enabled: boolean) => void;
 }) {
   const participants = selectedIds
     .map((id) => users?.find((user) => user.id === id))
@@ -48,6 +52,10 @@ export default function ParticipantPicker({
         })}
         {users?.length === 1 && <span className="px-2 py-1 text-xs text-zinc-500">No other users yet.</span>}
       </div>
+      {participants.length > 0 && <label className="flex items-center gap-2 text-sm text-zinc-300">
+        <input type="checkbox" checked={tableMode} onChange={(event) => onTableMode(event.target.checked)} />
+        📱 One device, many players
+      </label>}
     </section>
   );
 }

@@ -19,6 +19,7 @@ export interface RunDraft {
   name: string;
   gameType: string;
   participantIds: string[];
+  tableMode: boolean;
   seedMovie: MovieSummary | null;
   tailSeedMovie: MovieSummary | null;
   rules: RulesConfig;
@@ -47,6 +48,7 @@ export function initialDraft(): RunDraft {
     name: "",
     gameType: "cinechain",
     participantIds: [],
+    tableMode: false,
     seedMovie: null,
     tailSeedMovie: null,
     rules: { preset: "loading", allow_repeats: "strict", no_consecutive_actor: false,
@@ -156,7 +158,10 @@ export function useRunDraft(
         }
       : {}),
   };
-  const effectiveRules = rawEnabled && rawParse.value ? rawParse.value : formRules;
+  const effectiveRules: RulesConfig | RawRulesConfig = {
+    ...(rawEnabled && rawParse.value ? rawParse.value : formRules),
+    table_mode: draft.participantIds.length > 0 && draft.tableMode,
+  };
   const slices = useCuratedSlices(isDive ? draft.diveListId : undefined);
   const seedSettingsReady = (
     !needsCanonList || !!effectiveRules.allowed_curated_list_id
@@ -231,14 +236,13 @@ export function useRunDraft(
   }, [draft, engine, isAuteur, isBracket, isDive, isMethodActor, isTunnel, needsCanonList, rawEnabled, rawParse.error, sameSeeds, seedSettingsReady, seedOptions.data, seedOptions.isError, seedOptions.error, slices.data, slices.isError, slices.error, effectiveRules.target_country, effectiveRules.target_decade]);
 
   function buildPayload(): CreateRunPayload {
-    const rules = rawEnabled && rawParse.value ? rawParse.value : formRules;
     return {
       name: draft.name.trim(),
       game_type: draft.gameType,
       participant_user_ids: draft.participantIds,
       ...(engine?.seed_policy !== "none" ? { seed_movie_id: draft.seedMovie?.tmdb_id ?? null } : {}),
       tail_seed_movie_id: isTunnel ? (draft.tailSeedMovie?.tmdb_id ?? null) : null,
-      rules_config: rules,
+      rules_config: effectiveRules,
     };
   }
 

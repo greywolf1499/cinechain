@@ -71,6 +71,7 @@ MODIFIER_UPDATE_KEYS = ("chrono_direction", "runtime_staircase", "country_cooldo
 
 
 class RunStepCreate(BaseModel):
+    acting_participant_id: str | None = None
     movie_id: int
     transition_metadata: dict[str, Any] | None = None
     # Tug of War: team whose turn is being logged (shared-device support).
@@ -95,6 +96,7 @@ class StepValidateRequest(BaseModel):
 class ForkOffer(BaseModel):
     """Blind Fork step 1: the three films offered to the partner."""
 
+    acting_participant_id: str | None = None
     movie_ids: list[int] = Field(min_length=3, max_length=3)
     # Optional per-film link metadata (actor, characters) from the Pick Next card, so the film
     # is logged with the same connection a direct pick would have had. Keyed by movie id.
@@ -109,16 +111,19 @@ class ForkOffer(BaseModel):
 
 
 class ForkVeto(BaseModel):
+    acting_participant_id: str | None = None
     movie_id: int
 
 
 class ForkAccept(BaseModel):
+    acting_participant_id: str | None = None
     movie_id: int
     user_notes: str | None = None
     status: Literal["watched", "planned"] = "watched"
 
 
 class GoldenVeto(BaseModel):
+    acting_participant_id: str | None = None
     # fork = tear up the partner's pending offer; step = remove the partner's latest step.
     target: Literal["fork", "step"] = "fork"
 
@@ -130,11 +135,13 @@ class GoldenVetoResult(BaseModel):
 
 
 class MarkWatchedRequest(BaseModel):
+    acting_participant_id: str | None = None
     watched_at: datetime | None = None
     user_notes: str | None = None
 
 
 class RunStepUpdate(BaseModel):
+    acting_participant_id: str | None = None
     user_notes: str | None = None
     transition_metadata: dict[str, Any] | None = None
     watched_at: datetime | None = None

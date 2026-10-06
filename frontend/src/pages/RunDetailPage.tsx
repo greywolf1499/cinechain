@@ -35,6 +35,8 @@ import TunnelFrontierCard from "../components/TunnelFrontierCard";
 import TunnelTimeline from "../components/TunnelTimeline";
 import RouletteSpinner from "../components/RouletteSpinner";
 import ForkOfferPanel from "../components/ForkOfferPanel";
+import TableSeat from "../components/TableSeat";
+import { useTableSeat } from "../lib/tableMode";
 import TugOfWarMeter from "../components/TugOfWarMeter";
 import PendulumMeter from "../components/PendulumMeter";
 import AuteurTrack from "../components/AuteurTrack";
@@ -98,6 +100,7 @@ export default function RunDetailPage() {
   const { data: run, isLoading } = useRun(id);
   const { data: users } = useUsers();
   const currentUser = useAuthStore((s) => s.user);
+  const seat = useTableSeat(id ?? "");
   const { data: stats } = useRunStats(id);
   const { data: engines } = useEngines();
   const { data: curatedLists } = useCuratedLists();
@@ -214,6 +217,7 @@ export default function RunDetailPage() {
             )}
           </div>
           <p className="mt-1 text-sm text-zinc-500">{participantNames || "No participants"}</p>
+          <TableSeat run={run} users={users} />
         </div>
         <div className="flex items-center gap-3">
           <button type="button" onClick={() => {
@@ -282,7 +286,7 @@ export default function RunDetailPage() {
         <PendulumMeter rules={run.rules_config} stepsLogged={run.steps.length} finished={locked} />
       )}
 
-      <ForkOfferPanel run={run} users={users} frontier={lastStep} />
+      {!seat?.pending && <ForkOfferPanel run={run} users={users} frontier={lastStep} />}
       {run.game_type !== MEET_IN_THE_MIDDLE && <GoldenVetoBar run={run} users={users} />}
 
       {run.game_type === MARCH_MADNESS && run.rules_config.bracket ? (
@@ -943,17 +947,25 @@ function BlindForkToggle({
  * the offer overlay instead. */
 function GoldenVetoBar({ run, users }: { run: RunDetail; users: UserSummary[] | undefined }) {
   const me = useAuthStore((s) => s.user);
+  const seat = useTableSeat(run.id);
+  const actorId = run.rules_config.table_mode ? seat?.id : me?.id;
   const goldenVeto = useGoldenVeto(run.id);
   const [confirming, setConfirming] = useState(false);
   const seeds = run.game_type === MEET_IN_THE_MIDDLE ? 2 : 1;
   const latest = run.steps[run.steps.length - 1];
-  const partnerLogged =
-    !!latest && !!latest.logged_by_user_id && latest.logged_by_user_id !== me?.id;
+  const loggerId = latest?.transition_metadata?.acting_participant_id as string | undefined ?? latest?.logged_by_user_id;
+  const players = run.rules_config.tug_players;
+  const latestTeam = latest?.transition_metadata?.tug_team;
+  const actorTeam = Object.entries(players ?? {}).find(([, id]) => id === actorId)?.[0];
+  const partnerLogged = run.game_type === TUG_OF_WAR
+    ? !!latestTeam && !!actorTeam && latestTeam !== actorTeam
+    : !!loggerId && loggerId !== actorId;
   if (run.status !== "active" || run.steps.length <= seeds || !partnerLogged || run.rules_config.pending_fork) {
     return null;
   }
-  const tokens = me?.veto_tokens ?? 0;
-  const partnerName = users?.find((u) => u.id === latest.logged_by_user_id)?.display_name ?? "Your partner";
+  const tokens = run.rules_config.table_mode ? users?.find((u) => u.id === actorId)?.veto_tokens ?? 0 : me?.veto_tokens ?? 0;
+  const pullOwnerId = latestTeam === "team_a" || latestTeam === "team_b" ? players?.[latestTeam] : undefined;
+  const partnerName = users?.find((u) => u.id === (pullOwnerId ?? loggerId))?.display_name ?? "Your partner";
 
   return (
     <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-amber-700/40 bg-amber-950/20 px-4 py-2.5">
@@ -963,7 +975,7 @@ function GoldenVetoBar({ run, users }: { run: RunDetail; users: UserSummary[] | 
         className="border-amber-500/60 bg-amber-500/10 text-amber-200"
       />
       <p className="min-w-0 flex-1 text-xs text-zinc-400">
-        <strong className="text-zinc-200">{partnerName}</strong> logged{" "}
+        <strong className="text-zinc-200">{partnerName}</strong>{run.game_type === TUG_OF_WAR ? "'s pull used " : " logged "}
         <strong className="text-zinc-200">{latest.movie_title}</strong>. Not having it?
         {goldenVeto.isError && (
           <span role="alert" className="ml-1 text-red-400">

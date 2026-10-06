@@ -82,6 +82,8 @@ export default function Step2RunSetup({
           selectedIds={draft.participantIds}
           owner={owner}
           showTeams={isVersus}
+          tableMode={draft.tableMode}
+          onTableMode={(tableMode) => update({ tableMode })}
           onToggle={(userId) => update({
             participantIds: draft.participantIds.includes(userId)
               ? draft.participantIds.filter((id) => id !== userId)

@@ -12,6 +12,7 @@ export default function Modal({
   footer,
   bodyClassName = "max-h-[70vh] overflow-y-auto px-5 py-4",
   onEscape,
+  dismissible = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -21,11 +22,12 @@ export default function Modal({
   footer?: ReactNode;
   bodyClassName?: string;
   onEscape?: () => boolean;
+  dismissible?: boolean;
 }) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const isTopModal = useModalStack(open, onClose, onEscape);
+  const isTopModal = useModalStack(open, onClose, dismissible ? onEscape : () => true);
 
   useEffect(() => {
     if (!open) return;
@@ -86,14 +88,14 @@ export default function Modal({
       >
         <div className="flex items-center justify-between border-b border-app-border px-5 py-3.5">
           <h2 id={titleId} className="text-sm font-semibold text-zinc-100">{title}</h2>
-          <button
+          {dismissible && <button
             type="button"
             onClick={onClose}
             aria-label="Close"
             className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-app-surface-hover hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <X className="h-4 w-4" />
-          </button>
+          </button>}
         </div>
         <div ref={bodyRef} className={bodyClassName}>{children}</div>
         {footer != null && (

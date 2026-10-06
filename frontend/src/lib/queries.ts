@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
+import { actingFields, notifyTableLog, syncTableRun } from "./tableMode";
 import type {
 	AcquisitionStatus,
 	CacheStats,
@@ -84,7 +85,11 @@ export function useRuns(status?: RunStatus) {
 export function useRun(runId: string | undefined) {
 	return useQuery({
 		queryKey: queryKeys.run(runId ?? ""),
-		queryFn: () => api.get<RunDetail>(`/runs/${runId}`),
+		queryFn: async () => {
+			const run = await api.get<RunDetail>(`/runs/${runId}`);
+			syncTableRun(run);
+			return run;
+		},
 		enabled: !!runId,
 	});
 }
@@ -500,35 +505,41 @@ function useRunMutation<TVariables, TResult>(
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 			queryClient.invalidateQueries({ queryKey: ["runs"] });
 			queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+			queryClient.invalidateQueries({ queryKey: queryKeys.users });
 		},
 	});
 }
 
 export function useOfferFork(runId: string) {
 	return useRunMutation(runId, (payload: { movie_ids: number[]; links?: Record<number, Record<string, unknown>> }) =>
-		api.post<RunDetail>(`/runs/${runId}/fork`, payload),
+		api.post<RunDetail>(`/runs/${runId}/fork`, { ...payload, ...actingFields(runId) }),
 	);
 }
 
 export function useWithdrawFork(runId: string) {
-	return useRunMutation(runId, (_: void) => api.delete<RunDetail>(`/runs/${runId}/fork`));
+	return useRunMutation(runId, (_: void) => {
+		const actor = actingFields(runId).acting_participant_id;
+		return api.delete<RunDetail>(`/runs/${runId}/fork${actor ? `?acting_participant_id=${encodeURIComponent(actor)}` : ""}`);
+	});
 }
 
 export function useVetoForkMovie(runId: string) {
 	return useRunMutation(runId, (movieId: number) =>
-		api.post<RunDetail>(`/runs/${runId}/fork/veto`, { movie_id: movieId }),
+		api.post<RunDetail>(`/runs/${runId}/fork/veto`, { movie_id: movieId, ...actingFields(runId) }),
 	);
 }
 
 export function useAcceptForkMovie(runId: string) {
-	return useRunMutation(runId, (movieId: number) =>
-		api.post<RunStep>(`/runs/${runId}/fork/accept`, { movie_id: movieId }),
-	);
+	return useRunMutation(runId, async (movieId: number) => {
+		const step = await api.post<RunStep>(`/runs/${runId}/fork/accept`, { movie_id: movieId, ...actingFields(runId) });
+		notifyTableLog(step);
+		return step;
+	});
 }
 
 export function useGoldenVeto(runId: string) {
 	return useRunMutation(runId, (target: "fork" | "step") =>
-		api.post<GoldenVetoResult>(`/runs/${runId}/veto`, { target }),
+		api.post<GoldenVetoResult>(`/runs/${runId}/veto`, { target, ...actingFields(runId) }),
 	);
 }
 
@@ -559,8 +570,9 @@ export function useCreateStep(runId: string) {
 			/** Rotten Tomatoes Split: the household's joint rating (1-100). */
 			household_score?: number;
 			no_contest?: boolean;
-		}) => api.post<RunStep>(`/runs/${runId}/steps`, payload),
-		onSuccess: () => {
+		}) => api.post<RunStep>(`/runs/${runId}/steps`, { ...payload, ...actingFields(runId) }),
+		onSuccess: (step) => {
+			notifyTableLog(step);
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 			// A logged step can end the run (win/fail), which changes the list badge.
 			queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -573,8 +585,9 @@ export function useAdvanceBracket(runId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: (vars: { matchup_id: string; winning_movie_id: number }) =>
-			api.post<RunDetail>(`/runs/${runId}/bracket/advance`, vars),
+			api.post<RunDetail>(`/runs/${runId}/bracket/advance`, { ...vars, ...actingFields(runId) }),
 		onSuccess: (run) => {
+			syncTableRun(run);
 			queryClient.setQueryData(queryKeys.run(runId), run);
 			queryClient.invalidateQueries({ queryKey: ["runs"] });
 		},
@@ -585,9 +598,10 @@ export function useAdvanceBracket(runId: string) {
 export function useBracketVote(runId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: (vars: { matchup_id: string; movie_id: number }) =>
-			api.post<RunDetail>(`/runs/${runId}/bracket/vote`, vars),
+		mutationFn: (vars: { matchup_id: string; movie_id: number; acting_participant_id?: string }) =>
+			api.post<RunDetail>(`/runs/${runId}/bracket/vote`, { ...actingFields(runId), ...vars }),
 		onSuccess: (run) => {
+			syncTableRun(run);
 			queryClient.setQueryData(queryKeys.run(runId), run);
 			queryClient.invalidateQueries({ queryKey: ["runs"] });
 		},
@@ -642,8 +656,9 @@ export function useMarkStepWatched(runId: string) {
 			stepId: string;
 			watched_at?: string | null;
 			user_notes?: string | null;
-		}) => api.patch(`/runs/${runId}/steps/${stepId}/mark-watched`, payload),
-		onSuccess: () => {
+		}) => api.patch<RunStep>(`/runs/${runId}/steps/${stepId}/mark-watched`, { ...payload, ...actingFields(runId) }),
+		onSuccess: (step) => {
+			notifyTableLog(step);
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 			// A logged step can end the run (win/fail), which changes the list badge.
 			queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -661,7 +676,7 @@ export function useUpdateStep(runId: string) {
 			stepId: string;
 			user_notes?: string | null;
 			watched_at?: string | null;
-		}) => api.patch(`/runs/${runId}/steps/${stepId}`, payload),
+		}) => api.patch(`/runs/${runId}/steps/${stepId}`, { ...payload, ...actingFields(runId) }),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 			// A logged step can end the run (win/fail), which changes the list badge.

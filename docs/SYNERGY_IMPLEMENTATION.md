@@ -288,15 +288,16 @@ are explicitly partial. Queued v3 pulls enter fold chronology when watched, not 
 |---|---|---|
 | 1 | `backend/app/api/routes_runs.py` · `create_run` | Accept a boolean `rules_config["table_mode"]` (a player input, so **not** server-owned; validated as a real bool). |
 | 2 | `routes_runs.py` (new helper `_acting_user(session, run, current_user, acting_participant_id) -> User`) | Returns `current_user` when `acting_participant_id` is absent. Otherwise it requires `table_mode`, the caller being a participant and the acting id being a participant; else 403. |
-| 3 | `schemas/runs.py` (`RunStepCreate`, `ForkOffer`, `ForkVeto`, `ForkAccept`, `GoldenVeto`), `routes_bracket.py` (`advance_bracket`/`vote_in_bracket` payloads) | An optional `acting_participant_id` field each. |
+| 3 | `schemas/runs.py` (`RunStepCreate`, `ForkOffer`, `ForkVeto`, `ForkAccept`, `GoldenVeto`, `MarkWatchedRequest`, `RunStepUpdate`), `routes_bracket.py` (`advance_bracket`/`vote_in_bracket` payloads) | An optional `acting_participant_id` field each; fork withdrawal accepts it as a query parameter. Watching a queued film requires its original acting participant and preserves that identity. |
 | 4 | `_log_step`, `offer_fork`, `veto_fork_movie`, `accept_fork_movie`, `withdraw_fork`, `_require_partner_of_offer`, `golden_veto`, `routes_bracket.advance_bracket`/`vote_in_bracket` | Use `_acting_user(...)` for **game identity** (offerer/partner checks, team lookup, `consume_veto_token(acting_user)`, bracket votes). `logged_by_user_id` stays `current_user.id` (Rule 9). Stamp `transition_metadata["acting_participant_id"]`. |
-| 5 | Tug | In Table Mode the server derives `tug_team` from the acting participant's team and returns 409 when it isn't `next_team`, so turn validation becomes real. |
+| 5 | Tug | In Table Mode the server derives direct-pull `tug_team` from the acting participant's team and returns 409 when it isn't `next_team`, so turn validation becomes real. Blind Fork preserves the existing offerer-owned pull: the accepting partner is stamped as actor, while an internal-only override scores the offerer's team. |
 | 6 | `SERVER_OWNED_METADATA` | Add `acting_participant_id`. |
 | 7 | `frontend/src/lib/tableMode.ts` (**new**) | The seat state per run (`sessionStorage`) and an `actingFields()` helper merged into every mutation payload in `lib/queries.ts`. |
 | 8 | `frontend/src/components/TableSeat.tsx` (**new**), `HandoverInterstitial.tsx` (**new**) | A "🎮 Ana's turn" pill in the run header and a full-screen "Pass to Ben → I'm Ben" interstitial, which **hides a pending Blind Fork offer** until it's tapped. The seat auto-advances for Tug (`next_team`) and Blind Fork (offer → partner → back). |
-| 9 | `ParticipantPicker.tsx` | A "📱 One device, many players" toggle when ≥ 2 participants (default on when every chosen participant is the owner's household; plain toggle otherwise). |
-| 10 | `Toast` usage in `PickNextHub`, `MovieSearchAutocomplete` | "Logged for **Ana** (Team Old School) · +1 rope" with a 10 s **Undo** (existing delete). |
+| 9 | `ParticipantPicker.tsx` | A "📱 One device, many players" toggle when ≥ 2 participants. **Implementation clarification:** the current user model has no household relationship; keep an explicit, default-off opt-in rather than infer one or add an unplanned migration. Automatic household defaults require that future relationship. |
+| 10 | `Toast` usage in `PickNextHub`, `MovieSearchAutocomplete` | "Logged for **Ana** (Team A) · +1 rope" with a 10 s **Undo** (existing delete), delivered by shared mutation notifications to `TableSeat`. For a Tug fork pick, distinguish chooser and scored player ("Picked by Ben for Ana (Team A)"). |
 | 11 | `BracketView.tsx` | In Table Mode, a per-participant vote row ("Ana: A · Ben: B") that submits acting votes. |
+| 12 | `schemas/auth.py`, `api/routes_users.py` | Add the veto balance to user summaries and refresh it lazily so each seat sees its own available token, not the authenticated device owner's balance. |
 
 **Tests**: `tests/test_table_mode.py` (new)
 - `acting_participant_id` without Table Mode → 403; a non-participant acting id → 403;
@@ -306,6 +307,12 @@ are explicitly partial. Queued v3 pulls enter fold chronology when watched, not 
 - a forged `acting_participant_id` in client metadata is stripped;
 - `logged_by_user_id` is always the authenticated account (Passport unchanged);
 - an out-of-turn Tug acting pull → 409.
+
+**Completed validation:** 1159 backend tests passed, 1 intentional legacy v2-bias xfail;
+Ruff and TypeScript/Vite build passed. Deterministic scratch-browser checks verified
+setup opt-in, seat persistence, handover privacy across reload, one-login fork/veto flows,
+actor/logger separation, Tug fork attribution, bracket ties/majorities, 10-second Undo
+and mobile bounds. No live provider or configured-service calls were made.
 
 **Commit:** `feat(table-mode): hot-seat acting participant for steps, forks, vetoes and bracket votes`
 

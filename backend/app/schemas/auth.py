@@ -32,3 +32,4 @@ class UserSummary(BaseModel):
     id: str
     username: str
     display_name: str
+    veto_tokens: int

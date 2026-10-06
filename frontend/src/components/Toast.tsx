@@ -1,9 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { CheckCircle2, XCircle } from "lucide-react";
 
 export interface ToastState {
   type: "success" | "error";
   message: string;
+  duration?: number;
+  action?: { label: string; onClick: () => void };
 }
 
 export default function Toast({
@@ -13,11 +15,13 @@ export default function Toast({
   toast: ToastState | null;
   onDismiss: () => void;
 }) {
+  const dismiss = useRef(onDismiss);
+  dismiss.current = onDismiss;
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(onDismiss, 4000);
+    const timer = setTimeout(() => dismiss.current(), toast.duration ?? 4000);
     return () => clearTimeout(timer);
-  }, [toast, onDismiss]);
+  }, [toast]);
 
   if (!toast) return null;
 
@@ -29,10 +33,12 @@ export default function Toast({
 
   return (
     <div
-      className={`fixed bottom-5 right-5 z-50 flex max-w-sm items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-2xl shadow-black/50 ${colorClass}`}
+      role={toast.type === "error" ? "alert" : "status"}
+      className={`fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-2xl shadow-black/50 sm:max-w-sm ${colorClass}`}
     >
       <Icon className="h-4 w-4 shrink-0" />
-      {toast.message}
+      <span className="min-w-0 break-words">{toast.message}</span>
+      {toast.action && <button type="button" className="shrink-0 underline" onClick={toast.action.onClick}>{toast.action.label}</button>}
     </div>
   );
 }

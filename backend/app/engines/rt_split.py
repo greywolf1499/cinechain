@@ -95,6 +95,8 @@ def settle_point(household_score: int, scores: SplitScores) -> str:
 def compute_scores(steps: Sequence[RunStep]) -> dict[str, int]:
     scores = {TEAM_CRITIC: 0, TEAM_AUDIENCE: 0}
     for step in steps:
+        if (step.transition_metadata or {}).get("split_no_contest"):
+            continue
         team = (step.transition_metadata or {}).get("point_to")
         if step.status == "watched" and team in scores:
             scores[team] += 1
@@ -159,7 +161,11 @@ class RottenTomatoesSplitEngine(TrackerEngine):
         pool.sort(key=lambda entry: (-entry[1].divergence, entry[0].title))
         return pool[:limit]
 
-    async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
+    async def validate_candidate(
+        self, movie_id: int, rules: dict, *, no_contest: bool = False
+    ) -> ValidationResult:
+        if no_contest:
+            return ValidationResult(valid=True)
         row = self.session.get(CachedMovie, movie_id)
         title = row.title if row is not None else f"Film {movie_id}"
         scores = self.scores_of(movie_id)

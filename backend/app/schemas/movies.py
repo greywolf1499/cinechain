@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
+
+from app.utils.countries import parse_countries
 
 
 class MovieSummary(BaseModel):
@@ -8,6 +10,11 @@ class MovieSummary(BaseModel):
     release_year: int | None = None
     origin_country: str | None = None
     popularity: float | None = None
+
+    @computed_field
+    @property
+    def origin_countries(self) -> list[str]:
+        return parse_countries(self.origin_country)
 
 
 class PersonSummary(BaseModel):

@@ -304,6 +304,7 @@ export interface RunStep {
 	movie_poster_path: string | null;
 	movie_release_year: number | null;
 	movie_origin_country: string | null;
+	movie_origin_countries?: string[];
 	/** Poster colour ("#rrggbb"), when the movie cache has computed it (Aesthetic Gradient). */
 	movie_dominant_color?: string | null;
 	/** Historical Time-Travel: the year the film is set in (negative = BCE) and its era label. */
@@ -342,6 +343,7 @@ export interface MovieSummary {
 	poster_path: string | null;
 	release_year: number | null;
 	origin_country: string | null;
+	origin_countries?: string[];
 	/** TMDB popularity (search results only). */
 	popularity?: number | null;
 }
@@ -557,6 +559,7 @@ export interface RouletteMovie {
 	poster_path: string | null;
 	release_year: number | null;
 	origin_country: string | null;
+	origin_countries?: string[];
 	runtime: number | null;
 	overview: string | null;
 	tagline: string | null;
@@ -577,6 +580,7 @@ export interface Suggestion {
 	poster_path: string | null;
 	release_year: number | null;
 	origin_country: string | null;
+	origin_countries?: string[];
 	connecting_actor_id: number;
 	connecting_actor_name: string;
 }
@@ -676,6 +680,7 @@ export interface DiscoveryCandidate {
 	poster_path: string | null;
 	release_year: number | null;
 	origin_country: string | null;
+	origin_countries?: string[];
 	genre_ids: number[];
 	popularity: number | null;
 	/** Minutes, when the film's detail is cached. */

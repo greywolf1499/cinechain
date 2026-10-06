@@ -1,6 +1,8 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
+
+from app.utils.countries import parse_countries
 
 
 class SharedActorConnection(BaseModel):
@@ -55,6 +57,11 @@ class Suggestion(BaseModel):
     origin_country: str | None = None
     connecting_actor_id: int
     connecting_actor_name: str
+
+    @computed_field
+    @property
+    def origin_countries(self) -> list[str]:
+        return parse_countries(self.origin_country)
 
 
 class KeystoneActor(BaseModel):
@@ -146,6 +153,11 @@ class RouletteMovie(BaseModel):
     tagline: str | None = None
     genre_ids: list[int] = []
     imdb_rating: str | None = None
+
+    @computed_field
+    @property
+    def origin_countries(self) -> list[str]:
+        return parse_countries(self.origin_country)
 
 
 class RouletteSpinResult(BaseModel):

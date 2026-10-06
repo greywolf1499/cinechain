@@ -327,6 +327,22 @@ export function useMovieDetail(movieId: number | undefined, enabled = true) {
 	};
 }
 
+export function useRefreshRatings() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (movieId: number) => api.get<MovieDetail>(`/movies/${movieId}?refresh_ratings=true`),
+		onSuccess: (movie) => {
+			queryClient.setQueryData(["movies", movie.tmdb_id], movie);
+			queryClient.setQueryData(["movies", movie.tmdb_id, "hydrated"], movie);
+			queryClient.invalidateQueries({ queryKey: ["movies", "ratings", "bulk"] });
+			queryClient.invalidateQueries({
+				queryKey: ["runs"],
+				predicate: (query) => query.queryKey[2] === "split-pool",
+			});
+		},
+	});
+}
+
 /** A film's extracted tropes. Reads the cached ones off the detail; when they are missing and the
  * LLM is on, asks the server to extract (and cache) them once. Empty = none / LLM off. */
 export function useMovieTropes(movieId: number | undefined, enabled = true) {
@@ -507,6 +523,7 @@ export function useCreateStep(runId: string) {
 			tug_team?: "team_a" | "team_b";
 			/** Rotten Tomatoes Split: the household's joint rating (1-100). */
 			household_score?: number;
+			no_contest?: boolean;
 		}) => api.post<RunStep>(`/runs/${runId}/steps`, payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });

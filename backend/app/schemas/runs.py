@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from app.models.run import DEFAULT_RULES_CONFIG
+from app.utils.countries import parse_countries
 
 RunStatusLiteral = Literal["active", "completed", "forfeited", "failed"]
 
@@ -71,6 +72,7 @@ class RunStepCreate(BaseModel):
     tunnel_side: Literal["head", "tail"] | None = None
     # Rotten Tomatoes Split: the household's joint rating of the film (required there).
     household_score: int | None = Field(default=None, ge=1, le=100)
+    no_contest: bool = False
 
 
 class StepValidateRequest(BaseModel):
@@ -147,6 +149,11 @@ class RunStepPublic(BaseModel):
     watched_at: datetime | None
     logged_by_user_id: str | None
     logged_at: datetime
+
+    @computed_field
+    @property
+    def movie_origin_countries(self) -> list[str]:
+        return parse_countries(self.movie_origin_country)
 
 
 class RunSummary(BaseModel):

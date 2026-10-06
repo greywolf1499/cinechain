@@ -20,7 +20,6 @@ except for Chrono, whose rule is meaningless without a release year.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -88,13 +87,8 @@ def primary_country(movie: CachedMovie) -> str | None:
 
 
 def step_country(step: RunStep) -> str | None:
-    if not step.movie_origin_country:
-        return None
-    try:
-        countries = json.loads(step.movie_origin_country)
-    except (TypeError, ValueError):
-        return None
-    return countries[0] if isinstance(countries, list) and countries else None
+    countries = parse_countries(step.movie_origin_country)
+    return countries[0] if countries else None
 
 
 def cooldown_countries(

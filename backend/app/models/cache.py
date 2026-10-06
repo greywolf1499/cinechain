@@ -11,6 +11,7 @@ class CachedMovie(SQLModel, table=True):
 
     tmdb_id: int = Field(primary_key=True)
     title: str = Field(index=True)
+    imdb_id: str | None = None
     release_date: str | None = None
     poster_path: str | None = None
     overview: str | None = None

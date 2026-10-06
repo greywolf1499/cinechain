@@ -1,8 +1,7 @@
 import { ArrowDown, ArrowUp, Clapperboard, Star, User } from "lucide-react";
 import { cn } from "../lib/cn";
 import { leapText } from "../lib/historicalEra";
-import { countryName } from "../lib/countryNames";
-import { isoToFlagEmoji } from "../lib/countries";
+import CountryFlags from "./CountryFlags";
 import { profileUrl } from "../lib/tmdbImage";
 import { ROLE_STYLES, stepCraftLink } from "../lib/crewRoles";
 import { SemanticMatchBadge } from "./ColorSwatch";
@@ -204,6 +203,6 @@ function RuleLink({ meta }: { meta: TransitionMeta | null }) {
   return <p className="text-[10px] text-zinc-600">Linked by the mode's rule</p>;
 }
 
-function flagAndName(code: string | null | undefined): string {
-  return code ? `${isoToFlagEmoji(code)} ${countryName(code, code)}` : "Unknown";
+function flagAndName(code: string | null | undefined) {
+  return code ? <CountryFlags codes={[code]} /> : "Unknown";
 }

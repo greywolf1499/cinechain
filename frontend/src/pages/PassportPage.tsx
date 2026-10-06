@@ -5,8 +5,7 @@ import EmptyState from "../components/EmptyState";
 import ImportHistory from "../components/ImportHistory";
 import PageHeading from "../components/PageHeading";
 import RunStatsSection from "../components/RunStatsSection";
-import { countryName } from "../lib/countryNames";
-import { isoToFlagEmoji } from "../lib/countries";
+import CountryFlags from "../components/CountryFlags";
 import { usePassport } from "../lib/queries";
 import type { Passport } from "../types/api";
 
@@ -93,8 +92,7 @@ function CountryList({ countries }: { countries: Passport["countries"] }) {
           title={country.merged_from.length ? `Includes ${country.merged_from.join(", ")} (historical)` : undefined}
           className="flex items-center gap-1.5 rounded-full border border-app-border bg-app-surface px-3 py-1 text-xs text-zinc-300"
         >
-          <span aria-hidden="true">{isoToFlagEmoji(country.code)}</span>
-          {countryName(country.code)}
+          <CountryFlags codes={[country.code]} />
           <span className="font-medium text-accent">{country.count}</span>
         </li>
       ))}

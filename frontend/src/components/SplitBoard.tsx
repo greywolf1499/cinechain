@@ -1,18 +1,21 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import HouseholdRatingModal from "./HouseholdRatingModal";
 import MoviePoster from "./MoviePoster";
 import PlayerAvatar from "./PlayerAvatar";
 import SplitMeter from "./SplitMeter";
+import MovieSearchAutocomplete from "./MovieSearchAutocomplete";
+import { api } from "../lib/api";
 import { cn } from "../lib/cn";
-import { useSplitPool } from "../lib/queries";
+import { useCreateStep, useSplitPool } from "../lib/queries";
 import {
   SPLIT_TEAMS,
   settlementOf,
   targetPoints,
   type SplitTeam,
 } from "../lib/splitScore";
-import type { RunDetail, SplitCandidate, UserSummary } from "../types/api";
+import type { MovieSummary, RunDetail, SplitCandidate, UserSummary } from "../types/api";
 
 const SCAN_BATCH = 10;
 
@@ -27,11 +30,61 @@ export default function SplitBoard({
   const locked = run.status !== "active";
   const [scan, setScan] = useState(0);
   const [film, setFilm] = useState<SplitCandidate | null>(null);
+  const [picked, setPicked] = useState<MovieSummary | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [pickerVersion, setPickerVersion] = useState(0);
+  const request = useRef(0);
+  const createStep = useCreateStep(run.id);
+  const queryClient = useQueryClient();
   const pool = useSplitPool(run.id, scan);
   const scores = run.rules_config.split_scores ?? { team_a: 0, team_b: 0 };
   const target = targetPoints(run.rules_config);
   const players = run.rules_config.split_players ?? { team_a: null, team_b: null };
   const rated = run.steps.filter((step) => settlementOf(step) !== null);
+  const noContests = run.steps.filter((step) => step.transition_metadata?.split_no_contest === true);
+
+  async function checkRatings(movie: MovieSummary) {
+    const id = ++request.current;
+    setPicked(movie);
+    setReason(null);
+    setChecking(true);
+    try {
+      const result = await api.post<SplitCandidate | { qualifies: false; reason: string }>(
+        `/runs/${run.id}/split/ratings/${movie.tmdb_id}/retry`,
+      );
+      if (id !== request.current) return;
+      queryClient.invalidateQueries({ queryKey: ["runs", run.id, "split-pool"] });
+      queryClient.invalidateQueries({ queryKey: ["movies", movie.tmdb_id] });
+      queryClient.invalidateQueries({ queryKey: ["movies", "ratings", "bulk"] });
+      if ("qualifies" in result) {
+        setReason(result.reason);
+      } else {
+        setPicked(null);
+        setPickerVersion((version) => version + 1);
+        setFilm(result);
+      }
+    } catch (error) {
+      if (id === request.current) setReason(error instanceof Error ? error.message : "Could not fetch ratings.");
+    } finally {
+      if (id === request.current) setChecking(false);
+    }
+  }
+
+  async function logNoContest() {
+    if (!picked) return;
+    try {
+      await createStep.mutateAsync({
+        movie_id: picked.tmdb_id, status: "watched",
+        watched_at: new Date().toISOString(), no_contest: true,
+      });
+      setPicked(null);
+      setPickerVersion((version) => version + 1);
+      setReason(null);
+    } catch (error) {
+      setReason(error instanceof Error ? error.message : "Could not log that film.");
+    }
+  }
 
   return (
     <section aria-label="Rotten Tomatoes Split" className="flex flex-col gap-5">
@@ -42,6 +95,13 @@ export default function SplitBoard({
         </div>
         <TeamCard team="team_b" points={scores.team_b} target={target} userId={players.team_b} users={users} />
       </div>
+
+      {noContests.length > 0 && (
+        <div className="text-xs text-zinc-400">
+          <h3 className="font-semibold">No-contest films · no points awarded</h3>
+          <ul>{noContests.map((step) => <li key={step.id}>{step.movie_title}</li>)}</ul>
+        </div>
+      )}
 
       {rated.length > 0 && (
         <div className="flex flex-col gap-2">
@@ -68,6 +128,27 @@ export default function SplitBoard({
 
       {!locked && (
         <div className="flex flex-col gap-3">
+          <h3 className="text-sm font-semibold text-zinc-100">We watched something else</h3>
+          <MovieSearchAutocomplete
+            key={pickerVersion}
+            onSelect={(movie) => void checkRatings(movie)}
+            excludedMovieIds={run.steps.map((step) => step.movie_id)}
+          />
+          {picked && (
+            <div className="rounded-lg border border-app-border p-3 text-xs text-zinc-400">
+              <p className="font-semibold text-zinc-100">{picked.title}</p>
+              {checking ? <p role="status">Checking ratings...</p> : (
+                <>
+                  <p role="status">{reason ?? "No qualifying scores available."}</p>
+                  <div className="mt-2 flex gap-3">
+                    <button type="button" disabled={createStep.isPending} onClick={() => void checkRatings(picked)} className="underline">Retry ratings</button>
+                    <button type="button" disabled={createStep.isPending} onClick={() => void logNoContest()} className="underline">{createStep.isPending ? "Logging..." : "Log as no-contest"}</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          {pool.isError && <p role="alert" className="text-xs text-amber-400">{pool.error.message}</p>}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-zinc-100">Films with a split verdict</h3>
             {pool.data?.omdb_enabled && (
@@ -110,6 +191,16 @@ export default function SplitBoard({
                   >
                     Log Movie
                   </button>
+                  <button
+                    type="button"
+                    disabled={checking}
+                    onClick={() => void checkRatings({
+                      tmdb_id: candidate.movie_id, title: candidate.title,
+                      poster_path: candidate.poster_path, release_year: candidate.year,
+                      origin_country: null, popularity: null,
+                    })}
+                    className="text-[11px] text-zinc-400 underline disabled:opacity-50"
+                  >Retry ratings</button>
                 </li>
               ))}
             </ul>
@@ -125,7 +216,19 @@ export default function SplitBoard({
         </div>
       )}
 
-      <HouseholdRatingModal runId={run.id} film={film} onClose={() => setFilm(null)} />
+      <HouseholdRatingModal
+        key={film?.movie_id ?? "empty"}
+        runId={run.id} film={film} onClose={() => setFilm(null)}
+        onRatingsFailed={(candidate, message) => {
+          setFilm(null);
+          setPicked({
+            tmdb_id: candidate.movie_id, title: candidate.title,
+            poster_path: candidate.poster_path, release_year: candidate.year,
+            origin_country: null, popularity: null,
+          });
+          setReason(message);
+        }}
+      />
     </section>
   );
 }

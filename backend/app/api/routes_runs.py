@@ -151,6 +151,7 @@ SERVER_OWNED_METADATA = (
     "audience_score",
     "divergence",
     "point_to",
+    "split_no_contest",
 )
 # Link bonuses the engine detected: stamped from its own validation, never from the client.
 BONUS_LINK_KEYS = ("golden_reunion", "character_hop")
@@ -315,10 +316,24 @@ async def _enforce_run_rules(
     if previous is None and engine_class is not None:
         # Nothing to link from, but run-scoped film rules (canon list, decade)
         # still apply to the very first film.
-        first = await engine_class(session, tmdb).validate_candidate(movie.tmdb_id, rules)
+        if run.game_type == RT_SPLIT and payload.no_contest:
+            first = await RottenTomatoesSplitEngine(session, tmdb).validate_candidate(
+                movie.tmdb_id, rules, no_contest=True
+            )
+        else:
+            first = await engine_class(session, tmdb).validate_candidate(movie.tmdb_id, rules)
         if not first.valid:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=first.model_dump())
-    if previous is not None:
+    if previous is not None and run.game_type == RT_SPLIT and payload.no_contest:
+        engine = RottenTomatoesSplitEngine(session, tmdb)
+        earlier = await cache_repo.get_movie(session, tmdb, previous.movie_id, require_detail=True)
+        reason = engine.modifier_violation(earlier, movie, rules, _run_history(session, run.id))
+        if reason:
+            raise HTTPException(
+                status_code=409,
+                detail={"valid": False, "blocked": True, "reason": reason, "connections": []},
+            )
+    elif previous is not None:
         engine = get_engine(run.game_type, session, tmdb)
         result = await engine.validate_next_step(
             previous.movie_id,
@@ -769,9 +784,13 @@ async def _log_step(
     omdb: OMDbClient | None = None,
 ) -> RunStep:
     """Validate and add one step, then evaluate the run's outcome. Caller commits."""
-    movie = await cache_repo.get_movie(session, tmdb, payload.movie_id, require_detail=True)
     split = run.game_type == RT_SPLIT
-    if split:
+    if payload.no_contest and not split:
+        raise HTTPException(422, detail="No-contest is only available on Rotten Tomatoes Split runs")
+    if payload.no_contest and payload.status != "watched":
+        raise HTTPException(422, detail="Log a no-contest film as watched")
+    movie = await cache_repo.get_movie(session, tmdb, payload.movie_id, require_detail=True)
+    if split and not payload.no_contest:
         if payload.status != "watched" or payload.household_score is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -783,9 +802,13 @@ async def _log_step(
         session, tmdb, run, movie, payload, user
     )
     if split:
-        extra_metadata.update(
-            RottenTomatoesSplitEngine(session, tmdb).settle(movie.tmdb_id, payload.household_score)
-        )
+        if payload.no_contest:
+            extra_metadata["split_no_contest"] = True
+        else:
+            assert payload.household_score is not None
+            extra_metadata.update(
+                RottenTomatoesSplitEngine(session, tmdb).settle(movie.tmdb_id, payload.household_score)
+            )
     bounty = await bounties.evaluate(session, tmdb, run.rules_config, movie)
     if bounty is not None:
         extra_metadata[bounties.COMPLETED_METADATA_KEY] = bounty[0]

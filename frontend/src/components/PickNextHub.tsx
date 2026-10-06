@@ -33,7 +33,8 @@ import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { profileUrl } from "../lib/tmdbImage";
-import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
+import { parseOriginCountries } from "../lib/countries";
+import CountryFlags from "./CountryFlags";
 import { countryName } from "../lib/countryNames";
 import { gameModeStyle, usesCastLinks } from "../lib/gameModes";
 import { connectionMetadata } from "../lib/connections";
@@ -1045,7 +1046,7 @@ function CandidateCard({
             />
           )}
           <p className="text-[10px] text-zinc-500">{candidate.release_year ?? "—"}</p>
-          <RatingBadges ratings={ratings} />
+          <RatingBadges ratings={ratings} movieId={candidate.movie_id} />
           <div className="mt-1">
             <CanonBadgeList badges={badges} />
           </div>
@@ -1220,15 +1221,14 @@ function MechanicBadge({
     );
   }
   if (gameType === "world_passport") {
-    const countries = parseOriginCountries(candidate.origin_country);
+    const countries = candidate.origin_countries ?? parseOriginCountries(candidate.origin_country);
     if (countries.length === 0) return null;
     return (
       <span
         title={countries.map((c) => countryName(c, c)).join(", ")}
         className="flex w-fit items-center gap-1 rounded-full bg-teal-950 px-2 py-0.5 text-[10px] font-semibold text-teal-300"
       >
-        <span className="text-sm leading-none">{isoToFlagEmoji(countries[0])}</span>
-        <span className="truncate">{countryName(countries[0], countries[0])}</span>
+        <CountryFlags codes={countries} />
       </span>
     );
   }
@@ -1484,7 +1484,7 @@ function MovieScreenView({
             {movie?.runtime ? ` · ${movie.runtime} min` : ""}
           </p>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <RatingBadges ratings={movie?.ratings} />
+            <RatingBadges ratings={movie?.ratings} movieId={screen.movieId} />
             <OnServerBadge onServer={jellyfinStatus?.[String(screen.movieId)]?.on_server} />
             <AcquisitionControl
               tmdbId={screen.movieId}

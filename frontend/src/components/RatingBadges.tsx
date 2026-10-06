@@ -1,10 +1,20 @@
 import { Star } from "lucide-react";
 import type { MovieRatings } from "../types/api";
+import { useRefreshRatings } from "../lib/queries";
 
 /** Small IMDb (star) + Rotten Tomatoes (tomato) badge pair - renders nothing
  * for whichever rating OMDb didn't have (or when ratings are null/unfetched). */
-export default function RatingBadges({ ratings }: { ratings: MovieRatings | null | undefined }) {
-  if (!ratings || (!ratings.imdb_rating && !ratings.rotten_tomatoes)) return null;
+export default function RatingBadges({ ratings, movieId }: { ratings: MovieRatings | null | undefined; movieId?: number }) {
+  const refresh = useRefreshRatings();
+  if (!ratings) return null;
+  if (!ratings.imdb_rating && !ratings.rotten_tomatoes && !ratings.metacritic) {
+    return (
+      <span className="inline-flex flex-col gap-1 text-[10px] text-zinc-500">
+        <span>No critic scores{movieId !== undefined && <> · <button type="button" disabled={refresh.isPending} onClick={() => refresh.mutate(movieId)} className="underline disabled:opacity-50">{refresh.isPending ? "Retrying..." : "Retry"}</button></>}</span>
+        {refresh.isError && <span role="alert" className="text-amber-400">{refresh.error.message}</span>}
+      </span>
+    );
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">

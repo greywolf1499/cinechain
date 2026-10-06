@@ -13,10 +13,12 @@ export default function HouseholdRatingModal({
   runId,
   film,
   onClose,
+  onRatingsFailed,
 }: {
   runId: string;
   film: SplitCandidate | null;
   onClose: () => void;
+  onRatingsFailed: (film: SplitCandidate, reason: string) => void;
 }) {
   const createStep = useCreateStep(runId);
   const [score, setScore] = useState("");
@@ -98,9 +100,12 @@ export default function HouseholdRatingModal({
                   : "Rate it together: whichever score you land closer to takes the point."}
               </p>
               {error && (
-                <p role="alert" className="rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
-                  {error}
-                </p>
+                <div className="text-xs text-amber-300">
+                  <p role="alert">{error}</p>
+                  <button type="button" onClick={() => onRatingsFailed(film, error)} className="mt-2 underline">
+                    Retry ratings / Log as no-contest
+                  </button>
+                </div>
               )}
               <div className="flex justify-end gap-2">
                 <button

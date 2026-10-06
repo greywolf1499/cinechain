@@ -7,8 +7,6 @@ like any other run) and joins the local director cache - no TMDB calls here.
 
 from __future__ import annotations
 
-import json
-import re
 from collections import Counter, defaultdict
 
 from sqlmodel import Session, col, func, select
@@ -21,43 +19,9 @@ from app.schemas.passport import (
     DirectorCoverage,
     PassportOut,
 )
+from app.utils.countries import parse_country_codes
 
 TOP_DIRECTORS = 5
-
-# TMDB still emits a few historical codes for older films. Fold them into a
-# successor so every code exists on a modern SVG map (approximate by design).
-LEGACY_COUNTRY_CODES = {
-    "SU": "RU",  # Soviet Union
-    "YU": "RS",  # Yugoslavia
-    "CS": "RS",  # Serbia and Montenegro
-    "XC": "CZ",  # Czechoslovakia
-    "DD": "DE",  # East Germany
-    "AN": "CW",  # Netherlands Antilles
-}
-_CODE_RE = re.compile(r"^[A-Z]{2}$")
-
-
-def parse_country_codes(raw: str | None) -> list[tuple[str, str | None]]:
-    """`RunStep.movie_origin_country` (a JSON array string, but legacy rows may hold a
-    bare code or "US, GB") -> unique `(normalized_code, merged_from_legacy_code)` pairs."""
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-        values = parsed if isinstance(parsed, list) else [parsed]
-    except (TypeError, ValueError):
-        values = re.split(r"[,;|/\s]+", raw)
-
-    seen: dict[str, str | None] = {}
-    for value in values:
-        code = str(value).strip().upper()
-        legacy = None
-        if code in LEGACY_COUNTRY_CODES:
-            legacy, code = code, LEGACY_COUNTRY_CODES[code]
-        if _CODE_RE.match(code) and code not in seen:
-            seen[code] = legacy
-    return list(seen.items())
-
 
 def decade_label(year: int) -> str:
     return f"{(year // 10) * 10}s"

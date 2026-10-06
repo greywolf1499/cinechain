@@ -4,6 +4,7 @@ from datetime import UTC, timedelta
 from threading import Barrier, Lock
 
 import httpx
+import pytest
 import respx
 from sqlalchemy import event
 from sqlmodel import Session, SQLModel, select
@@ -395,6 +396,7 @@ async def test_stale_negative_movie_ratings_are_refetched(config_dir):
                 release_date="1999-03-30",
                 overview="",
                 tagline="",
+                origin_country='["US"]',
             )
         )
         session.add(
@@ -452,3 +454,50 @@ async def test_fresh_negative_movie_ratings_are_not_refetched(config_dir):
         assert ratings is not None
         assert ratings.imdb_rating is None
         assert omdb_route.call_count == 0
+
+
+async def test_movie_imdb_id_is_preferred_and_preserved(config_dir):
+    with _session(config_dir) as session, respx.mock:
+        repo = cache_repo.CacheRepo(session)
+        movie = repo.upsert_movie(
+            {"id": 603, "title": "Localized title", "imdb_id": "tt0133093", "origin_country": ["US"]}
+        )
+        assert movie.imdb_id == "tt0133093"
+        repo.upsert_movie({"id": 603, "title": "Localized title", "imdb_id": None})
+        assert session.get(CachedMovie, 603).imdb_id == "tt0133093"
+        route = respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.7"})
+        )
+        async with httpx.AsyncClient() as client:
+            rating = await cache_repo.get_movie_ratings(
+                session, TMDBClient(client), OMDbClient(client, Settings(omdb_api_key="test")), 603
+            )
+        assert rating.imdb_rating == "8.7"
+        assert route.calls[0].request.url.params["i"] == "tt0133093"
+        assert "t" not in route.calls[0].request.url.params
+
+
+@pytest.mark.parametrize("imdb_id", ["tt0133093", None])
+async def test_stub_detail_hydrated_before_ratings_lookup(config_dir, imdb_id):
+    with _session(config_dir) as session, respx.mock:
+        session.add(CachedMovie(tmdb_id=603, title="Stub", release_date="1999-01-01"))
+        session.commit()
+        detail = respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200, json={"id": 603, "title": "The Matrix", "release_date": "1999-03-30",
+                           "imdb_id": imdb_id, "origin_country": ["US"]}
+            )
+        )
+        route = respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.7"})
+        )
+        async with httpx.AsyncClient() as client:
+            await cache_repo.get_movie_ratings(
+                session, TMDBClient(client), OMDbClient(client, Settings(omdb_api_key="test")), 603
+            )
+        assert detail.call_count == 1
+        params = route.calls[0].request.url.params
+        if imdb_id:
+            assert params["i"] == imdb_id and "t" not in params
+        else:
+            assert params["t"] == "The Matrix" and params["y"] == "1999" and "i" not in params

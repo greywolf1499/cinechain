@@ -9,7 +9,8 @@ import ExpandableText from "./ui/ExpandableText";
 import OnServerBadge from "./OnServerBadge";
 import { CanonBadgeList } from "./CanonBadge";
 import { api } from "../lib/api";
-import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
+import { parseOriginCountries } from "../lib/countries";
+import CountryFlags from "./CountryFlags";
 import { useCanonBadgesBulk, useJellyfinLookup, useMovieDetail } from "../lib/queries";
 import type { GenreOut } from "../types/api";
 
@@ -35,7 +36,7 @@ export default function MoviePreviewModal({
   const { data: jellyfinStatus } = useJellyfinLookup(open ? [movieId] : []);
   const { data: badgesMap } = useCanonBadgesBulk(open ? [movieId] : []);
 
-  const countries = parseOriginCountries(movie?.origin_country ?? null);
+  const countries = movie?.origin_countries ?? parseOriginCountries(movie?.origin_country);
   const genreNames = (movie?.genre_ids ?? [])
     .map((id) => genres?.find((g) => g.id === id)?.name)
     .filter((name): name is string => !!name);
@@ -56,7 +57,7 @@ export default function MoviePreviewModal({
                 {movie.runtime ? ` · ${movie.runtime} min` : ""}
               </p>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                <RatingBadges ratings={movie.ratings} />
+                <RatingBadges ratings={movie.ratings} movieId={movieId} />
                 <OnServerBadge onServer={jellyfinStatus?.[String(movieId)]?.on_server} />
                 <AcquisitionControl
                   tmdbId={movieId}
@@ -68,14 +69,7 @@ export default function MoviePreviewModal({
                 <CanonBadgeList badges={badgesMap?.[String(movieId)]} />
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {countries.map((country) => (
-                  <span
-                    key={country}
-                    className="rounded-full bg-app-surface-hover px-2 py-0.5 text-xs text-zinc-300"
-                  >
-                    {isoToFlagEmoji(country)} {country}
-                  </span>
-                ))}
+                <CountryFlags codes={countries} />
                 {genreNames.map((name) => (
                   <span key={name} className="rounded-full bg-app-surface-hover px-2 py-0.5 text-xs text-zinc-300">
                     {name}

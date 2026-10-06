@@ -351,7 +351,7 @@ async def test_compute_stats_counts_countries_decades_and_hops(config_dir):
             stats = await engine.compute_stats(steps)
 
     assert stats.total_hops == 2
-    assert stats.countries == ["JP", "US"]
+    assert stats.countries == ["GB", "JP", "US"]
     assert stats.decades == [1990, 2000]
     assert stats.keystone_actors[0].actor_id == 10
     assert stats.keystone_actors[0].appearances == 2

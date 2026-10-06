@@ -43,6 +43,7 @@ class TMDBNotFoundError(TMDBError):
 class TMDBMovie(TypedDict, total=False):
     id: int
     title: str
+    imdb_id: str | None
     release_date: str | None
     poster_path: str | None
     overview: str | None
@@ -383,6 +384,7 @@ def _normalize_movie_detail(data: dict[str, Any]) -> TMDBMovie:
     return TMDBMovie(
         id=data["id"],
         title=data["title"],
+        imdb_id=data.get("imdb_id"),
         release_date=data.get("release_date") or None,
         poster_path=data.get("poster_path"),
         overview=(data.get("overview") or "").strip(),

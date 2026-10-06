@@ -385,8 +385,10 @@ def test_discover_endpoint_flags_movies_already_in_run(client):
     by_id = {c["movie_id"]: c for c in resp.json()}
     assert by_id[2]["already_in_run"] is True
     assert by_id[2]["existing_step_number"] == 2
+    assert by_id[2]["origin_countries"] == ["US"]
     assert by_id[3]["already_in_run"] is False
     assert by_id[3]["existing_step_number"] is None
+    assert by_id[3]["origin_countries"] == []
 
 
 def _default_rules(**overrides):

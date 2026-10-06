@@ -8,7 +8,6 @@ fetching an actor filmography that was never cached.
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Sequence
 
@@ -27,6 +26,7 @@ from app.services import cache_repo
 from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient
 from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
+from app.utils.countries import parse_countries
 from app.utils.dates import parse_release_year
 
 CANON_HEAVY_MIN_FILMS = 2
@@ -38,16 +38,6 @@ HYDRATE_DEADLINE_SECONDS = 10.0
 SWAP_RESPONSE_CAP = 12
 # Broad Detour: top-billed actors of each endpoint whose filmographies are searched.
 BROAD_CAST_DEPTH = 8
-
-
-def parse_countries(raw: str | None) -> list[str]:
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
-    return [c for c in parsed if isinstance(c, str)] if isinstance(parsed, list) else []
 
 
 def make_bridge_node(movie: CachedMovie | None, movie_id: int) -> BridgeNode:

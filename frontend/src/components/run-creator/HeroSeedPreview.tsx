@@ -5,8 +5,8 @@ import MovieTagline from "../MovieTagline";
 import OnServerBadge from "../OnServerBadge";
 import ExpandableText from "../ui/ExpandableText";
 import { useJellyfinLookup, useMovieDetail } from "../../lib/queries";
-import { isoToFlagEmoji, parseOriginCountries } from "../../lib/countries";
-import { countryName } from "../../lib/countryNames";
+import { parseOriginCountries } from "../../lib/countries";
+import CountryFlags from "../CountryFlags";
 import type { MovieSummary, RulesConfig, RawRulesConfig } from "../../types/api";
 
 export default function HeroSeedPreview({
@@ -35,7 +35,7 @@ export default function HeroSeedPreview({
   const { movie, isHydrating } = useMovieDetail(value?.tmdb_id, legal);
   const { data: jellyfin } = useJellyfinLookup(value && legal ? [value.tmdb_id] : []);
   const details = movie ?? value;
-  const originCountries = parseOriginCountries(details?.origin_country);
+  const originCountries = details?.origin_countries ?? parseOriginCountries(details?.origin_country);
   const onServer = value ? jellyfin?.[String(value.tmdb_id)]?.on_server : undefined;
 
   return (
@@ -59,11 +59,10 @@ export default function HeroSeedPreview({
               <p className="mt-1 text-xs text-zinc-500">
                 {details?.release_year ?? value.release_year ?? "Year unknown"}
                 {movie?.runtime ? ` · ${movie.runtime} min` : ""}
-                {originCountries.length > 0 &&
-                  ` · ${originCountries.map((code) => `${isoToFlagEmoji(code)} ${countryName(code, code)}`).join(" / ")}`}
+                {originCountries.length > 0 && <> · <CountryFlags codes={originCountries} /></>}
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <RatingBadges ratings={movie?.ratings} />
+                <RatingBadges ratings={movie?.ratings} movieId={value.tmdb_id} />
                 <OnServerBadge onServer={onServer} />
               </div>
               {isHydrating && <p className="mt-2 text-[11px] text-zinc-500">Loading film details…</p>}

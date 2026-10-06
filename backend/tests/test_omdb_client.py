@@ -12,6 +12,41 @@ from app.integrations.omdb import OMDbClient, check_omdb_connectivity
 OMDB_BASE = "https://www.omdbapi.com/"
 
 
+async def test_lookup_by_imdb_id_uses_exact_id(settings):
+    with respx.mock:
+        route = respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(
+                200, json={"Response": "True", "imdbRating": "8.7"}
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            result = await OMDbClient(client, settings).lookup_by_imdb_id("tt0133093")
+    assert result.ratings["imdb_rating"] == "8.7"
+    assert route.calls[0].request.url.params["i"] == "tt0133093"
+    assert "t" not in route.calls[0].request.url.params
+
+
+@pytest.mark.parametrize(
+    ("response", "transient"),
+    [
+        (httpx.Response(503), True),
+        (httpx.Response(200, text="not json"), True),
+        (httpx.Response(200, json=[]), True),
+        (httpx.Response(200, json={"Response": "True", "Ratings": None}), True),
+        (httpx.Response(200, json={"Response": "True", "Ratings": ["broken"]}), True),
+        (httpx.Response(200, json={"Response": "True", "imdbRating": {"bad": 1}}), True),
+        (httpx.Response(200, json={"Response": "False", "Error": "Request limit reached!"}), True),
+        (httpx.Response(200, json={"Response": "False", "Error": "Movie not found!"}), False),
+    ],
+)
+async def test_id_lookup_has_the_same_failure_classification(settings, response, transient):
+    with respx.mock:
+        respx.get(OMDB_BASE).mock(return_value=response)
+        async with httpx.AsyncClient() as client:
+            result = await OMDbClient(client, settings).lookup_by_imdb_id("tt0133093")
+    assert result.ratings is None
+    assert result.transient is transient
+
 @pytest.fixture()
 def settings() -> Settings:
     return Settings(omdb_api_key="test-key", omdb_api_base=OMDB_BASE)

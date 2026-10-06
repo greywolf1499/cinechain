@@ -33,6 +33,7 @@ export interface SplitSettlement {
 
 /** The server's settlement of a step (absent on non-split steps). */
 export function settlementOf(step: RunStep): SplitSettlement | null {
+  if (step.transition_metadata?.split_no_contest) return null;
   const meta = step.transition_metadata as Partial<SplitSettlement> | null;
   return meta && meta.point_to && meta.household_score !== undefined ? (meta as SplitSettlement) : null;
 }

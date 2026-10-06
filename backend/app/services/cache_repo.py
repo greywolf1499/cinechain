@@ -90,6 +90,7 @@ class CacheRepo:
         if row is None:
             row = CachedMovie(tmdb_id=movie["id"])
         row.title = movie["title"]
+        row.imdb_id = movie.get("imdb_id") or row.imdb_id
         if row.narrative_era_label == "Contemporary" and row.release_date != movie.get(
             "release_date"
         ):
@@ -718,8 +719,12 @@ async def get_movie_ratings(
         if now - fetched_at <= RATINGS_NEGATIVE_TTL:
             return cached
     movie = await get_movie(session, tmdb, tmdb_id)
-    lookup = await omdb.lookup_by_title(
-        movie.title, parse_release_year(movie.release_date)
+    if not movie.imdb_id and movie.origin_country is None:
+        movie = await get_movie(session, tmdb, tmdb_id, require_detail=True)
+    lookup = (
+        await omdb.lookup_by_imdb_id(movie.imdb_id)
+        if movie.imdb_id
+        else await omdb.lookup_by_title(movie.title, parse_release_year(movie.release_date))
     )
     if lookup.transient:
         return cached

@@ -1,6 +1,8 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
+
+from app.utils.countries import parse_countries
 
 
 class DiscoveryConnection(BaseModel):
@@ -53,3 +55,8 @@ class DiscoveryCandidate(BaseModel):
     # Tug of War: the next pull's effect and projected net rope movement.
     tug_effect: Literal["home", "invasion", "neutral", "sudden_neutral"] | None = None
     tug_points: int | None = None
+
+    @computed_field
+    @property
+    def origin_countries(self) -> list[str]:
+        return parse_countries(self.origin_country)

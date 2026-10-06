@@ -6,7 +6,7 @@ import MarathonProgressBar from "./MarathonProgressBar";
 import MoviePoster from "./MoviePoster";
 import { ApiError } from "../lib/api";
 import { checklistProgress, formatRuntime } from "../lib/auteurTrack";
-import { isoToFlagEmoji } from "../lib/countries";
+import CountryFlags from "./CountryFlags";
 import { cn } from "../lib/cn";
 import { sliceLabel } from "../lib/expedition";
 import { useCreateStep } from "../lib/queries";
@@ -24,7 +24,7 @@ export default function ExpeditionBoard({ run }: { run: RunDetail }) {
 
   const progress = checklistProgress(expedition.movie_ids, run.steps);
   const stepFor = (movieId: number) => run.steps.find((s) => s.movie_id === movieId);
-  const flag = expedition.country ? isoToFlagEmoji(expedition.country) : "🧭";
+  const flag = expedition.country ? <CountryFlags codes={[expedition.country]} /> : "🧭";
 
   async function log(film: ExpeditionFilm, watchedNow: boolean) {
     setPendingId(film.movie_id);

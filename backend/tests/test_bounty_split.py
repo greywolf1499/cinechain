@@ -7,8 +7,9 @@ import pytest
 import respx
 from sqlmodel import Session
 
+from app.engines.rt_split import compute_scores
 from app.models.cache import CachedMovie, CachedMovieRating
-from app.models.run import Run
+from app.models.run import Run, RunStep
 from app.models.system import SystemSetting
 from app.services import bounties
 from app.services.bounties import BOUNTIES, MovieFacts
@@ -523,3 +524,97 @@ def test_the_split_pool_lists_the_biggest_gaps_first(client, db_engine):
 def test_the_pool_is_only_for_split_runs(client):
     run_id = make_run(client).json()["id"]
     assert client.get(f"/api/runs/{run_id}/split-pool").status_code == 400
+
+
+def test_no_contest_logs_without_omdb_or_household_and_game_continues(client, db_engine):
+    seed_ratings(db_engine)
+    run_id = make_split(client)
+    with Session(db_engine) as session:
+        session.add(SystemSetting(key="omdb_api_key", value="test"))
+        movie = session.get(CachedMovie, 9)
+        movie.origin_country = '["US"]'
+        movie.imdb_id = "tt0000009"
+        session.add(movie)
+        session.commit()
+    with respx.mock:
+        omdb = respx.get("https://www.omdbapi.com/").mock(
+            side_effect=httpx.ReadTimeout("unreachable")
+        )
+        retry = client.post(f"/api/runs/{run_id}/split/ratings/9/retry")
+        assert retry.status_code == 200 and retry.json()["qualifies"] is False
+        step = log(client, run_id, 9, no_contest=True,
+                   transition_metadata={"point_to": "team_a", "split_no_contest": False})
+        assert step.status_code == 201, step.text
+        assert step.json()["transition_metadata"] == {"split_no_contest": True}
+        assert step.json()["movie_origin_countries"] == ["US"]
+        assert omdb.call_count == 1  # no-contest did not perform a ratings lookup
+        assert log(client, run_id, 9, no_contest=True).status_code == 409
+        mock_film(1)
+        assert rate(client, run_id, 1, 85).status_code == 201
+    run = client.get(f"/api/runs/{run_id}").json()
+    assert run["status"] == "active"
+    assert run["rules_config"]["split_scores"] == {"team_a": 1, "team_b": 0}
+    edited = client.patch(
+        f"/api/runs/{run_id}/steps/{step.json()['id']}",
+        json={"transition_metadata": {"split_no_contest": False, "point_to": "team_a"}},
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["transition_metadata"]["split_no_contest"] is True
+    assert "point_to" not in edited.json()["transition_metadata"]
+
+
+def test_no_contest_marker_cannot_be_forged_for_a_rated_film(client, db_engine):
+    seed_ratings(db_engine)
+    run_id = make_split(client)
+    step = rate(client, run_id, 1, 85, transition_metadata={"split_no_contest": True})
+    assert step.status_code == 201
+    assert "split_no_contest" not in step.json()["transition_metadata"]
+    assert rules_of(client, run_id)["split_scores"] == {"team_a": 1, "team_b": 0}
+
+
+def test_no_contest_rejects_other_modes_and_planned_steps(client):
+    regular = make_run(client).json()["id"]
+    assert log(client, regular, 12345, no_contest=True).status_code == 422
+    assert log(client, make_split(client), 12345, no_contest=True, status="planned").status_code == 422
+
+
+def test_no_contest_is_excluded_even_if_old_metadata_claims_a_point():
+    step = RunStep(
+        run_id="test", movie_id=1, movie_title="Legacy", status="watched",
+        transition_metadata={"split_no_contest": True, "point_to": "team_a"},
+    )
+    assert compute_scores([step]) == {"team_a": 0, "team_b": 0}
+
+
+def test_no_contest_preserves_runtime_minimum(client, db_engine):
+    seed_ratings(db_engine)
+    runtime_run = make_split(client, min_runtime=130)
+    with respx.mock:
+        mock_film(9, runtime=120)
+        assert log(client, runtime_run, 9, no_contest=True).status_code == 409
+
+
+def test_split_retry_forces_negative_cache_refresh_and_uses_id(client, db_engine):
+    seed_ratings(db_engine)
+    run_id = make_split(client)
+    with Session(db_engine) as session:
+        session.add(SystemSetting(key="omdb_api_key", value="test"))
+        movie = session.get(CachedMovie, 9)
+        movie.imdb_id = "tt0000009"
+        session.add(movie)
+        session.add(CachedMovieRating(movie_id=9))
+        session.commit()
+    with respx.mock:
+        route = respx.get("https://www.omdbapi.com/").mock(
+            return_value=httpx.Response(
+                200, json={"Response": "True", "imdbRating": "5.0",
+                           "Ratings": [{"Source": "Rotten Tomatoes", "Value": "90%"}]}
+            )
+        )
+        retry = client.post(f"/api/runs/{run_id}/split/ratings/9/retry")
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["divergence"] == 40
+    assert retry.json()["movie_id"] == 9
+    assert route.call_count == 1 and route.calls[0].request.url.params["i"] == "tt0000009"
+    regular = make_run(client).json()["id"]
+    assert client.post(f"/api/runs/{regular}/split/ratings/9/retry").status_code == 400

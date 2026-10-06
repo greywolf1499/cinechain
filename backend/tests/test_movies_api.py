@@ -72,6 +72,7 @@ def test_search_movies(client):
     assert body["results"][0]["tmdb_id"] == 603
     assert body["results"][0]["release_year"] == 1999
     assert body["results"][0]["origin_country"] is None
+    assert body["results"][0]["origin_countries"] == []
 
 
 def test_get_movie_detail(client):
@@ -100,6 +101,62 @@ def test_get_movie_detail(client):
     assert body["title"] == "The Matrix"
     assert body["runtime"] == 136
     assert body["genre_ids"] == [28]
+    assert body["origin_countries"] == ["US"]
+
+
+def test_country_list_contracts_preserve_legacy_strings():
+    from app.schemas.discovery import DiscoveryCandidate
+    from app.schemas.engine import RouletteMovie, Suggestion
+    from app.schemas.movies import MovieDetail, MovieSummary
+    from app.schemas.runs import RunStepPublic
+    from app.utils.ids import utcnow
+
+    base = {"title": "Legacy", "origin_country": "US, GB"}
+    for movie in (
+        MovieSummary(tmdb_id=1, **base),
+        MovieDetail(tmdb_id=1, **base),
+        DiscoveryCandidate(movie_id=1, **base),
+        RouletteMovie(tmdb_id=1, **base),
+        Suggestion(movie_id=1, connecting_actor_id=1, connecting_actor_name="A", **base),
+    ):
+        assert movie.model_dump()["origin_countries"] == ["US", "GB"]
+        assert movie.model_dump()["origin_country"] == "US, GB"
+    step = RunStepPublic(
+        id="step", run_id="run", movie_id=1, step_number=1,
+        logged_by_user_id="user", logged_at=utcnow(), movie_title="Legacy",
+        movie_origin_country="US, GB",
+        movie_poster_path=None, movie_release_year=None, transition_metadata=None,
+        user_notes=None, status="watched", watched_at=None,
+    )
+    assert step.model_dump()["movie_origin_countries"] == ["US", "GB"]
+    assert step.model_dump()["movie_origin_country"] == "US, GB"
+
+
+def test_refresh_ratings_bypasses_fresh_negative_cache(client):
+    from app.models.cache import CachedMovie, CachedMovieRating
+    from app.models.system import SystemSetting
+
+    _register_and_login(client)
+    for session in app.dependency_overrides[get_session]():
+        session.add(CachedMovie(
+            tmdb_id=603, title="The Matrix", imdb_id="tt0133093",
+            origin_country="US, GB", overview="", tagline="",
+        ))
+        session.add(CachedMovieRating(movie_id=603))
+        session.add(SystemSetting(key="omdb_api_key", value="test"))
+        session.commit()
+    with respx.mock:
+        route = respx.get("https://www.omdbapi.com/").mock(
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.7"})
+        )
+        ordinary = client.get("/api/movies/603")
+        assert ordinary.json()["ratings"]["imdb_rating"] is None and route.call_count == 0
+        refreshed = client.get("/api/movies/603?refresh_ratings=true")
+        assert refreshed.status_code == 200
+        assert refreshed.json()["origin_countries"] == ["US", "GB"]
+        assert refreshed.json()["origin_country"] == "US, GB"
+        assert refreshed.json()["ratings"]["imdb_rating"] == "8.7"
+        assert route.call_count == 1
 
 
 def test_get_movie_cast(client):

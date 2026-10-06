@@ -8,7 +8,7 @@ from sqlmodel import Session, col, select
 
 from app.api.deps import get_omdb_client, get_tmdb_client, run_participant_guard
 from app.db import get_session
-from app.engines.rt_split import MIN_DIVERGENCE, RT_SPLIT, RottenTomatoesSplitEngine
+from app.engines.rt_split import MIN_DIVERGENCE, RT_SPLIT, RottenTomatoesSplitEngine, SplitScores
 from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie, CachedMovieRating
 from app.models.run import Run, RunStep
@@ -39,6 +39,48 @@ class SplitPool(BaseModel):
     min_divergence: int
     scanned: int
     candidates: list[SplitCandidate]
+
+
+class SplitUnqualified(BaseModel):
+    qualifies: bool = False
+    reason: str
+
+
+def _candidate(movie: CachedMovie, scores: SplitScores) -> SplitCandidate:
+    return SplitCandidate(
+        movie_id=movie.tmdb_id,
+        title=movie.title,
+        year=parse_release_year(movie.release_date),
+        poster_path=movie.poster_path,
+        critic_score=scores.critic,
+        audience_score=scores.audience,
+        divergence=scores.divergence,
+        favours="critics" if scores.critic > scores.audience else "audience",
+    )
+
+
+@router.post(
+    "/{run_id}/split/ratings/{movie_id}/retry",
+    response_model=SplitCandidate | SplitUnqualified,
+)
+async def retry_split_ratings(
+    movie_id: int,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    omdb: OMDbClient = Depends(get_omdb_client),
+) -> SplitCandidate | SplitUnqualified:
+    if run.game_type != RT_SPLIT:
+        raise HTTPException(400, detail="This isn't a Rotten Tomatoes Split run")
+    await cache_repo.get_movie_ratings(session, tmdb, omdb, movie_id, force=True)
+    engine = RottenTomatoesSplitEngine(session, tmdb)
+    validation = await engine.validate_candidate(movie_id, run.rules_config or {})
+    if not validation.valid:
+        return SplitUnqualified(reason=validation.reason or "This film does not qualify")
+    movie = session.get(CachedMovie, movie_id)
+    scores = engine.scores_of(movie_id)
+    assert movie is not None and scores is not None
+    return _candidate(movie, scores)
 
 
 @router.get("/{run_id}/split-pool", response_model=SplitPool)
@@ -81,16 +123,7 @@ async def get_split_pool(
         min_divergence=MIN_DIVERGENCE,
         scanned=scanned,
         candidates=[
-            SplitCandidate(
-                movie_id=movie.tmdb_id,
-                title=movie.title,
-                year=parse_release_year(movie.release_date),
-                poster_path=movie.poster_path,
-                critic_score=scores.critic,
-                audience_score=scores.audience,
-                divergence=scores.divergence,
-                favours="critics" if scores.critic > scores.audience else "audience",
-            )
-            for movie, scores in engine.split_pool(exclude_ids=watched, limit=POOL_SIZE)
+            _candidate(movie, scores)
+            for movie, scores in engine.split_pool(exclude_ids=list(watched), limit=POOL_SIZE)
         ],
     )

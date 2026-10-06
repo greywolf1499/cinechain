@@ -11,7 +11,8 @@ import MarkWatchedModal from "./MarkWatchedModal";
 import MovieDetailModal from "./MovieDetailModal";
 import { CanonBadgeList } from "./CanonBadge";
 import { cn } from "../lib/cn";
-import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
+import { parseOriginCountries } from "../lib/countries";
+import CountryFlags from "./CountryFlags";
 import { HISTORICAL_TIME_TRAVEL, narrativeSettingText, stepLeap } from "../lib/historicalEra";
 import { useCanonBadgesBulk, useUpdateStep } from "../lib/queries";
 import type { ActorClickPayload } from "./actorClickTypes";
@@ -215,7 +216,7 @@ function StationRow({
   onEditEra: () => void;
 }) {
   const decade = step.movie_release_year ? Math.floor(step.movie_release_year / 10) * 10 : null;
-  const countries = parseOriginCountries(step.movie_origin_country);
+  const countries = step.movie_origin_countries ?? parseOriginCountries(step.movie_origin_country);
   const isPlanned = step.status === "planned";
 
   return (
@@ -265,11 +266,7 @@ function StationRow({
                   {decade}s
                 </span>
               )}
-              {countries.map((country) => (
-                <span key={country} className="rounded-full bg-app-surface-hover px-1.5 py-0.5">
-                  {isoToFlagEmoji(country)} {country}
-                </span>
-              ))}
+              <CountryFlags codes={countries} />
               {isPlanned ? (
                 <span className="rounded-full bg-accent/15 px-1.5 py-0.5 font-medium text-accent">
                   🎟️ Up Next

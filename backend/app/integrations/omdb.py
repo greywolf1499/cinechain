@@ -7,12 +7,15 @@ shown), exactly like the Jellyfin client's approach.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TypedDict
 
 import httpx
 
 from app.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class OMDbRatings(TypedDict):
@@ -58,20 +61,46 @@ class OMDbClient:
         params: dict[str, str] = {"apikey": self._api_key, "t": title, "type": "movie"}
         if year:
             params["y"] = str(year)
+        return await self._lookup(params)
+
+    async def lookup_by_imdb_id(self, imdb_id: str) -> OMDbLookup:
+        """Look up the exact film, avoiding ambiguous/localized titles."""
+        if not self.enabled or not imdb_id:
+            return OMDbLookup(ratings=None, transient=False)
+        return await self._lookup({"apikey": self._api_key, "i": imdb_id, "type": "movie"})
+
+    async def _lookup(self, params: dict[str, str]) -> OMDbLookup:
         try:
             response = await self._client.get(
                 self._settings.omdb_api_base, params=params, timeout=10.0
             )
             response.raise_for_status()
             data = response.json()
-        except httpx.HTTPError:
+        except (httpx.HTTPError, ValueError):
+            logger.warning("OMDb ratings request failed; leaving it retryable")
+            return OMDbLookup(ratings=None, transient=True)
+        if not isinstance(data, dict):
+            logger.warning("OMDb returned a malformed ratings response")
             return OMDbLookup(ratings=None, transient=True)
         if data.get("Response") != "True":
             error = data.get("Error")
+            if error != "Movie not found!":
+                logger.warning("OMDb could not provide ratings; leaving it retryable")
             return OMDbLookup(
                 ratings=None,
                 transient=error != "Movie not found!",
             )
+        entries = data.get("Ratings", [])
+        if (
+            not isinstance(entries, list)
+            or any(not isinstance(entry, dict) for entry in entries)
+            or any(data.get(key) is not None and not isinstance(data[key], str)
+                   for key in ("imdbRating", "Metascore"))
+            or any(entry.get("Value") is not None and not isinstance(entry["Value"], str)
+                   for entry in entries)
+        ):
+            logger.warning("OMDb returned malformed score fields; leaving them retryable")
+            return OMDbLookup(ratings=None, transient=True)
         return OMDbLookup(ratings=_extract_ratings(data), transient=False)
 
 

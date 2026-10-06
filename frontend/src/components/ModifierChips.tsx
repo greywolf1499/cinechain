@@ -1,5 +1,5 @@
 import { Ban, Gauge } from "lucide-react";
-import { isoToFlagEmoji } from "../lib/countries";
+import CountryFlags from "./CountryFlags";
 import { countryName } from "../lib/countryNames";
 import type { ConstraintInfo } from "../types/api";
 
@@ -20,11 +20,7 @@ export default function ModifierChips({ constraint }: { constraint: ConstraintIn
           <Ban className="h-3 w-3" />
           Cooldown:
           <span className="flex items-center gap-1 text-sm leading-none">
-            {locked.map((code) => (
-              <span key={code} aria-label={countryName(code)} role="img">
-                {isoToFlagEmoji(code)}
-              </span>
-            ))}
+            <CountryFlags codes={locked} />
           </span>
         </span>
       )}

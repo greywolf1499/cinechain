@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Award, BookUser, Loader2 } from "lucide-react";
 import EmptyState from "./EmptyState";
-import { isoToFlagEmoji } from "../lib/countries";
+import CountryFlags from "./CountryFlags";
 import { useRunStats, useRuns } from "../lib/queries";
 
 const MEDALS = ["🥇", "🥈", "🥉"];
@@ -63,8 +63,7 @@ export default function RunStatsSection() {
                     key={country}
                     className="flex items-center gap-1.5 rounded-full border border-app-border bg-app-surface px-3 py-1.5 text-sm text-zinc-200"
                   >
-                    <span>{isoToFlagEmoji(country)}</span>
-                    {country}
+                    <CountryFlags codes={[country]} />
                   </span>
                 ))}
               </div>

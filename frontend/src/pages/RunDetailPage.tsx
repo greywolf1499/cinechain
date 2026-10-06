@@ -49,7 +49,7 @@ import RabbitHoleGameOver from "../components/RabbitHoleGameOver";
 import PlayerAvatar from "../components/PlayerAvatar";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
-import { isoToFlagEmoji } from "../lib/countries";
+import CountryFlags from "../components/CountryFlags";
 import { cn } from "../lib/cn";
 import { allowsMovieRepeats } from "../lib/rules";
 import { useActiveRunStore } from "../store/activeRunStore";
@@ -1031,11 +1031,7 @@ function MiniPassportWidget({
               {stats.countries.length === 0 ? (
                 <span className="text-zinc-600">—</span>
               ) : (
-                stats.countries.map((country) => (
-                  <span key={country} title={country}>
-                    {isoToFlagEmoji(country)}
-                  </span>
-                ))
+                <CountryFlags codes={stats.countries} />
               )}
             </div>
           </div>

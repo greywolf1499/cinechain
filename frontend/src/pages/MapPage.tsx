@@ -5,7 +5,8 @@ import PageHeading from "../components/PageHeading";
 import EmptyState from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import WorldMap, { type RouteStop } from "../components/WorldMap";
-import { isoToFlagEmoji, parseOriginCountries } from "../lib/countries";
+import { parseOriginCountries } from "../lib/countries";
+import CountryFlags from "../components/CountryFlags";
 import { countryName } from "../lib/countryNames";
 import { useRun, useRuns } from "../lib/queries";
 import { useActiveRunStore } from "../store/activeRunStore";
@@ -13,7 +14,7 @@ import type { PassportCountry, RunStep } from "../types/api";
 
 /** The country a film is credited to for the route: the first (primary) origin country. */
 function stepCountry(step: RunStep): string | null {
-  return parseOriginCountries(step.movie_origin_country)[0]?.toUpperCase() ?? null;
+  return (step.movie_origin_countries ?? parseOriginCountries(step.movie_origin_country))[0] ?? null;
 }
 
 /** Run Map: pick a run and see its marathon plotted across the world, step by step. */
@@ -124,9 +125,7 @@ export default function MapPage() {
                           </span>
                           <span className="w-44 shrink-0 text-sm font-medium text-zinc-100">
                             {code ? (
-                              <>
-                                {isoToFlagEmoji(code)} {countryName(code, code)}
-                              </>
+                              <CountryFlags codes={[code]} />
                             ) : (
                               <span className="text-zinc-500">Unknown country</span>
                             )}

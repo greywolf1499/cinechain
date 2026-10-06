@@ -90,7 +90,7 @@ def test_slice_counts_match_prepared_checklists_without_network(client, monkeypa
             (1, '["AU", "JP"]', "1975-01-01"),
             (2, '["AU"]', "1980-01-01"),
             (3, None, "1978-01-01"),
-            (4, "AU", "1979-01-01"),  # unparseable legacy country string
+            (4, "AU", "1979-01-01"),  # legacy bare code shares the canonical parser
         ):
             session.add(CachedMovie(tmdb_id=movie_id, title=f"Film {movie_id}", origin_country=country, release_date=release))
         for rank, movie_id in enumerate([1, 1, 2, 3, 4, 5], 1):
@@ -103,9 +103,9 @@ def test_slice_counts_match_prepared_checklists_without_network(client, monkeypa
     counts = response.json()
     assert counts == {
         "hydrated": 3, "total": 5,
-        "countries": {"AU": 2, "JP": 1},
+        "countries": {"AU": 3, "JP": 1},
         "decades": {"1970": 3, "1980": 1},
-        "pairs": {"AU:1970": 1, "AU:1980": 1, "JP:1970": 1},
+        "pairs": {"AU:1970": 2, "AU:1980": 1, "JP:1970": 1},
         "indexing": False, "indexing_error": None,
     }
     assert client.get("/api/curated/lists/slice/slices").json() == counts

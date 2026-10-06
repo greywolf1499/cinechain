@@ -284,10 +284,11 @@ def tally(
                 config["momentum_cap"],
             )
             streak_team = puller
-            points = multiplier * 2
             scores[puller] += multiplier
             opponent = TEAM_B if puller == TEAM_A else TEAM_A
-            scores[opponent] = max(0, scores[opponent] - multiplier)
+            steal = min(scores[opponent], multiplier)
+            scores[opponent] -= steal
+            points = multiplier + steal
             anchor = None if anchor == puller else anchor
         else:
             kind = "sudden_neutral" if turns >= config["sudden_death_after"] else "neutral"
@@ -377,7 +378,9 @@ def preview_pull(
             config["momentum_cap"],
         )
         return "home", streak * multiplier
-    return "invasion", 2 * multiplier
+    opponent = TEAM_B if puller == TEAM_A else TEAM_A
+    steal = min(result.scores[opponent], multiplier)
+    return "invasion", multiplier + steal
 
 
 class TugOfWarEngine(CineChainEngine):

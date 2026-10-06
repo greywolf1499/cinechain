@@ -19,6 +19,7 @@ from app.models.user import User
 from app.schemas.runs import RunDetail
 from app.services import cache_repo
 from app.services import marathon_router as mr
+from app.services.movie_filters import verified_tmdb_rating
 from app.services.tmdb import TMDBClient, TMDBError, TMDBNotFoundError
 from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
@@ -116,7 +117,7 @@ def _rating_of(movie: CachedMovie, imdb: CachedMovieRating | None) -> float | No
             return float(imdb.imdb_rating)
     except ValueError:
         pass
-    return movie.vote_average if movie.vote_average else None
+    return verified_tmdb_rating(movie)
 
 
 async def _load_movies(

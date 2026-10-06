@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, timedelta
 from typing import TypedDict
 
 import anyio
@@ -51,6 +52,7 @@ from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
 
 logger = logging.getLogger(__name__)
+RATINGS_NEGATIVE_TTL = timedelta(hours=24)
 
 
 class CastEntry(TypedDict):
@@ -697,7 +699,7 @@ def _name_placeholder_actor(session: Session, person_id: int, name: str) -> None
 
 
 async def get_movie_ratings(
-    session: Session, tmdb: TMDBClient, omdb: OMDbClient, tmdb_id: int
+    session: Session, tmdb: TMDBClient, omdb: OMDbClient, tmdb_id: int, force: bool = False
 ) -> CachedMovieRating | None:
     """JIT read-through for OMDb ratings. Returns None (no HTTP call at all)
     whenever OMDb isn't configured, so this is a no-op for installs without an
@@ -706,8 +708,19 @@ async def get_movie_ratings(
         return None
     repo = CacheRepo(session)
     cached = await anyio.to_thread.run_sync(repo.get_cached_ratings, tmdb_id)
-    if cached is not None:
-        return cached
+    if cached is not None and not force:
+        if any((cached.imdb_rating, cached.rotten_tomatoes, cached.metacritic)):
+            return cached
+        now = utcnow()
+        fetched_at = cached.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=UTC)
+        if now - fetched_at <= RATINGS_NEGATIVE_TTL:
+            return cached
     movie = await get_movie(session, tmdb, tmdb_id)
-    ratings = await omdb.get_ratings_by_title(movie.title, parse_release_year(movie.release_date))
-    return await anyio.to_thread.run_sync(repo.upsert_ratings, tmdb_id, ratings)
+    lookup = await omdb.lookup_by_title(
+        movie.title, parse_release_year(movie.release_date)
+    )
+    if lookup.transient:
+        return cached
+    return await anyio.to_thread.run_sync(repo.upsert_ratings, tmdb_id, lookup.ratings)

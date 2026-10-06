@@ -327,7 +327,7 @@ async def test_compute_stats_counts_countries_decades_and_hops(config_dir):
                 movie_id=1,
                 movie_title="Movie A",
                 movie_release_year=1999,
-                movie_origin_country=json.dumps(["US"]),
+                movie_origin_country="US, GB",
             ),
             RunStep(
                 run_id="run-1",

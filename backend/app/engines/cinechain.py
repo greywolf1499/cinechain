@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from collections.abc import Sequence
 from typing import ClassVar
@@ -29,6 +28,7 @@ from app.schemas.engine import (
     ValidationResult,
 )
 from app.services import cache_repo, pathfinder
+from app.services.bridge_paths import parse_countries
 from app.services.movie_filters import is_reality_eligible, passes_filters
 from app.services.tmdb import TMDBError
 from app.utils.dates import parse_release_year
@@ -46,7 +46,7 @@ def compute_run_stats(steps: list[RunStep]) -> RunStats:
 
     for step in watched_steps:
         if step.movie_origin_country:
-            countries.update(json.loads(step.movie_origin_country))
+            countries.update(parse_countries(step.movie_origin_country))
         if step.movie_release_year:
             decades.add((step.movie_release_year // 10) * 10)
         if step.transition_metadata:

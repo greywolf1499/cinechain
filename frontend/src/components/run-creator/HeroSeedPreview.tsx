@@ -5,7 +5,8 @@ import MovieTagline from "../MovieTagline";
 import OnServerBadge from "../OnServerBadge";
 import ExpandableText from "../ui/ExpandableText";
 import { useJellyfinLookup, useMovieDetail } from "../../lib/queries";
-import { isoToFlagEmoji } from "../../lib/countries";
+import { isoToFlagEmoji, parseOriginCountries } from "../../lib/countries";
+import { countryName } from "../../lib/countryNames";
 import type { MovieSummary } from "../../types/api";
 
 export default function HeroSeedPreview({
@@ -22,6 +23,7 @@ export default function HeroSeedPreview({
   const { movie, isHydrating } = useMovieDetail(value?.tmdb_id);
   const { data: jellyfin } = useJellyfinLookup(value ? [value.tmdb_id] : []);
   const details = movie ?? value;
+  const originCountries = parseOriginCountries(details?.origin_country);
   const onServer = value ? jellyfin?.[String(value.tmdb_id)]?.on_server : undefined;
 
   return (
@@ -41,7 +43,8 @@ export default function HeroSeedPreview({
               <p className="mt-1 text-xs text-zinc-500">
                 {details?.release_year ?? value.release_year ?? "Year unknown"}
                 {movie?.runtime ? ` · ${movie.runtime} min` : ""}
-                {details?.origin_country && ` · ${isoToFlagEmoji(details.origin_country)} ${details.origin_country}`}
+                {originCountries.length > 0 &&
+                  ` · ${originCountries.map((code) => `${isoToFlagEmoji(code)} ${countryName(code, code)}`).join(" / ")}`}
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <RatingBadges ratings={movie?.ratings} />

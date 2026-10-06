@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Film } from "lucide-react";
 import { posterUrl } from "../lib/tmdbImage";
 import { cn } from "../lib/cn";
@@ -12,8 +13,9 @@ export default function MoviePoster({
   className?: string;
 }) {
   const url = posterUrl(path);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
-  if (!url) {
+  if (!url || failedUrl === url) {
     return (
       <div
         className={cn(
@@ -32,6 +34,7 @@ export default function MoviePoster({
       alt={title}
       loading="lazy"
       decoding="async"
+      onError={() => setFailedUrl(url)}
       className={cn("aspect-[2/3] rounded-md object-cover", className)}
     />
   );

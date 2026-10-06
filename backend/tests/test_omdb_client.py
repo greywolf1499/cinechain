@@ -59,6 +59,47 @@ async def test_get_ratings_by_title_returns_none_when_not_found(settings):
     assert ratings is None
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(500, json={"Response": "False", "Error": "Internal error"}),
+        httpx.Response(200, json={"Response": "False", "Error": "Request limit reached!"}),
+    ],
+)
+async def test_lookup_by_title_marks_service_errors_transient(settings, response):
+    with respx.mock:
+        respx.get(OMDB_BASE).mock(return_value=response)
+        async with httpx.AsyncClient() as client:
+            lookup = await OMDbClient(client, settings).lookup_by_title("Inception", 2010)
+
+    assert lookup.ratings is None
+    assert lookup.transient is True
+
+
+async def test_lookup_by_title_marks_timeout_transient(settings):
+    with respx.mock:
+        respx.get(OMDB_BASE).mock(side_effect=httpx.ReadTimeout("timed out"))
+        async with httpx.AsyncClient() as client:
+            lookup = await OMDbClient(client, settings).lookup_by_title("Inception", 2010)
+
+    assert lookup.ratings is None
+    assert lookup.transient is True
+
+
+async def test_lookup_by_title_marks_not_found_non_transient(settings):
+    with respx.mock:
+        respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(
+                200, json={"Response": "False", "Error": "Movie not found!"}
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            lookup = await OMDbClient(client, settings).lookup_by_title("Unknown", None)
+
+    assert lookup.ratings is None
+    assert lookup.transient is False
+
+
 async def test_disabled_without_api_key_makes_zero_http_calls():
     with respx.mock:
         async with httpx.AsyncClient() as client:

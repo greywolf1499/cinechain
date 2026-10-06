@@ -28,7 +28,7 @@ from app.api.routes_users import router as users_router
 from app.config import get_settings
 from app.integrations.omdb import OMDbClient
 from app.services import task_runner
-from app.services.tmdb import TMDBClient
+from app.services.tmdb import TMDBClient, TMDBError, TMDBRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CineChain", default_response_class=JSONResponse, lifespan=lifespan)
+
+
+@app.exception_handler(TMDBRateLimitError)
+async def tmdb_rate_limit_handler(request: Request, exc: TMDBRateLimitError) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "TMDB is rate-limiting us - try again in a moment"},
+    )
+
+
+@app.exception_handler(TMDBError)
+async def tmdb_error_handler(request: Request, exc: TMDBError) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "TMDB is unreachable right now - try again shortly"},
+    )
+
 
 api_router_prefix = "/api"
 app.include_router(system_router, prefix=api_router_prefix)

@@ -317,3 +317,27 @@ def test_get_movie_hydrates_stub_overview_and_supports_refresh(client):
     assert second.json()["overview"] == "A hacker learns the truth."
     assert refreshed.status_code == 200
     assert route.call_count == 2  # stub hydration + explicit refresh; middle call was cached
+
+
+def test_cold_movie_detail_returns_friendly_503_when_tmdb_is_unavailable(client):
+    _register_and_login(client)
+    client.app.state.tmdb._max_retries = 1
+
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/603").mock(return_value=httpx.Response(500))
+        response = client.get("/api/movies/603")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "TMDB is unreachable right now - try again shortly"}
+
+
+def test_cold_movie_detail_returns_friendly_429_when_tmdb_is_rate_limited(client):
+    _register_and_login(client)
+    client.app.state.tmdb._max_retries = 1
+
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/603").mock(return_value=httpx.Response(429))
+        response = client.get("/api/movies/603")
+
+    assert response.status_code == 429
+    assert response.json() == {"detail": "TMDB is rate-limiting us - try again in a moment"}

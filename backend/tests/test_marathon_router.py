@@ -256,6 +256,7 @@ def seed_movies(db_engine, n=10):
                     runtime=80 + (i * 37) % 90,
                     genre_ids=[[18, 35, 878][i % 3]],
                     vote_average=3.0 + i % 6,
+                    vote_count=10,
                     poster_path=f"/p{i}.jpg",
                     overview=f"Plot {i}",
                 )
@@ -312,6 +313,22 @@ def test_optimize_prefers_imdb_rating_over_tmdb_score(client, db_engine):
     ]
     assert next(f for f in films if f["movie_id"] == 1)["rating"] == 8.0
     assert next(f for f in films if f["movie_id"] == 2)["rating"] == 5.0  # TMDB vote_average
+
+
+def test_optimize_ignores_tmdb_rating_with_fewer_than_ten_votes(client, db_engine):
+    seed_movies(db_engine, 4)
+    with Session(db_engine) as session:
+        movie = session.get(CachedMovie, 2)
+        movie.vote_average = 9.4
+        movie.vote_count = 3
+        session.add(movie)
+        session.commit()
+
+    films = client.post("/api/tools/router/optimize", json={"movie_ids": [1, 2, 3, 4]}).json()[
+        "films"
+    ]
+
+    assert next(f for f in films if f["movie_id"] == 2)["rating"] is None
 
 
 def test_weight_overrides_are_normalised(client, db_engine):

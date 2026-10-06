@@ -8,6 +8,7 @@ from app.engines.tug_of_war import (
     TEAM_B,
     TUG_RULES_VERSION_KEY,
     compute_scores,
+    preview_pull,
     tally,
     winner,
 )
@@ -112,6 +113,27 @@ def test_invasion_steals_one_point_and_records_two_point_rope_swing():
     assert invasion.points == 2
     assert result.scores == {TEAM_A: 1, TEAM_B: 0}
     assert result.streak == (TEAM_A, 1)
+
+
+def test_preview_steal_matches_realised_delta_at_zero():
+    before = tally([], RULES, PLAYERS)
+    effect, preview = preview_pull(TEAM_A, TEAM_B, before, RULES)
+    after = tally([step(1, TEAM_A, 2010)], RULES, PLAYERS)
+
+    assert effect == "invasion"
+    assert preview == 1
+    assert after.pulls[0].points == preview
+    assert after.scores == {TEAM_A: 1, TEAM_B: 0}
+
+
+def test_preview_steal_full_when_opponent_has_points():
+    before = tally([step(1, TEAM_B, 2010), step(2, TEAM_B, 2011)], RULES, PLAYERS)
+
+    effect, preview = preview_pull(TEAM_A, TEAM_B, before, RULES)
+
+    assert effect == "invasion"
+    assert before.scores[TEAM_B] > 0
+    assert preview == 2
 
 
 def test_sudden_death_shrinks_target_and_neutral_concedes():

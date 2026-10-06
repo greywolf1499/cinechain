@@ -1,5 +1,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, timedelta
 from threading import Barrier, Lock
 
 import httpx
@@ -9,9 +10,10 @@ from sqlmodel import Session, SQLModel, select
 
 from app.config import Settings
 from app.integrations.omdb import OMDbClient
-from app.models.cache import CachedActor, CachedMovie, CachedMovieCast
+from app.models.cache import CachedActor, CachedMovie, CachedMovieCast, CachedMovieRating
 from app.services import cache_repo
 from app.services.tmdb import TMDBClient
+from app.utils.ids import utcnow
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 OMDB_BASE = "https://www.omdbapi.com/"
@@ -356,3 +358,97 @@ async def test_movie_ratings_cached_after_first_fetch_zero_http_on_repeat(config
         assert ratings_again.imdb_rating == "8.7"
         assert movie_route.call_count == 1
         assert omdb_route.call_count == 1
+
+
+async def test_transient_movie_ratings_failure_is_not_cached(config_dir):
+    with _session(config_dir) as session, respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/603").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "overview": "",
+                    "tagline": "",
+                },
+            )
+        )
+        omdb_route = respx.get(OMDB_BASE).mock(return_value=httpx.Response(500))
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            omdb = OMDbClient(client, Settings(omdb_api_key="test-key"))
+            ratings = await cache_repo.get_movie_ratings(session, tmdb, omdb, 603)
+
+        assert ratings is None
+        assert session.get(CachedMovieRating, 603) is None
+        assert omdb_route.call_count == 1
+
+
+async def test_stale_negative_movie_ratings_are_refetched(config_dir):
+    with _session(config_dir) as session, respx.mock:
+        session.add(
+            CachedMovie(
+                tmdb_id=603,
+                title="The Matrix",
+                release_date="1999-03-30",
+                overview="",
+                tagline="",
+            )
+        )
+        session.add(
+            CachedMovieRating(
+                movie_id=603,
+                fetched_at=utcnow() - timedelta(hours=25),
+            )
+        )
+        session.commit()
+        omdb_route = respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(
+                200,
+                json={"Response": "False", "Error": "Movie not found!"},
+            )
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            omdb = OMDbClient(client, Settings(omdb_api_key="test-key"))
+            ratings = await cache_repo.get_movie_ratings(session, tmdb, omdb, 603)
+
+        assert ratings is not None
+        assert ratings.imdb_rating is None
+        assert omdb_route.call_count == 1
+        assert ratings.fetched_at.replace(tzinfo=UTC) > utcnow() - timedelta(minutes=1)
+
+
+async def test_fresh_negative_movie_ratings_are_not_refetched(config_dir):
+    with _session(config_dir) as session, respx.mock:
+        session.add(
+            CachedMovie(
+                tmdb_id=603,
+                title="The Matrix",
+                release_date="1999-03-30",
+                overview="",
+                tagline="",
+            )
+        )
+        session.add(
+            CachedMovieRating(
+                movie_id=603,
+                fetched_at=utcnow() - timedelta(hours=1),
+            )
+        )
+        session.commit()
+        omdb_route = respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.7"})
+        )
+
+        async with httpx.AsyncClient() as client:
+            tmdb = TMDBClient(client)
+            omdb = OMDbClient(client, Settings(omdb_api_key="test-key"))
+            ratings = await cache_repo.get_movie_ratings(session, tmdb, omdb, 603)
+
+        assert ratings is not None
+        assert ratings.imdb_rating is None
+        assert omdb_route.call_count == 0

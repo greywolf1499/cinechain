@@ -7,6 +7,7 @@ shown), exactly like the Jellyfin client's approach.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TypedDict
 
 import httpx
@@ -18,6 +19,12 @@ class OMDbRatings(TypedDict):
     imdb_rating: str | None
     rotten_tomatoes: str | None
     metacritic: str | None
+
+
+@dataclass(frozen=True)
+class OMDbLookup:
+    ratings: OMDbRatings | None
+    transient: bool
 
 
 class OMDbClient:
@@ -40,9 +47,14 @@ class OMDbClient:
 
     async def get_ratings_by_title(self, title: str, year: int | None) -> OMDbRatings | None:
         """Looks up a movie by title (+optional year) - OMDb has no bulk-by-id
-        endpoint, so this is always a single request per movie."""
+        endpoint, so this is always a single request per movie. This compatibility
+        wrapper preserves the never-raises, ratings-or-None contract."""
+        return (await self.lookup_by_title(title, year)).ratings
+
+    async def lookup_by_title(self, title: str, year: int | None) -> OMDbLookup:
+        """Return ratings and whether a failure may be retried without negative-caching."""
         if not self.enabled or not title:
-            return None
+            return OMDbLookup(ratings=None, transient=False)
         params: dict[str, str] = {"apikey": self._api_key, "t": title, "type": "movie"}
         if year:
             params["y"] = str(year)
@@ -53,10 +65,14 @@ class OMDbClient:
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPError:
-            return None
+            return OMDbLookup(ratings=None, transient=True)
         if data.get("Response") != "True":
-            return None
-        return _extract_ratings(data)
+            error = data.get("Error")
+            return OMDbLookup(
+                ratings=None,
+                transient=error != "Movie not found!",
+            )
+        return OMDbLookup(ratings=_extract_ratings(data), transient=False)
 
 
 def _extract_ratings(data: dict) -> OMDbRatings:

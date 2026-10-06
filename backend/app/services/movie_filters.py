@@ -57,6 +57,11 @@ def rating_of(session, row: CachedMovie) -> float | None:
             return float(rated.imdb_rating)
         except ValueError:
             pass
+    return verified_tmdb_rating(row)
+
+
+def verified_tmdb_rating(row: CachedMovie) -> float | None:
+    """Return TMDB's score only when enough votes make it a meaningful rating."""
     if row.vote_count is None or row.vote_count < 10:
         return None
     return row.vote_average

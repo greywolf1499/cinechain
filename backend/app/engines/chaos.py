@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.engines.predicates import Predicate, facts_of, predicate
 from app.engines.rulebook import RuleSection
 
 RULEBOOK = RuleSection(
@@ -28,7 +29,6 @@ from sqlmodel import Session
 
 from app.models.cache import CachedMovie
 from app.services.movie_filters import rating_of
-from app.utils.dates import parse_release_year
 
 ACTIVE_KEY = "active_chaos"
 
@@ -45,41 +45,46 @@ class Handicap:
     # True/False, or None when the film's data can't tell yet.
     check: Callable[[CachedMovie, float | None], bool | None]
     needs: str  # the CachedMovie field whose absence means "fetch the detail": "", "runtime", ...
+    predicate: Predicate
 
 
 def _pre_1970(movie: CachedMovie, rating: float | None) -> bool | None:
-    year = parse_release_year(movie.release_date)
-    return None if year is None else year < PRE_YEAR
+    return predicate("year_lt", value=PRE_YEAR).check(movie, facts_of(movie, []))
 
 
 def _b_movie(movie: CachedMovie, rating: float | None) -> bool | None:
-    return None if rating is None else rating < B_MOVIE_RATING
+    return predicate("rating_lt", value=B_MOVIE_RATING).check(movie, facts_of(movie, [], rating))
 
 
 def _epic_length(movie: CachedMovie, rating: float | None) -> bool | None:
-    return None if not movie.runtime else movie.runtime >= EPIC_RUNTIME
+    return None if not movie.runtime else predicate("runtime_ge", value=EPIC_RUNTIME).check(movie, facts_of(movie, []))
 
 
 def _short_flick(movie: CachedMovie, rating: float | None) -> bool | None:
-    return None if not movie.runtime else movie.runtime <= SHORT_RUNTIME
+    return None if not movie.runtime else predicate("runtime_le", value=SHORT_RUNTIME).check(movie, facts_of(movie, []))
 
 
 def _foreign_tongue(movie: CachedMovie, rating: float | None) -> bool | None:
-    return None if not movie.original_language else movie.original_language != "en"
+    return predicate("non_english").check(movie, facts_of(movie, []))
 
 
 HANDICAPS: dict[str, Handicap] = {
     h.id: h
     for h in (
-        Handicap("pre_1970", "Time Machine: Pre-1970 only", _pre_1970, ""),
-        Handicap("b_movie", "Campy Cinema: Under 6.0 rating", _b_movie, "vote_average"),
-        Handicap("epic_length", "The Long Haul: Over 150 mins", _epic_length, "runtime"),
-        Handicap("short_flick", "Lightning Fast: Under 85 mins", _short_flick, "runtime"),
+        Handicap("pre_1970", "Time Machine: Pre-1970 only", _pre_1970, "",
+                 predicate("year_lt", value=PRE_YEAR)),
+        Handicap("b_movie", "Campy Cinema: Under 6.0 rating", _b_movie, "vote_average",
+                 predicate("rating_lt", value=B_MOVIE_RATING)),
+        Handicap("epic_length", "The Long Haul: Over 150 mins", _epic_length, "runtime",
+                 predicate("runtime_ge", value=EPIC_RUNTIME)),
+        Handicap("short_flick", "Lightning Fast: Under 85 mins", _short_flick, "runtime",
+                 predicate("runtime_le", value=SHORT_RUNTIME)),
         Handicap(
             "foreign_tongue",
             "Passport Punch: Non-English only",
             _foreign_tongue,
             "original_language",
+            predicate("non_english"),
         ),
     )
 }

@@ -23,10 +23,11 @@ import random
 import re
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
+from app.engines.predicates import MovieFacts, Predicate, facts_of, predicate
 from app.engines.rulebook import RuleSection
 
 RULEBOOK = RuleSection(
@@ -44,7 +45,6 @@ from sqlmodel import Session
 from app.models.cache import CachedMovie, CachedMovieDirector
 from app.services import cache_repo, llm
 from app.services.tmdb import TMDBClient, TMDBError
-from app.utils.dates import parse_release_year
 
 BOUNTY_BOARD_KEY = "bounty_board"
 ACTIVE_KEY = "active_bounties"
@@ -63,18 +63,6 @@ FEMALE = 1  # TMDB gender code
 
 
 @dataclass(frozen=True)
-class MovieFacts:
-    runtime: int | None
-    year: int | None
-    popularity: float | None
-    language: str | None
-    countries: list[str] | None
-    director_genders: list[int | None]
-    genre_ids: list[int] = field(default_factory=list)
-    text: str = ""  # lower-cased title, tagline and plot: what keyword rules search
-
-
-@dataclass(frozen=True)
 class Bounty:
     id: str
     title: str
@@ -83,53 +71,53 @@ class Bounty:
     check: Callable[[MovieFacts], bool]
     needs_directors: bool = False
     ai: bool = False
+    predicate: Predicate | None = None
 
 
 def _short_king(f: MovieFacts) -> bool:
-    return bool(f.runtime) and f.runtime < SHORT_RUNTIME
+    return bool(f.runtime) and predicate("runtime_lt", value=SHORT_RUNTIME).check(None, f) is True
 
 
 def _time_capsule(f: MovieFacts) -> bool:
-    return f.year is not None and f.year < CAPSULE_YEAR
+    return predicate("year_lt", value=CAPSULE_YEAR).check(None, f) is True
 
 
 def _hidden_gem(f: MovieFacts) -> bool:
-    return f.popularity is not None and f.popularity < HIDDEN_GEM_POPULARITY
+    return predicate("popularity_lt", value=HIDDEN_GEM_POPULARITY).check(None, f) is True
 
 
 def _foreign_horizon(f: MovieFacts) -> bool:
-    return (
-        bool(f.language)
-        and f.language != "en"
-        and f.countries is not None
-        and "US" not in f.countries
-    )
+    return predicate("non_us_non_english").check(None, f) is True
 
 
 def _female_gaze(f: MovieFacts) -> bool:
-    return FEMALE in f.director_genders
+    return predicate("female_director").check(None, f) is True
 
 
 def _epic_odyssey(f: MovieFacts) -> bool:
-    return bool(f.runtime) and f.runtime > EPIC_RUNTIME
+    return bool(f.runtime) and predicate("runtime_gt", value=EPIC_RUNTIME).check(None, f) is True
 
 
 BOUNTIES: dict[str, Bounty] = {
     b.id: b
     for b in (
         Bounty(
-            "short_king", "Short King", "⏱️", f"Runtime under {SHORT_RUNTIME} minutes", _short_king
+            "short_king", "Short King", "⏱️", f"Runtime under {SHORT_RUNTIME} minutes", _short_king,
+            predicate=predicate("runtime_lt", value=SHORT_RUNTIME),
         ),
         Bounty(
-            "time_capsule", "Time Capsule", "📼", f"Released before {CAPSULE_YEAR}", _time_capsule
+            "time_capsule", "Time Capsule", "📼", f"Released before {CAPSULE_YEAR}", _time_capsule,
+            predicate=predicate("year_lt", value=CAPSULE_YEAR),
         ),
-        Bounty("hidden_gem", "Hidden Gem", "💎", "Obscure: TMDB popularity under 12", _hidden_gem),
+        Bounty("hidden_gem", "Hidden Gem", "💎", "Obscure: TMDB popularity under 12", _hidden_gem,
+               predicate=predicate("popularity_lt", value=HIDDEN_GEM_POPULARITY)),
         Bounty(
             "foreign_horizon",
             "Foreign Horizon",
             "🌍",
             "Non-English language and not a US production",
             _foreign_horizon,
+            predicate=predicate("non_us_non_english"),
         ),
         Bounty(
             "female_gaze",
@@ -138,6 +126,7 @@ BOUNTIES: dict[str, Bounty] = {
             "Directed by a woman",
             _female_gaze,
             needs_directors=True,
+            predicate=predicate("female_director"),
         ),
         Bounty(
             "epic_odyssey",
@@ -145,6 +134,7 @@ BOUNTIES: dict[str, Bounty] = {
             "🏔️",
             f"Runtime over {EPIC_RUNTIME} minutes",
             _epic_odyssey,
+            predicate=predicate("runtime_gt", value=EPIC_RUNTIME),
         ),
     )
 }
@@ -192,19 +182,6 @@ def _countries(raw: str | None) -> list[str] | None:
     except ValueError:
         return []
     return [c for c in parsed if isinstance(c, str)] if isinstance(parsed, list) else []
-
-
-def facts_of(movie: CachedMovie, directors: list[CachedMovieDirector]) -> MovieFacts:
-    return MovieFacts(
-        runtime=movie.runtime,
-        year=parse_release_year(movie.release_date),
-        popularity=movie.popularity,
-        language=movie.original_language,
-        countries=_countries(movie.origin_country),
-        director_genders=[d.gender for d in directors],
-        genre_ids=list(movie.genre_ids or []),
-        text=" ".join(filter(None, (movie.title, movie.tagline, movie.overview))).lower(),
-    )
 
 
 def completed_by(active: list[Bounty], facts: MovieFacts) -> str | None:

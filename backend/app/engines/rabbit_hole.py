@@ -27,6 +27,7 @@ from typing import ClassVar
 
 from app.engines.cinechain import CineChainEngine
 from app.engines.conditions import RunOutcome
+from app.engines.predicates import Predicate, facts_of, predicate
 from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, Run, RunStep
@@ -63,14 +64,15 @@ class Tier:
     name: str
     rule: str  # short label for badges and warnings
     start_depth: int
+    predicate: Predicate | None = None
 
 
 TIERS = (
     Tier(1, "Freefall", "No extra constraints", 0),
-    Tier(2, "The Retro Lock", "Released before 2000", 5),
-    Tier(3, "Tower of Babel", "Non-English", 10),
-    Tier(4, "The Micro-Clock", "Under 100 mins", 15),
-    Tier(5, "The B-Movie Abyss", "Rated under 6.0", 20),
+    Tier(2, "The Retro Lock", "Released before 2000", 5, predicate("year_lt", value=RETRO_CUTOFF_YEAR)),
+    Tier(3, "Tower of Babel", "Non-English", 10, predicate("non_english")),
+    Tier(4, "The Micro-Clock", "Under 100 mins", 15, predicate("runtime_lt", value=MICRO_CLOCK_MINUTES)),
+    Tier(5, "The B-Movie Abyss", "Rated under 6.0", 20, predicate("rating_lt", value=B_MOVIE_RATING)),
 )
 
 
@@ -135,17 +137,10 @@ def tier_state(depth: int, rules: dict | None) -> RabbitHoleState:
 
 def compliance(session, tier: Tier, row: CachedMovie) -> bool | None:
     """Does `row` satisfy the tier's rule? None = the film's data can't tell (yet)."""
-    if tier.number == 1:
+    if tier.predicate is None:
         return True
-    if tier.number == 2:
-        year = parse_release_year(row.release_date)
-        return None if year is None else year < RETRO_CUTOFF_YEAR
-    if tier.number == 3:
-        return None if not row.original_language else row.original_language != "en"
-    if tier.number == 4:
-        return None if row.runtime is None else row.runtime < MICRO_CLOCK_MINUTES
-    rating = rating_of(session, row)
-    return None if rating is None else rating < B_MOVIE_RATING
+    rating = rating_of(session, row) if "rating" in tier.predicate.needs else None
+    return tier.predicate.check(row, facts_of(row, [], rating))
 
 
 def violation_reason(session, tier: Tier, row: CachedMovie) -> str:

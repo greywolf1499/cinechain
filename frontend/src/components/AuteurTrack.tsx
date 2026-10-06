@@ -6,7 +6,7 @@ import MoviePoster from "./MoviePoster";
 import { ApiError } from "../lib/api";
 import { auteurProgress, formatRuntime } from "../lib/auteurTrack";
 import { marathonPacing, trackStatuses } from "../lib/careerTrack";
-import { MarathonWrap } from "./CareerTrack";
+import { CareerEraHeading, MarathonWrap, MilestoneBadge, MissingMilestones } from "./CareerTrack";
 import { cn } from "../lib/cn";
 import { useCreateStep } from "../lib/queries";
 import type { AuteurFilm, RunDetail } from "../types/api";
@@ -49,6 +49,7 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
         </p>
       </div>
       <MarathonWrap run={run} />
+      <MissingMilestones films={films} acting={false} />
       <MarathonProgressBar progress={progress} barClassName="bg-teal-400" />
       {message && (
         <p role="alert" className="rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
@@ -56,14 +57,15 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
         </p>
       )}
       <ol className="relative flex flex-col gap-3 border-l border-app-border pl-5">
-        {films.map((film) => {
+        {films.map((film, index) => {
           const state = statuses.get(film.movie_id) ?? "upcoming";
           const runtime = formatRuntime(film.runtime);
           return (
-            <li
-              key={film.movie_id}
+            <li key={film.movie_id} className="flex flex-col gap-2">
+              <CareerEraHeading run={run} track={films} index={index} />
+            <div
               className={cn(
-                "relative flex items-center gap-3 rounded-xl border p-2.5",
+                "relative flex flex-wrap items-center gap-3 rounded-xl border p-2.5 sm:flex-nowrap",
                 state === "watched" && "border-emerald-700/50 bg-emerald-950/20",
                 state === "planned" && "border-sky-800/50 bg-sky-950/20",
                 state === "next" && "border-accent/70 bg-app-surface shadow-[0_0_0_1px_rgba(251,191,36,0.25)]",
@@ -81,8 +83,10 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
                 {film.year}
               </span>
               <MoviePoster path={film.poster_path} title={film.title} className="w-12 shrink-0" />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1 basis-36 sm:basis-auto">
                 <p className="truncate text-sm font-medium text-zinc-100">{film.title}</p>
+                <div className="flex flex-wrap gap-1">{film.milestones?.map((milestone) =>
+                  <MilestoneBadge key={milestone} milestone={milestone} evidence={film.evidence?.[milestone]} />)}</div>
                 <p className="text-[11px] text-zinc-500">{runtime ?? "Runtime unknown"}</p>
               </div>
               {state === "watched" || state === "planned" ? (
@@ -104,6 +108,7 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
                   />
                 )
               )}
+            </div>
             </li>
           );
         })}

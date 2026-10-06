@@ -184,7 +184,7 @@ def mock_universe(movies: dict[int, dict]) -> dict[int, respx.Route]:
                     "origin_country": ["US"],
                     "original_language": "en",
                     "runtime": 100,
-                    "genres": [],
+                    "genres": [{"id": genre} for genre in m.get("genre_ids", [])],
                     "popularity": m.get("popularity", 1.0),
                     "status": "Released",
                 },

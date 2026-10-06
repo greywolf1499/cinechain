@@ -23,6 +23,8 @@ from app.engines.conditions import RunOutcome
 from app.engines.method_actor import (
     MethodActorEngine,
     build_career_track,
+    career_era_problems,
+    enrich_career_track,
     marathon_completion_rule,
     marathon_finished,
     marathon_order_rule,
@@ -103,6 +105,7 @@ def build_filmography(
                 "year": int(entry["release_date"][:4]),
                 "poster_path": entry.get("poster_path"),
                 "runtime": runtime or None,
+                "genre_ids": list(genres),
             }
         )
     if not films:
@@ -110,15 +113,16 @@ def build_filmography(
             "This person has no feature films as a director to build a marathon from"
         )
     ordered = sorted(films, key=lambda f: (f["release_date"], f["movie_id"]))
-    if length is None:
-        return ordered
     eligible = {film["movie_id"]: film for film in films}
     track = build_career_track(
-        [{**entry, "order": 0, "character": "Director"}
+        [{**entry, "order": 0, "character": "Director", "genre_ids": eligible[entry["id"]]["genre_ids"]}
          for entry in credits if entry.get("id") in eligible],
-        None, today, length=length,
+        None, today, length=length, acting=False,
     )
-    return [{**eligible[film["movie_id"]], "milestones": film["milestones"]} for film in track]
+    annotated = {film["movie_id"]: film for film in track}
+    selected = track if length is not None else ordered
+    return [{**annotated.get(film["movie_id"], {}), **eligible[film["movie_id"]]}
+            for film in selected]
 
 
 class AuteurMarathonEngine(TrackerEngine):
@@ -166,6 +170,8 @@ class AuteurMarathonEngine(TrackerEngine):
             isinstance(skip, bool) or not isinstance(skip, int) or not 0 <= skip <= MAX_SKIP_LIMIT
         ):
             problems.append(f"{MAX_SKIP_KEY} must be a whole number from 0 to {MAX_SKIP_LIMIT}")
+        if "career_eras" in rules and "filmography" in rules:
+            problems += career_era_problems(rules["career_eras"], rules["filmography"])
         return problems
 
     async def prepare_run(self, rules: dict, user_id: str) -> dict:
@@ -180,6 +186,10 @@ class AuteurMarathonEngine(TrackerEngine):
                 raise RunSetupError(f"No person with TMDB id {director_id}") from exc
             raise RunSetupError(f"TMDB lookup failed: {exc}", 502) from exc
         filmography = build_filmography(candidates, details, length=rules.get("track_length", "feature"))
+        filmography = await enrich_career_track(filmography, self.tmdb, self.session)
+        era_problems = career_era_problems(rules.get("career_eras", []), filmography)
+        if era_problems:
+            raise RunSetupError("; ".join(era_problems))
         rest = {k: v for k, v in rules.items() if k != DIRECTOR_ID_KEY}
         return {
             **rest,

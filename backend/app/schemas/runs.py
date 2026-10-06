@@ -66,6 +66,7 @@ class RunRulesUpdate(BaseModel):
     sudden_death_every: int | None = None
     track_length: str | None = None
     order: str | None = None
+    career_eras: list[dict[str, Any]] | None = None
 
 
 MODIFIER_UPDATE_KEYS = ("chrono_direction", "runtime_staircase", "country_cooldown")

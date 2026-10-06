@@ -775,6 +775,10 @@ async def create_run(
             rules_config = engine.prepare_overlays(rules_config, overlay_seed_history)
         except RunSetupError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if rules_config.get("career_eras"):
+            problems = engine.validate_rules_config(rules_config)
+            if problems:
+                raise HTTPException(422, detail="; ".join(problems))
 
     run = Run(
         name=payload.name,
@@ -899,7 +903,7 @@ def update_run_rules(
 ):
     # A Bounty Board run earns its wildcards: the budget isn't editable.
     bounty_run = bounties.board_enabled(run.rules_config)
-    if payload.wildcards_budget != -1 and not bounty_run:
+    if "wildcards_budget" in payload.model_fields_set and payload.wildcards_budget != -1 and not bounty_run:
         consumed = _count_wildcards_consumed(session, run.id)
         if payload.wildcards_budget < consumed:
             raise HTTPException(
@@ -911,7 +915,7 @@ def update_run_rules(
             )
     # Merge instead of replace so V2 keys the form doesn't know about
     # (win_condition, fail_condition, raw JSON overrides) survive an edit.
-    update = payload.model_dump(exclude_none=True)
+    update = payload.model_dump(exclude_none=True, exclude_unset=True)
     if bounty_run:
         update.pop("wildcards_budget", None)
     # Modifiers can be switched off again: an explicit null is stored (and means "unset").
@@ -927,6 +931,8 @@ def update_run_rules(
         if key in update and update[key] != (run.rules_config or {}).get(key):
             raise HTTPException(422, detail=f"{key} can only be chosen when creating a run")
     engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if "career_eras" in update and run.game_type not in ("method_actor", "auteur_marathon"):
+        raise HTTPException(422, detail="Career eras are only available on career marathons")
     if update.get(blind_fork.BLIND_FORK_KEY) is False:
         merged = blind_fork.with_fork(merged, None)
     if engine_class is not None:

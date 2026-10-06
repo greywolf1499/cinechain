@@ -131,6 +131,7 @@ export interface RulesConfig {
 	actor_id?: number;
 	actor?: { id: number; name: string };
 	filmography?: (CareerFilm | AuteurFilm)[];
+	career_eras?: CareerEra[];
 	max_skip?: number | null;
 	track_length?: "milestones" | "short" | "feature" | "full" | "endless";
 	order?: "strict" | "relaxed" | "free";
@@ -229,9 +230,25 @@ export interface BracketFilm {
 	tagline: string;
 }
 
-export type CareerMilestone = "debut" | "breakout" | "prestige_peak" | "modern_resurgence";
+export type CareerMilestone = "debut" | "breakout" | "prestige_peak" | "modern_resurgence"
+	| "first_theatrical" | "first_lead" | "genre_pivot" | "against_type" | "comeback" | "language_crossover";
 
-export interface CareerFilm {
+export interface CareerEra {
+	start_movie_id: number;
+	end_movie_id: number;
+	label: string;
+}
+
+export interface CareerContext {
+	milestones?: CareerMilestone[];
+	evidence?: Partial<Record<CareerMilestone, string>>;
+	era_index?: number;
+	era_label?: string | null;
+	suggestions?: string[];
+	suggestion_evidence?: string;
+}
+
+export interface CareerFilm extends CareerContext {
 	movie_id: number;
 	title: string;
 	release_date: string;
@@ -245,7 +262,7 @@ export interface CareerFilm {
 	milestones: CareerMilestone[];
 }
 
-export interface AuteurFilm {
+export interface AuteurFilm extends CareerContext {
 	movie_id: number;
 	title: string;
 	release_date: string;

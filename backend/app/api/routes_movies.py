@@ -28,6 +28,7 @@ from app.schemas.movies import (
 from app.services import (
     blind_fork,
     cache_repo,
+    embeddings,
     historical_era,
     llm,
     movie_features,
@@ -322,13 +323,17 @@ async def extract_movie_tropes(
     if movie.overview is None:
         movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=True)
     if movie.extracted_tropes is not None:
-        return TropeExtraction(tmdb_id=tmdb_id, tropes=movie.extracted_tropes, cached=True)
+        try:
+            tropes = (await movie_features.guard_tropes(session, [(movie, movie.extracted_tropes)]))[tmdb_id]
+        except embeddings.EmbeddingUnavailable as exc:
+            raise HTTPException(503, detail=str(exc)) from exc
+        return TropeExtraction(tmdb_id=tmdb_id, tropes=tropes, cached=True)
     config = llm.load_config(session)
     if not config.enabled:
         return TropeExtraction(tmdb_id=tmdb_id, tropes=[], cached=False, enabled=False)
     try:
         tropes = await movie_features.extract_and_store_tropes(session, movie, config)
-    except llm.LlmUnavailable as exc:
+    except (llm.LlmUnavailable, embeddings.EmbeddingUnavailable) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc

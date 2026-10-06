@@ -473,7 +473,7 @@ export function useUpdateRun(runId: string) {
 export function useUpdateRunRules(runId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: (payload: RulesConfig) =>
+		mutationFn: (payload: Partial<RulesConfig>) =>
 			api.patch<RunDetail>(`/runs/${runId}/rules`, payload),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });

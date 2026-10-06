@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from typing import ClassVar
 
 from sqlalchemy import or_
-from sqlmodel import select
+from sqlmodel import col, select
 
 from app.engines.cinechain import CineChainEngine
 from app.engines.mutators import (
@@ -318,13 +318,15 @@ class SemanticTropeEngine(FeatureEngine):
         ["Pick a film sharing a trope or exceeding {similarity_threshold}% normalized plot similarity."],
         ["{win_goal}"], ["A measured weak match with no shared trope blocks the hop.", "{fail_goal}"],
         ["Broad themes give more onward routes than a single narrow premise.",
+         "Shared tags must pass genre compatibility and at least {trope_threshold}% normalized overview-to-concept confidence.",
          "Inspect the shared trope and synopsis rather than treating model tags as certainty."], ["seed"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict:
         return {**super().rulebook_values(rules),
-                "similarity_threshold": _percent(SEMANTIC_SIMILARITY_THRESHOLD)}
+                "similarity_threshold": _percent(SEMANTIC_SIMILARITY_THRESHOLD),
+                "trope_threshold": _percent(movie_features.TROPE_CONFIDENCE_THRESHOLD)}
     display_name = "Semantic Trope Web"
     description = (
         "Follow the plot: every film must be a close semantic match to the last, judged by a "
@@ -332,6 +334,11 @@ class SemanticTropeEngine(FeatureEngine):
         "Any film counts - no shared cast needed."
     )
     needs_detail = True  # overviews come from the full TMDB detail
+
+    def _shared_trope(self, earlier: CachedMovie, later: CachedMovie) -> str | None:
+        verified = getattr(self, "_verified_tropes", {})
+        theirs = set(verified.get(later.tmdb_id, []))
+        return next((tag for tag in verified.get(earlier.tmdb_id, []) if tag in theirs), None)
 
     def _needs_hydration(self, row: CachedMovie, rules: dict | None = None) -> bool:
         return row.overview is None or self._modifiers_need_detail(row, rules)
@@ -353,7 +360,7 @@ class SemanticTropeEngine(FeatureEngine):
         )
 
     def violation(self, earlier: CachedMovie, later: CachedMovie, metric: float) -> str | None:
-        if metric > SEMANTIC_SIMILARITY_THRESHOLD or shared_trope(earlier, later):
+        if metric > SEMANTIC_SIMILARITY_THRESHOLD or self._shared_trope(earlier, later):
             return None
         return (
             f"Semantic Trope Web: {later.title} is only a {_percent(metric)}% plot match for "
@@ -363,10 +370,19 @@ class SemanticTropeEngine(FeatureEngine):
 
     async def prepare(self, movies: list[CachedMovie]) -> None:
         await movie_features.ensure_embeddings(self.session, movies)
+        await self.prepare_tropes([movie for movie in movies if movie.extracted_tropes is not None])
 
     async def prepare_tropes(self, movies: Sequence[CachedMovie]) -> None:
         """Extract missing tropes (an LLM call each, so only for the films that matter)."""
-        await movie_features.ensure_tropes(self.session, movies)
+        if not hasattr(self, "_verified_tropes"):
+            self._verified_tropes: dict[int, list[str]] = {}
+            self._trope_sources: dict[int, tuple] = {}
+        def source(movie: CachedMovie) -> tuple:
+            return movie.overview, tuple(movie.genre_ids or []), tuple(movie.extracted_tropes or [])
+        pending = [movie for movie in movies if self._trope_sources.get(movie.tmdb_id) != source(movie)]
+        verified = await movie_features.ensure_tropes(self.session, pending)
+        self._verified_tropes.update(verified)
+        self._trope_sources.update({movie.tmdb_id: source(movie) for movie in pending})
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
         result = await super().validate_candidate(movie_id, rules)
@@ -393,14 +409,14 @@ class SemanticTropeEngine(FeatureEngine):
             previous_transition=previous_transition,
         )
         if result.valid:
-            result.shared_trope = shared_trope(earlier, later)
+            result.shared_trope = self._shared_trope(earlier, later)
         return result
 
     def annotate(
         self, candidate: DiscoveryCandidate, row: CachedMovie, metric: float | None
     ) -> None:
         candidate.semantic_score = None if metric is None else max(0.0, round(metric, 4))
-        candidate.tropes = list(row.extracted_tropes or [])
+        candidate.tropes = list(getattr(self, "_verified_tropes", {}).get(row.tmdb_id, []))
 
     def with_metric(self, result: ValidationResult, metric: float | None) -> ValidationResult:
         result.similarity = None if metric is None else round(metric, 4)
@@ -428,7 +444,7 @@ class SemanticTropeEngine(FeatureEngine):
             if row.tmdb_id == frontier.tmdb_id or not is_reality_eligible(row):
                 continue
             metric = self.measure(frontier, row)
-            linked = shared_trope(frontier, row) is not None
+            linked = self._shared_trope(frontier, row) is not None
             if metric is None and not linked:
                 continue
             if metric is not None and self.violation(frontier, row, metric):
@@ -462,7 +478,7 @@ class SemanticTropeEngine(FeatureEngine):
             statement = statement.where(
                 or_(
                     CachedMovie.overview_embedding_model.is_(None),  # type: ignore[union-attr]
-                    CachedMovie.overview_embedding_model == fingerprint,
+                    col(CachedMovie.overview_embedding_model) == fingerprint,
                 )
             )
         else:
@@ -484,9 +500,11 @@ class SemanticTropeEngine(FeatureEngine):
         # Films sharing one of the frontier's tropes qualify even without a close plot match.
         if frontier.extracted_tropes:
             tagged = self.session.exec(
-                select(CachedMovie).where(CachedMovie.extracted_tropes.is_not(None))
-            ).all()  # type: ignore[union-attr]
-            pool.update({r.tmdb_id: r for r in tagged if shared_trope(frontier, r)})
+                select(CachedMovie).where(col(CachedMovie.extracted_tropes).is_not(None))
+                .order_by(col(CachedMovie.popularity).desc()).limit(POOL_FEATURE_BUDGET)
+            ).all()
+            await self.prepare_tropes(tagged)
+            pool.update({r.tmdb_id: r for r in tagged if self._shared_trope(frontier, r)})
             by_popularity = sorted(
                 (r for r in pool.values() if r.extracted_tropes is None and r.overview),
                 key=lambda r: -(r.popularity or 0.0),

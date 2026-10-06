@@ -283,6 +283,11 @@ class TMDBClient:
         data = await self._get(f"/movie/{tmdb_id}/keywords")
         return [k["name"] for k in data.get("keywords", []) if k.get("name")]
 
+    async def get_movie_release_dates(self, tmdb_id: int) -> list[dict[str, Any]]:
+        """Country-specific TMDB release dates and types (2/3 are cinema releases)."""
+        data = await self._get(f"/movie/{tmdb_id}/release_dates")
+        return data.get("results", [])
+
     async def find_keyword_ids(self, name: str, limit: int = 3) -> list[int]:
         """TMDB's ids for a keyword ("ancient rome"), best match first."""
         data = await self._get("/search/keyword", params={"query": name})

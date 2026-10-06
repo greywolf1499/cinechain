@@ -2,24 +2,31 @@
 
 import json
 import re
+from unittest.mock import Mock
 
 import httpx
+import numpy as np
 import pytest
 import respx
 from sqlmodel import Session
 
+from app.engines.algorithms import SemanticTropeEngine
 from app.models.cache import CachedMovie
-from app.services import llm
+from app.services import embeddings, llm, movie_features
+from app.services.tmdb import TMDBClient
 from tests.test_algorithm_sandbox import (
     PLOTS,
     TMDB_BASE,
+    VECTORS,
     client,
     create_run,
     db_engine,
     fake_model,
     log,
-    mock_universe,
     run_steps,
+)
+from tests.test_algorithm_sandbox import (
+    mock_universe as _mock_universe,
 )
 
 OLLAMA_CHAT = "http://localhost:11434/api/chat"
@@ -33,6 +40,24 @@ TROPES_BY_PLOT = {
 }
 
 __all__ = ["client", "db_engine", "fake_model"]
+
+def mock_universe(movies):
+    return _mock_universe({key: {**movie, "genre_ids": [80] if key != 3 else [35, 10749]}
+                           for key, movie in movies.items()})
+
+
+@pytest.fixture(autouse=True)
+def _concept_vectors(fake_model, monkeypatch):
+    vectors = {
+        **VECTORS,
+        movie_features.TROPE_DESCRIPTIONS["heist"]: VECTORS["heist"],
+        "A story involving crime.": VECTORS["heist"],
+        "A story involving double cross.": VECTORS["heist-ish"],
+        "A story involving love story.": VECTORS["romance"],
+    }
+    def embed(texts, preset=None):
+        return [vectors[text] for text in texts]
+    monkeypatch.setattr(embeddings, "embed_texts", embed)
 
 
 @pytest.fixture(autouse=True)
@@ -174,7 +199,7 @@ def test_changing_the_overview_drops_the_stale_tropes(client, db_engine):
 # --- shared-trope hops ---
 
 
-def test_a_shared_trope_validates_a_hop_the_plots_would_block(client, fake_model):
+def test_an_ungrounded_shared_trope_cannot_bypass_the_plot_guard(client, fake_model):
     run_id = create_run(client, "semantic_trope")
     with respx.mock:
         mock_universe(PLOTS)
@@ -182,10 +207,8 @@ def test_a_shared_trope_validates_a_hop_the_plots_would_block(client, fake_model
         assert log(client, run_id, 1).status_code == 201
         hop = log(client, run_id, 3)  # orthogonal plot, but both are tagged "heist"
 
-    assert hop.status_code == 201, hop.text
-    meta = hop.json()["transition_metadata"]
-    assert meta["shared_trope"] == "heist"
-    assert run_steps(client, run_id)[1]["transition_metadata"]["shared_trope"] == "heist"
+    assert hop.status_code == 409, hop.text
+    assert len(run_steps(client, run_id)) == 1
 
 
 def test_the_trope_is_recorded_alongside_a_plot_match(client, fake_model):
@@ -277,7 +300,185 @@ def test_pick_next_offers_trope_sharers_and_exposes_tropes(client, fake_model):
             ).json()
         }
 
-    # "Love Story" has an orthogonal plot, but shares the "heist" trope with the frontier.
-    assert set(pool) == {2, 3}
-    assert pool[3]["tropes"] == ["heist", "love-story"]
+    # The hallucinated heist tag on an unrelated romance is not a discovery shortcut.
+    assert set(pool) == {2}
     assert pool[2]["tropes"] == ["double-cross", "crime"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("raw,expected", [(0.99, ["romance"]), (0.96, []), (0.78, [])])
+async def test_trope_confidence_uses_arctic_normalization(db_engine, monkeypatch, raw, expected):
+    config = embeddings.EmbeddingConfig(local_preset="arctic-embed-xs")
+    monkeypatch.setattr(embeddings, "load_config", lambda session: config)
+    async def embed(config, texts):
+        assert len(texts) == 2
+        return embeddings.EmbeddingBatch([np.array([1., 0.]), np.array([raw, np.sqrt(1 - raw**2)])],
+                                         config.fingerprint)
+    monkeypatch.setattr(embeddings, "embed_batch", embed)
+    movie = CachedMovie(tmdb_id=1, title="Rom-com", genre_ids=[35, 10749], overview="Two people fall in love.")
+    with Session(db_engine) as session:
+        result = await movie_features.guard_tropes(session, [(movie, ["cyberpunk", "romance"])])
+    assert result[1] == expected  # Cyberpunk is genre-blocked even at near-identical confidence.
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("score,accepted", [(0.85, True), (0.8499, False)])
+async def test_trope_threshold_is_inclusive(db_engine, monkeypatch, score, accepted):
+    async def embed(config, texts):
+        return embeddings.EmbeddingBatch([np.array([1., 0.])] * len(texts), config.fingerprint)
+    monkeypatch.setattr(embeddings, "embed_batch", embed)
+    monkeypatch.setattr(embeddings, "normalize_similarity", lambda cosine, fingerprint: score)
+    movie = CachedMovie(tmdb_id=1, title="Heist", genre_ids=[80], overview="A team robs a bank.")
+    with Session(db_engine) as session:
+        assert bool((await movie_features.guard_tropes(session, [(movie, ["heist"])]))[1]) is accepted
+
+
+@pytest.mark.anyio
+async def test_missing_genres_and_model_mismatch_cannot_admit_tags(db_engine, monkeypatch):
+    async def embed(config, texts):
+        return embeddings.EmbeddingBatch([np.array([1., 0.])] * len(texts), "unrelated:model")
+    monkeypatch.setattr(embeddings, "embed_batch", embed)
+    movie = CachedMovie(tmdb_id=1, title="Unknown", overview="A team robs a bank.")
+    with Session(db_engine) as session:
+        assert (await movie_features.guard_tropes(session, [(movie, ["heist"])]))[1] == []
+        movie.genre_ids = [80]
+        with pytest.raises(embeddings.EmbeddingUnavailable, match="fingerprint"):
+            await movie_features.guard_tropes(session, [(movie, ["heist"])])
+
+
+@pytest.mark.anyio
+async def test_fresh_guard_ignores_stale_vectors_and_accepts_local_fallback(db_engine, monkeypatch):
+    movie = CachedMovie(tmdb_id=1, title="Heist", genre_ids=[80], overview="A robbery.",
+                        overview_embedding=b"stale", overview_embedding_model="old:space")
+    config = embeddings.EmbeddingConfig(provider="ollama", model="different", local_preset="all-minilm-l6-v2")
+    monkeypatch.setattr(embeddings, "load_config", lambda session: config)
+    async def embed(config, texts):
+        assert texts == ["A robbery.", movie_features.TROPE_DESCRIPTIONS["heist"]]
+        return embeddings.EmbeddingBatch([np.array([1., 0.])] * 2, config.local_fingerprint, fell_back=True)
+    monkeypatch.setattr(embeddings, "embed_batch", embed)
+    with Session(db_engine) as session:
+        assert (await movie_features.guard_tropes(session, [(movie, ["heist"])]))[1] == ["heist"]
+
+
+@pytest.mark.anyio
+async def test_unavailable_guard_preserves_cache_but_never_trusts_it(db_engine, monkeypatch):
+    async def offline(*args):
+        raise embeddings.EmbeddingUnavailable("offline")
+    monkeypatch.setattr(embeddings, "embed_batch", offline)
+    warning = Mock()
+    monkeypatch.setattr(movie_features.logger, "warning", warning)
+    async def extract(*args):
+        return ["heist"]
+    monkeypatch.setattr(llm, "extract_tropes", extract)
+    with Session(db_engine) as session:
+        movie = CachedMovie(tmdb_id=1, title="Heist", genre_ids=[80], overview="heist", extracted_tropes=["heist"])
+        session.add(movie)
+        session.commit()
+        assert (await movie_features.ensure_tropes(session, [movie]))[1] == []
+        session.refresh(movie)
+        assert movie.extracted_tropes == ["heist"]
+        warning.assert_called_once()
+        assert "verification unavailable" in warning.call_args.args[0]
+        with pytest.raises(embeddings.EmbeddingUnavailable):
+            await movie_features.extract_and_store_tropes(session, movie, llm.LlmConfig(provider="ollama"))
+
+
+@pytest.mark.anyio
+async def test_both_extraction_paths_use_identical_guards(db_engine, monkeypatch):
+    async def extract(*args):
+        return ["cyberpunk", "romance", "revenge"]
+    async def embed(config, texts):
+        vectors = [np.array([1., 0.]) if "revenge" not in text else np.array([0., 1.]) for text in texts]
+        return embeddings.EmbeddingBatch(vectors, config.fingerprint)
+    monkeypatch.setattr(llm, "extract_tropes", extract)
+    monkeypatch.setattr(llm, "load_config", lambda session: llm.LlmConfig(provider="ollama"))
+    monkeypatch.setattr(embeddings, "embed_batch", embed)
+    with Session(db_engine) as session:
+        movies = [CachedMovie(tmdb_id=i, title="Rom-com", genre_ids=[35, 10749], overview="Love.")
+                  for i in (1, 2)]
+        session.add_all(movies)
+        session.commit()
+        explicit = await movie_features.extract_and_store_tropes(session, movies[0], llm.load_config(session))
+        automatic = await movie_features.ensure_tropes(session, [movies[1]])
+        assert explicit == automatic[2] == ["romance"]
+        assert movies[0].extracted_tropes == movies[1].extracted_tropes == ["romance"]
+
+
+@pytest.mark.anyio
+async def test_verified_shared_trope_still_links_below_plot_threshold(db_engine, monkeypatch):
+    first = np.zeros(embeddings.EMBEDDING_DIM, dtype=np.float32)
+    first[0] = 1
+    second = np.zeros_like(first)
+    second[:2] = [0.45, np.sqrt(1 - 0.45**2)]
+    concept = (first + second) / np.linalg.norm(first + second)
+    async def embed(config, texts):
+        return embeddings.EmbeddingBatch(
+            [first if text == "plot one" else second if text == "plot two" else concept for text in texts],
+            config.fingerprint,
+        )
+    monkeypatch.setattr(embeddings, "embed_batch", embed)
+    async with httpx.AsyncClient() as http_client:
+        with Session(db_engine) as session:
+            config = embeddings.load_config(session)
+            a = CachedMovie(tmdb_id=1, title="One", genre_ids=[80], overview="plot one", extracted_tropes=["heist"],
+                            overview_embedding=embeddings.encode_embedding(first), overview_embedding_model=config.fingerprint)
+            b = CachedMovie(tmdb_id=2, title="Two", genre_ids=[80], overview="plot two", extracted_tropes=["heist"],
+                            overview_embedding=embeddings.encode_embedding(second), overview_embedding_model=config.fingerprint)
+            session.add_all([a, b])
+            session.commit()
+            engine = SemanticTropeEngine(session, TMDBClient(http_client))
+            assert engine._shared_trope(a, b) is None
+            await engine.prepare_tropes([a, b])
+            assert engine._shared_trope(a, b) == "heist"
+            assert engine.measure(a, b) == pytest.approx(0.45)
+            assert engine.violation(a, b, 0.45) is None
+            a.overview = "changed plot"
+            async def offline(*args):
+                raise embeddings.EmbeddingUnavailable("offline")
+            monkeypatch.setattr(embeddings, "embed_batch", offline)
+            await engine.prepare_tropes([a])
+            assert engine._shared_trope(a, b) is None
+
+
+def test_extract_endpoint_reports_embedding_failure_and_leaves_cache_unverified(client, db_engine, monkeypatch):
+    async def offline(*args):
+        raise embeddings.EmbeddingUnavailable("offline")
+    monkeypatch.setattr(embeddings, "embed_batch", offline)
+    with respx.mock:
+        mock_universe(PLOTS)
+        mock_llm(client)
+        response = client.post("/api/movies/1/tropes/extract")
+    assert response.status_code == 503
+    with Session(db_engine) as session:
+        assert session.get(CachedMovie, 1).extracted_tropes is None
+
+
+@pytest.mark.anyio
+async def test_trope_verification_bounds_each_jit_batch_and_does_not_share_spaces(db_engine, monkeypatch):
+    sizes = []
+    async def embed(config, texts):
+        sizes.append(len(texts))
+        assert len(texts) <= movie_features.EMBED_BATCH_SIZE
+        return embeddings.EmbeddingBatch([np.array([1., 0.])] * len(texts), config.fingerprint)
+    monkeypatch.setattr(embeddings, "embed_batch", embed)
+    movies = [(CachedMovie(tmdb_id=i, title="Heist", genre_ids=[80], overview="Robbery."), ["heist"] * 2)
+              for i in range(12)]
+    with Session(db_engine) as session:
+        verified = await movie_features.guard_tropes(session, movies)
+    assert len(sizes) == 3
+    assert all(tags == ["heist"] for tags in verified.values())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("vectors", [
+    [np.array([1., 0.]), np.array([1., 0., 0.])],
+    [np.array([1., 0.]), np.array([np.nan, 0.])],
+    [np.array([1., 0.]), np.array([0., 0.])],
+])
+async def test_malformed_provider_vectors_cannot_verify_tropes(db_engine, monkeypatch, vectors):
+    async def embed(config, texts):
+        return embeddings.EmbeddingBatch(vectors, config.fingerprint)
+    monkeypatch.setattr(embeddings, "embed_batch", embed)
+    movie = CachedMovie(tmdb_id=1, title="Heist", genre_ids=[80], overview="Robbery.")
+    with Session(db_engine) as session, pytest.raises(embeddings.EmbeddingUnavailable):
+        await movie_features.guard_tropes(session, [(movie, ["heist"])])

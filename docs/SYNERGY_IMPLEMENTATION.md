@@ -437,6 +437,24 @@ semantic game tags grounded in genres and measurable confidence.
 - every milestone carries evidence;
 - `career_eras` survives `PATCH /rules` while `filmography` remains unforgeable.
 
+**Implementation clarifications (S10):**
+- Genre pivot uses Jaccard **distance**, not similarity. Comebacks measure complete elapsed
+  years between qualifying credits; their evidence does not claim an absence of all professional activity.
+- First-theatrical evidence is explicitly limited to recorded releases for the first three
+  selected track films. Optional release lookups share a 10-second budget.
+- Against-type uses the existing **local-only** JIT preset and the preceding up-to-five track
+  overviews. It needs at least five measured distances and nonzero variance; missing, malformed,
+  unavailable or mismatched embeddings never invent a badge.
+- Keyword suggestions inspect at most five qualifying films within 10 seconds and require
+  a word-boundary character-name match. Confirmation creates an editable player tag, never
+  a server milestone. Auteur tracks do not inherit actor-specific billing badges.
+- Player eras are nonoverlapping on-track spans with labels of at most 80 characters.
+  Annotation-only PATCHes preserve gameplay settings; creation rechecks spans after title
+  overlays filter the checklist. Additional verified milestones can enlarge a milestones-length
+  track, as the existing selection policy retains every milestone.
+- Evidence popovers and era editors work in both career views; narrow cards wrap their log
+  actions so they cannot cover milestone buttons.
+
 **Commit:** `feat(method-actor): evidence-backed career milestones and eras`
 
 ### S10c. Semantic trope Genre Gate & Confidence Threshold
@@ -462,6 +480,13 @@ semantic game tags grounded in genres and measurable confidence.
   rom-com cannot retain `cyberpunk`; compatible high-confidence tags survive; low-confidence
   tags do not; equality at the threshold is covered; missing genres, mismatched fingerprints
   and unavailable providers cannot admit unverified tags; both extraction callers behave alike.
+- The implemented named threshold is **0.85 provider-normalized confidence**, inclusive.
+  Missing genres or overview cannot verify a tag. Fresh overview/concept pairs share a validated
+  configured or local-fallback fingerprint, finite nonzero vectors and matching dimensions.
+  Verification batches stay within the existing embedding batch budget; tagged discovery is
+  bounded by the existing feature-pool budget. Request-local source memoization avoids repeated
+  verification without trusting stale tags. Automatic failures are logged and preserve cached
+  data while withholding trusted tags; explicit extraction returns 503 for provider failure.
 
 ---
 

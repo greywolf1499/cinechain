@@ -17,6 +17,7 @@ import type {
 	Page,
 	Passport,
 	DiscoveryCandidate,
+	Suggestion,
 	EngineMeta,
 	RunRulebook,
 	GoldenVetoResult,
@@ -387,6 +388,7 @@ export interface DiscoverOptions {
 	chaser?: boolean;
 	/** Underdog B-Sides: least popular first, dead entries (popularity < 1) dropped. */
 	underdog?: boolean;
+	includeOffTier?: boolean;
 }
 
 export function useDiscoverCandidates(
@@ -395,16 +397,29 @@ export function useDiscoverCandidates(
 	mode: "or" | "and",
 	options: DiscoverOptions = {},
 ) {
-	const { chaser = false, underdog = false } = options;
+	const { chaser = false, underdog = false, includeOffTier = false } = options;
 	return useQuery({
-		queryKey: [...queryKeys.discover(runId, frontierMovieId ?? 0, mode), { chaser, underdog }],
+		queryKey: [...queryKeys.discover(runId, frontierMovieId ?? 0, mode), { chaser, underdog, includeOffTier }],
 		queryFn: () =>
 			api.get<DiscoveryCandidate[]>(
 				`/runs/${runId}/discover?frontier_movie_id=${frontierMovieId}&mode=${mode}` +
 					(chaser ? "&chaser=true" : "") +
+					(includeOffTier ? "&include_off_tier=true" : "") +
 					(underdog ? "&sort_by=underdog" : ""),
 			),
 		enabled: !!frontierMovieId,
+	});
+}
+
+export function useRunSuggestions(runId: string) {
+	return useMutation({
+		mutationFn: (filters: { frontier_movie_id: number; country?: string; decade?: number; genre_id?: number; chaser?: boolean; sort_by?: "underdog" }) => {
+			const params = new URLSearchParams();
+			for (const [key, value] of Object.entries(filters)) {
+				if (value !== undefined) params.set(key, String(value));
+			}
+			return api.get<Suggestion[]>(`/runs/${runId}/suggestions?${params}`);
+		},
 	});
 }
 

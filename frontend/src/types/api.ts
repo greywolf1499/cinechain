@@ -400,6 +400,17 @@ export interface EngineMeta {
 	tags?: string[];
 	rulebook?: RuleSection;
 	glossary?: Record<string, string>;
+	discovery_filters: FilterSpec[];
+}
+
+export interface FilterSpec {
+	key: string;
+	kind: "select" | "toggle" | "range";
+	label: string;
+	source: "origin_country" | "release_year" | "narrative_year" | "runtime" | "genre_ids" | "tug_effect" | "tier_compliant" | "new_country";
+	default: boolean | string | number | null;
+	server_param: "include_off_tier" | null;
+	help: string;
 }
 
 export interface RuleSection {
@@ -596,15 +607,9 @@ export interface RouletteSpinResult {
 	movies: RouletteMovie[];
 }
 
-export interface Suggestion {
-	movie_id: number;
-	title: string;
-	poster_path: string | null;
-	release_year: number | null;
-	origin_country: string | null;
-	origin_countries?: string[];
-	connecting_actor_id: number;
-	connecting_actor_name: string;
+export interface Suggestion extends DiscoveryCandidate {
+	connecting_actor_id: number | null;
+	connecting_actor_name: string | null;
 }
 
 export interface KeystoneActor {

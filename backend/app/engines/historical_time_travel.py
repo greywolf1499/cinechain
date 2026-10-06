@@ -25,7 +25,7 @@ from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import ConstraintInfo, ValidationResult
+from app.schemas.engine import ConstraintInfo, FilterSpec, ValidationResult
 from app.services import cache_repo, historical_era, llm
 from app.services.movie_filters import is_reality_eligible
 from app.utils.dates import parse_release_year
@@ -48,6 +48,10 @@ def format_year(year: int) -> str:
 
 
 class HistoricalTimeTravelEngine(MutatorEngine):
+    discovery_filters: ClassVar[list[FilterSpec]] = [
+        FilterSpec(key="narrative_year", kind="range", label="Story-setting year",
+                   source="narrative_year", help="Narrow story years beyond the frontier, not release dates. Negative years are BCE."),
+    ]
     tagline = "Travel through the eras stories are set in"
     tags: ClassVar[list[str]] = ["Any film", "Setting year", "Forward / Backward"]
     rulebook: ClassVar[RuleSection] = RuleSection(

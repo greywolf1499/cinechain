@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -47,6 +47,12 @@ import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib
 import { SIDE_LABELS } from "../lib/tunnel";
 import { tugEffectLabel, tugNextTeam } from "../lib/tugOfWar";
 import { GlossaryChip } from "./HowToPlay";
+import ModeFilterBar, { filterDataUnknown, filterDefaults, matchesModeFilters, visitedCountries } from "./pick-next/ModeFilterBar";
+import type { FilterValues } from "./pick-next/ModeFilterBar";
+import DirectorsPicks from "./pick-next/DirectorsPicks";
+import { pendulumState } from "../lib/pendulum";
+import { isoToFlagEmoji } from "../lib/countries";
+import { effectiveCooldown } from "../lib/modifiers";
 import ExpandableText from "./ui/ExpandableText";
 import ClampedLabel from "./ui/ClampedLabel";
 import {
@@ -54,6 +60,8 @@ import {
   useCreateStep,
   useOfferFork,
   useDiscoverCandidates,
+  useEngines,
+  useRunSuggestions,
   useJellyfinLookup,
   useMovieDetail,
   useMovieTropes,
@@ -129,7 +137,7 @@ const DECADE_PILLS: { key: string; label: string }[] = [
 
 function matchesDecade(year: number | null, key: string): boolean {
   if (key === "all") return true;
-  if (year == null) return false;
+  if (year == null) return true;
   if (key === "early") return year < 1970;
   return Math.floor(year / 10) * 10 === Number(key);
 }
@@ -230,20 +238,21 @@ export default function PickNextHub({
           </div>
         </div>
 
-        {activeScreen.kind === "grid" && (
+        <div hidden={activeScreen.kind !== "grid"}>
           <DiscoveryGrid
             runId={runId}
             frontierStep={frontierStep}
             rulesConfig={rulesConfig}
             gameType={gameType}
             castLinked={castLinked}
+            steps={steps}
             tunnelSide={tunnelSide}
             forkMode={forkMode}
             initialChaser={initialChaser}
             onOpenMovie={(screen) => pushScreen(screen)}
             onClose={handleClose}
           />
-        )}
+        </div>
 
         {activeScreen.kind === "movie" && (
           <MovieScreenView
@@ -282,6 +291,7 @@ function DiscoveryGrid({
   rulesConfig,
   gameType,
   castLinked,
+  steps,
   tunnelSide,
   forkMode,
   initialChaser = false,
@@ -294,6 +304,7 @@ function DiscoveryGrid({
   gameType: string;
   /** False for standalone modes: no actor network, the card shows the mode's own mechanic. */
   castLinked: boolean;
+  steps: RunStep[];
   tunnelSide?: TunnelSide;
   forkMode?: boolean;
   initialChaser?: boolean;
@@ -306,13 +317,9 @@ function DiscoveryGrid({
   const [selectedActorIds, setSelectedActorIds] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
   const [genreId, setGenreId] = useState<number | null>(null);
-  const tugMode = gameType === "tug_of_war" && rulesConfig.tug_rules_version === 2;
   const nextTeam = tugNextTeam(rulesConfig);
-  const [decadeKey, setDecadeKey] = useState(
-    tugMode && rulesConfig.dimension === "era" ? (nextTeam === "team_a" ? "1970" : "2000") : "all",
-  );
-  const defaultSort: SortBy = tugMode ? "tug" : "match";
-  const [sortBy, setSortBy] = useState<SortBy>(defaultSort);
+  const [decadeKey, setDecadeKey] = useState("all");
+  const [sortBy, setSortBy] = useState<SortBy>("match");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
   const [tropeFilter, setTropeFilter] = useState<string | null>(null);
@@ -322,7 +329,18 @@ function DiscoveryGrid({
   // Tagline Roulette masks every poster and title behind its tagline; only a page is shown at a time.
   const [roulette, setRoulette] = useState(false);
   const [visibleCount, setVisibleCount] = useState(DISCOVERY_PAGE_SIZE);
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  const { data: engines, isError: enginesError, refetch: retryEngines } = useEngines();
+  const engine = engines?.find((entry) => entry.game_type === gameType);
+  const specs = useMemo(() => (engine?.discovery_filters ?? []).filter((spec) =>
+    spec.source !== "tug_effect" || rulesConfig.tug_rules_version === 2), [engine, rulesConfig.tug_rules_version]);
+  const visited = useMemo(() => visitedCountries(steps), [steps]);
+  const [modeOverrides, setModeOverrides] = useState<FilterValues>({});
+  const modeValues = useMemo(() => ({ ...filterDefaults(specs, visited), ...modeOverrides }), [specs, visited, modeOverrides]);
+  const includeOffTier = specs.some((spec) => spec.server_param === "include_off_tier" && modeValues[spec.key] === true);
+  const suggestions = useRunSuggestions(runId);
+  const [suggestionContext, setSuggestionContext] = useState<string | null>(null);
+  const [furtherPool, setFurtherPool] = useState<{ context: string; candidates: DiscoveryCandidate[] } | null>(null);
+  const filterContext = JSON.stringify({ frontier: frontierStep.movie_id, mode, chaser, underdog, modeValues, decadeKey, genreId, tropeFilter, search, actors: [...selectedActorIds] });
 
   useEffect(() => {
     setVisibleCount(DISCOVERY_PAGE_SIZE);
@@ -337,6 +355,8 @@ function DiscoveryGrid({
     sortDir,
     tropeFilter,
     underdog,
+    modeValues,
+    furtherPool,
   ]);
 
   function clearFilters() {
@@ -347,8 +367,11 @@ function DiscoveryGrid({
     setSearch("");
     setGenreId(null);
     setDecadeKey("all");
-    setSortBy(defaultSort);
+    setSortBy("match");
     setSortDir("desc");
+    setModeOverrides(Object.fromEntries(specs.map((spec) => [spec.key, spec.kind === "toggle" ? false : spec.kind === "range" ? [null, null] : ""])));
+    setFurtherPool(null);
+    suggestions.reset();
   }
 
   const hasActiveFilters =
@@ -358,7 +381,8 @@ function DiscoveryGrid({
     search.trim() !== "" ||
     genreId !== null ||
     decadeKey !== "all" ||
-    tropeFilter !== null;
+    tropeFilter !== null ||
+    Object.values(modeValues).some((value) => Array.isArray(value) ? value.some((bound) => bound != null) : Boolean(value));
 
   const { data: cast } = useQuery({
     queryKey: ["movies", frontierStep.movie_id, "cast"],
@@ -366,13 +390,13 @@ function DiscoveryGrid({
     enabled: castLinked,
   });
   // Crew & Craft Trail: the frontier's key crew sit beside its cast as filter chips.
-  const craftMode = gameType === CREW_CRAFT;
+  const hasCrew = engine?.capabilities.includes("crew_craft") ?? gameType === CREW_CRAFT;
   const { data: crew } = useQuery({
     queryKey: ["movies", frontierStep.movie_id, "crew"],
     queryFn: () => api.get<CrewMember[]>(`/movies/${frontierStep.movie_id}/crew`),
-    enabled: castLinked && craftMode,
+    enabled: castLinked && hasCrew,
   });
-  const people = useMemo(() => mergeFilterPeople(craftMode ? (crew ?? []) : [], cast ?? []), [craftMode, crew, cast]);
+  const people = useMemo(() => mergeFilterPeople(hasCrew ? (crew ?? []) : [], cast ?? []), [hasCrew, crew, cast]);
   // Semantic Trope Web: the frontier's extracted tropes are filter chips over the pool.
   const tropeMode = gameType === SEMANTIC_TROPE;
   const { tropes: frontierTropes, isExtracting: extractingTropes } = useMovieTropes(
@@ -385,21 +409,62 @@ function DiscoveryGrid({
     queryKey: ["movies", "genres"],
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
   });
-  const { data: candidates, isLoading } = useDiscoverCandidates(
+  const { data: candidates, isLoading: poolLoading, isError: poolError, error: poolFailure, refetch: retryPool } = useDiscoverCandidates(
     runId,
     frontierStep.movie_id,
     mode,
-    { chaser, underdog },
+    { chaser, underdog, includeOffTier },
   );
+  const isLoading = poolLoading || !engine && !enginesError;
+  const pool = useMemo(() => {
+    const byId = new Map((candidates ?? []).map((candidate) => [candidate.movie_id, candidate]));
+    if (furtherPool?.context === filterContext) {
+      for (const candidate of furtherPool.candidates) if (!byId.has(candidate.movie_id)) byId.set(candidate.movie_id, candidate);
+    }
+    return [...byId.values()];
+  }, [candidates, furtherPool, filterContext]);
+  const targetGenreId = genres?.find((genre) => genre.name === pendulumState(rulesConfig, steps.length).target)?.id;
+  const cooldown = useMemo(() => {
+    const window = effectiveCooldown(gameType, rulesConfig);
+    return new Map((constraint?.cooldown_countries ?? []).map((code) => {
+      const age = [...steps].reverse().findIndex((step) => (step.movie_origin_countries ?? parseOriginCountries(step.movie_origin_country))[0] === code);
+      return [code, Math.max(1, window - Math.max(0, age))];
+    }));
+  }, [constraint, steps, gameType, rulesConfig]);
+  const selectedCountry = specs.find((spec) => spec.source === "origin_country");
+  const countryFilter = selectedCountry && typeof modeValues[selectedCountry.key] === "string" ? modeValues[selectedCountry.key] as string : undefined;
+  const furtherDecade = decadeKey !== "all" && decadeKey !== "early" ? Number(decadeKey) : undefined;
+  const canSearchFurther = Boolean(countryFilter || furtherDecade != null);
+  const datedCandidate = pool.find((candidate) => candidate.narrative_year != null && candidate.narrative_delta != null);
+  const frontierNarrativeYear = frontierStep.movie_narrative_year ??
+    (datedCandidate?.narrative_year != null && datedCandidate.narrative_delta != null
+      ? datedCandidate.narrative_year - datedCandidate.narrative_delta : null);
+  const searchLabel = [
+    countryFilter ? `${isoToFlagEmoji(countryFilter)} ${countryName(countryFilter, countryFilter)}` : "",
+    furtherDecade != null ? `${furtherDecade}s` : "",
+  ].filter(Boolean).join(" / ");
+  function searchFurther() {
+    setSuggestionContext(filterContext);
+    suggestions.mutate({
+      frontier_movie_id: frontierStep.movie_id,
+      country: countryFilter || undefined,
+      decade: furtherDecade,
+      genre_id: genreId ?? undefined,
+      chaser,
+      sort_by: underdog ? "underdog" : undefined,
+    }, { onSuccess: (results) => setFurtherPool({ context: filterContext, candidates: results }) });
+  }
 
   // Rabbit Hole: with every life spent and nothing left that obeys the tier, the descent is over.
   const deadEnd =
     gameType === RABBIT_HOLE &&
     rulesConfig.lives_remaining === 0 &&
     !isLoading &&
-    (candidates?.length ?? 0) === 0;
+    !includeOffTier &&
+    !poolError &&
+    pool.length === 0;
 
-  const tmdbIds = candidates?.map((c) => c.movie_id) ?? [];
+  const tmdbIds = pool.map((c) => c.movie_id);
   const { data: jellyfinStatus } = useJellyfinLookup(tmdbIds);
   const { data: ratingsMap } = useQuery({
     queryKey: ["movies", "ratings", "bulk", tmdbIds],
@@ -424,7 +489,7 @@ function DiscoveryGrid({
   }
 
   const filtered = useMemo(() => {
-    let list = candidates ?? [];
+    let list = pool.filter((candidate) => matchesModeFilters(candidate, specs, modeValues, visited, targetGenreId));
 
     if (selectedActorIds.size > 0) {
       list = list.filter((candidate) => {
@@ -438,7 +503,7 @@ function DiscoveryGrid({
       list = list.filter((candidate) => candidate.tropes?.includes(tropeFilter));
     }
     if (genreId !== null) {
-      list = list.filter((candidate) => candidate.genre_ids.includes(genreId));
+      list = list.filter((candidate) => candidate.genre_ids.length === 0 || candidate.genre_ids.includes(genreId));
     }
     if (decadeKey !== "all") {
       list = list.filter((candidate) => matchesDecade(candidate.release_year, decadeKey));
@@ -467,23 +532,7 @@ function DiscoveryGrid({
       return direction * (ratingSortValue(b, key) - ratingSortValue(a, key));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, selectedActorIds, mode, genreId, decadeKey, tropeFilter, search, sortBy, sortDir, ratingsMap, underdog]);
-
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel || visibleCount >= filtered.length || typeof IntersectionObserver === "undefined") return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setVisibleCount((current) => Math.min(current + DISCOVERY_PAGE_SIZE, filtered.length));
-        }
-      },
-      { rootMargin: "240px" },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [filtered.length, visibleCount]);
+  }, [pool, specs, modeValues, visited, targetGenreId, selectedActorIds, mode, genreId, decadeKey, tropeFilter, search, sortBy, sortDir, ratingsMap, underdog]);
 
   function toggleActor(actorId: number) {
     setSelectedActorIds((prev) => {
@@ -526,7 +575,7 @@ function DiscoveryGrid({
       await createStep.mutateAsync({
         movie_id: candidate.movie_id,
         force: true,
-        ...(tugMode ? { tug_team: nextTeam } : {}),
+        ...(gameType === "tug_of_war" && rulesConfig.tug_rules_version === 2 ? { tug_team: nextTeam } : {}),
         tunnel_side: tunnelSide,
         status: watched ? "watched" : "planned",
         watched_at: watched ? new Date().toISOString() : null,
@@ -541,6 +590,46 @@ function DiscoveryGrid({
     } finally {
       setPendingMovieId(null);
     }
+  }
+
+  function openCandidate(candidate: DiscoveryCandidate) {
+    onOpenMovie({
+      kind: "movie", label: candidate.title, movieId: candidate.movie_id,
+      posterPath: candidate.poster_path,
+      guaranteedConnected: candidate.tier_compliant !== false && !candidate.constraint_unverified,
+      safeActorIds: new Set(candidate.connections.map((connection) => connection.actor_id)),
+      directConnection: candidate.connections[0],
+    });
+  }
+
+  function renderCandidate(candidate: DiscoveryCandidate) {
+    return <CandidateCard
+      key={candidate.movie_id}
+      roulette={roulette}
+      candidate={candidate}
+      genres={genres}
+      ratings={ratingsMap?.[String(candidate.movie_id)]}
+      badges={badgesMap?.[String(candidate.movie_id)]}
+      gameType={gameType}
+      tugMultiplier={rulesConfig.tug_momentum?.anchor === nextTeam ? 2 : 1}
+      castLinked={castLinked}
+      tierLabel={gameType === RABBIT_HOLE && constraint?.rabbit_hole
+        ? `Tier ${constraint.rabbit_hole.tier}: ${constraint.rabbit_hole.tier_rule}` : undefined}
+      frontierTropes={frontierTropes}
+      frontierMovieId={frontierStep.movie_id}
+      allowRepeats={allowRepeats}
+      onServer={jellyfinStatus?.[String(candidate.movie_id)]?.on_server}
+      pending={pendingMovieId === candidate.movie_id && createStep.isPending}
+      unknownFilterData={specs.some((spec) => filterDataUnknown(candidate, spec)) || genreId !== null && candidate.genre_ids.length === 0 || decadeKey !== "all" && candidate.release_year == null}
+      fork={forkMode ? {
+        selected: offered.some((film) => film.movie_id === candidate.movie_id),
+        full: offered.length >= FORK_OFFER_SIZE,
+        onToggle: () => toggleOffered(candidate),
+      } : undefined}
+      onQueue={() => handleAdd(candidate, false)}
+      onLogWatched={() => handleAdd(candidate, true)}
+      onOpenDetails={() => openCandidate(candidate)}
+    />;
   }
 
   return (
@@ -641,7 +730,7 @@ function DiscoveryGrid({
                 as="span"
                 className="text-[10px] leading-tight text-zinc-300"
               />
-              {craftMode && (
+              {hasCrew && (
                 <span className="text-[11px] leading-none" aria-hidden>
                   {person.roles.map((role) => ROLE_STYLES[role].emoji).join("")}
                 </span>
@@ -664,7 +753,7 @@ function DiscoveryGrid({
               mode === "or" ? "bg-accent text-zinc-950" : "text-zinc-400 hover:text-zinc-200",
             )}
           >
-            OR - Any shared {craftMode ? "person" : "actor"}
+            OR - Any shared {hasCrew ? "person" : "actor"}
           </button>
           <button
             type="button"
@@ -674,7 +763,7 @@ function DiscoveryGrid({
               mode === "and" ? "bg-accent text-zinc-950" : "text-zinc-400 hover:text-zinc-200",
             )}
           >
-            AND - {craftMode ? "Reunite several people" : "Co-stars reunite"}
+            AND - {hasCrew ? "Reunite several people" : "Co-stars reunite"}
           </button>
         </div>
         )}
@@ -709,7 +798,7 @@ function DiscoveryGrid({
         >
           <option value="match">Sort: Best match</option>
           <option value="year">Sort: Year</option>
-          {tugMode && <option value="tug">Sort: Tug points</option>}
+          {specs.some((spec) => spec.source === "tug_effect") && <option value="tug">Sort: Tug points</option>}
           <option value="popularity">Sort: Popularity</option>
           <option value="imdb">Sort: IMDb Rating</option>
           <option value="rt">Sort: Rotten Tomatoes</option>
@@ -791,6 +880,16 @@ function DiscoveryGrid({
         )}
       </div>
 
+      {enginesError && <p role="alert" className="text-sm text-red-300">
+        Couldn't load mode filters. <button type="button" onClick={() => retryEngines()} className="underline">Retry filters</button>
+      </p>}
+      <ModeFilterBar specs={specs} pool={pool} values={modeValues}
+        onChange={(key, value) => setModeOverrides((current) => ({ ...current, [key]: value }))}
+        cooldown={cooldown} frontierYear={frontierStep.movie_release_year}
+        frontierNarrativeYear={frontierNarrativeYear}
+        descending={(specs.some((spec) => spec.source === "narrative_year") ? rulesConfig.direction : rulesConfig.chrono_direction ?? rulesConfig.direction) === "descent"}
+      />
+
       <div className="flex flex-wrap gap-1.5">
         {DECADE_PILLS.map((pill) => (
           <button
@@ -815,7 +914,14 @@ function DiscoveryGrid({
         </div>
       )}
 
-      {!isLoading && filtered.length === 0 && (
+      {poolError && <p role="alert" className="text-sm text-red-300">
+        {poolFailure instanceof Error ? poolFailure.message : "Couldn't load candidates."}{" "}
+        <button type="button" onClick={() => retryPool()} className="underline">Retry candidates</button>
+      </p>}
+      {createStep.isError && <p role="alert" className="text-sm text-red-300">
+        {createStep.error instanceof Error ? createStep.error.message : "Couldn't log this film."}
+      </p>}
+      {!isLoading && !poolError && filtered.length === 0 && (
         deadEnd ? (
           <div className="flex flex-col items-center gap-3 rounded-xl border border-red-900/60 bg-red-950/20 px-4 py-8 text-center font-mono">
             <p className="text-sm font-semibold text-red-300">
@@ -831,62 +937,36 @@ function DiscoveryGrid({
             </button>
           </div>
         ) : (
-          <p className="py-10 text-center text-sm text-zinc-500">No films match these filters.</p>
+          <div className="flex flex-col items-center gap-3 py-6 text-center text-sm text-zinc-500">
+            <p>No films match these filters.</p>
+            {canSearchFurther && <button type="button" disabled={suggestions.isPending} onClick={searchFurther}
+              className="rounded-md border border-accent px-3 py-2 text-accent disabled:opacity-50">
+              {suggestions.isPending ? "Searching..." : `Search further in ${searchLabel}`}
+            </button>}
+            {suggestions.isError && suggestionContext === filterContext && <p role="alert" className="text-red-300">
+              {suggestions.error instanceof Error ? suggestions.error.message : "Search failed. Try again."}
+            </p>}
+            {furtherPool?.context === filterContext && <p role="status">
+              {furtherPool.candidates.length === 0 ? "No further legal films found. Try another country or decade." : "Further results were found, but none match every active filter. Try loosening a filter."}
+            </p>}
+          </div>
         )
+      )}
+
+      {!isLoading && !poolError && filtered.length > 0 && (
+        <>
+          <DirectorsPicks candidates={filtered} matchOrder={pool.map((candidate) => candidate.movie_id)}
+            visited={visited} specs={specs} allowRepeats={allowRepeats} renderCard={renderCandidate} onPick={openCandidate} />
+          <p className="text-xs text-zinc-500" role="status">
+            Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} best matches · narrow with a filter
+          </p>
+        </>
       )}
 
       {!isLoading && filtered.length > 0 && (
         <div className="grid grid-cols-2 items-stretch gap-3 sm:grid-cols-3 md:grid-cols-4">
-          {filtered.slice(0, visibleCount).map((candidate) => (
-            <CandidateCard
-              key={candidate.movie_id}
-              roulette={roulette}
-              candidate={candidate}
-              genres={genres}
-              ratings={ratingsMap?.[String(candidate.movie_id)]}
-              badges={badgesMap?.[String(candidate.movie_id)]}
-              gameType={gameType}
-              tugMultiplier={rulesConfig.tug_momentum?.anchor === nextTeam ? 2 : 1}
-              castLinked={castLinked}
-              tierLabel={
-                gameType === RABBIT_HOLE && constraint?.rabbit_hole
-                  ? `Tier ${constraint.rabbit_hole.tier}: ${constraint.rabbit_hole.tier_rule}`
-                  : undefined
-              }
-              frontierTropes={frontierTropes}
-              frontierMovieId={frontierStep.movie_id}
-              allowRepeats={allowRepeats}
-              onServer={jellyfinStatus?.[String(candidate.movie_id)]?.on_server}
-              pending={pendingMovieId === candidate.movie_id && createStep.isPending}
-              fork={
-                forkMode
-                  ? {
-                      selected: offered.some((c) => c.movie_id === candidate.movie_id),
-                      full: offered.length >= FORK_OFFER_SIZE,
-                      onToggle: () => toggleOffered(candidate),
-                    }
-                  : undefined
-              }
-              onQueue={() => handleAdd(candidate, false)}
-              onLogWatched={() => handleAdd(candidate, true)}
-              onOpenDetails={() =>
-                onOpenMovie({
-                  kind: "movie",
-                  label: candidate.title,
-                  movieId: candidate.movie_id,
-                  posterPath: candidate.poster_path,
-                  guaranteedConnected: true,
-                  safeActorIds: new Set(candidate.connections.map((c) => c.actor_id)),
-                  directConnection: candidate.connections[0],
-                })
-              }
-            />
-          ))}
+          {filtered.slice(0, visibleCount).map(renderCandidate)}
         </div>
-      )}
-
-      {!isLoading && visibleCount < filtered.length && (
-        <div ref={sentinelRef} className="h-1" aria-hidden />
       )}
 
       {!isLoading && visibleCount < filtered.length && (
@@ -951,6 +1031,7 @@ function CandidateCard({
   allowRepeats,
   onServer,
   pending,
+  unknownFilterData = false,
   fork,
   onQueue,
   onLogWatched,
@@ -974,6 +1055,7 @@ function CandidateCard({
   allowRepeats: boolean;
   onServer: boolean | null | undefined;
   pending: boolean;
+  unknownFilterData?: boolean;
   /** Blind Fork selection state; replaces the log buttons while offering. */
   fork?: { selected: boolean; full: boolean; onToggle: () => void };
   onQueue: () => void;
@@ -1094,7 +1176,7 @@ function CandidateCard({
             )}
           >
             {candidate.tier_compliant ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-            {tierLabel}
+            {candidate.tier_compliant ? tierLabel : "−1 ❤️ · Off-tier"}
           </span>
         )}
         <TropeChips tropes={candidate.tropes} highlight={frontierTropes} max={4} />
@@ -1111,7 +1193,13 @@ function CandidateCard({
             title="This run's rule couldn't be checked for this film yet - logging will check it."
             className="w-fit rounded-full bg-amber-950 px-2 py-0.5 text-[9px] font-medium text-amber-400"
           >
-            Rule unverified
+            ? Rule unverified
+          </span>
+        )}
+        {unknownFilterData && !candidate.constraint_unverified && (
+          <span className="w-fit rounded-full bg-amber-950 px-2 py-0.5 text-[9px] text-amber-400"
+            title="Missing filter data is kept visible; logging re-checks the rules.">
+            ? Filter data unverified
           </span>
         )}
       </div>
@@ -1427,6 +1515,7 @@ function MovieScreenView({
     await createStep.mutateAsync({
       movie_id: screen.movieId,
       force: true,
+      ...(rulesConfig.tug_rules_version === 2 ? { tug_team: tugNextTeam(rulesConfig) } : {}),
       ...(rulesConfig.tug_rules_version === 2
         ? { tug_team: tugNextTeam(rulesConfig) }
         : {}),

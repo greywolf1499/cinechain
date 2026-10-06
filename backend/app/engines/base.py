@@ -22,6 +22,7 @@ from app.models.run import (
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import (
     ConstraintInfo,
+    FilterSpec,
     RunStats,
     Suggestion,
     SuggestionFilters,
@@ -57,6 +58,7 @@ class BaseChallengeEngine(ABC):
     capabilities: ClassVar[list[str]]
     requires: ClassVar[list[str]] = []
     seed_policy: ClassVar[Literal["none", "free", "derived", "pair"]] = "free"
+    discovery_filters: ClassVar[list[FilterSpec]] = []
     # Graph-style engines honour opt-in win/fail conditions in `rules_config`;
     # rigid trackers leave this False and ignore them.
     supports_json_rules: ClassVar[bool] = False
@@ -380,6 +382,7 @@ class BaseChallengeEngine(ABC):
         exclude_movie_ids: list[int],
         filters: SuggestionFilters,
         rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[Suggestion]:
         """Candidate next films reachable from `current_movie_id`."""
 

@@ -537,6 +537,38 @@ def test_pick_next_carries_the_upcoming_tier_warning(client, world):
     assert all(c["upcoming_tier_warning"] is None for c in discover(client, run_id).values())
 
 
+def test_include_off_tier_is_read_only_and_logging_still_costs_a_life(client, world):
+    add_candidates(world)
+    run_id = rabbit_run(client)
+    put_at_depth(world, run_id, 5)
+    normal = discover(client, run_id)
+    assert 11 not in normal
+    resp = client.get(
+        f"/api/runs/{run_id}/discover",
+        params={"frontier_movie_id": ANCHOR, "include_off_tier": True},
+    )
+    assert resp.status_code == 200, resp.text
+    pool = {c["movie_id"]: c for c in resp.json()}
+    assert pool[11]["tier_compliant"] is False
+    assert pool[10]["tier_compliant"] is True
+    assert lives(client, run_id) == 3
+    assert log(client, run_id, 11).status_code == 409
+    assert lives(client, run_id) == 3
+    forced = log(client, run_id, 11, force=True)
+    assert forced.status_code == 201, forced.text
+    assert forced.json()["transition_metadata"]["life_lost"] is True
+    assert lives(client, run_id) == 2
+
+
+def test_other_modes_cannot_request_off_tier_discovery(client, world):
+    run_id = create_run(client, "cinechain")
+    response = client.get(
+        f"/api/runs/{run_id}/discover",
+        params={"frontier_movie_id": ANCHOR, "include_off_tier": True},
+    )
+    assert response.status_code == 422
+
+
 def test_the_constraint_endpoint_describes_the_tier(client, world):
     run_id = rabbit_run(client)
     put_at_depth(world, run_id, 14)

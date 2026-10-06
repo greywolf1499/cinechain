@@ -23,6 +23,7 @@ from app.models.run import (
 )
 from app.models.user import User
 from app.schemas.discovery import DiscoveryCandidate
+from app.schemas.engine import FilterSpec
 
 TUG_OF_WAR = "tug_of_war"
 DIMENSION_ERA = "era"
@@ -385,6 +386,10 @@ def preview_pull(
 
 
 class TugOfWarEngine(CineChainEngine):
+    discovery_filters: ClassVar[list[FilterSpec]] = [
+        FilterSpec(key="tug_effect", kind="select", label="Pull effect", source="tug_effect",
+                   default="home", help="Build your territory, Raid the opponent, or Bank a neutral film."),
+    ]
     tagline = "Pull the rope your way"
     tags: ClassVar[list[str]] = ["Shared cast", "Two teams", "Era or geography"]
     rulebook: ClassVar[RuleSection] = RuleSection(

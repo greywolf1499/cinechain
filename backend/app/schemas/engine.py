@@ -2,7 +2,23 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, computed_field
 
+from app.schemas.discovery import DiscoveryCandidate
 from app.utils.countries import parse_countries
+
+FilterSource = Literal[
+    "origin_country", "release_year", "narrative_year", "runtime", "genre_ids",
+    "tug_effect", "tier_compliant", "new_country",
+]
+
+
+class FilterSpec(BaseModel):
+    key: str
+    kind: Literal["select", "toggle", "range"]
+    label: str
+    source: FilterSource
+    default: bool | str | int | None = None
+    server_param: Literal["include_off_tier"] | None = None
+    help: str = ""
 
 
 class SharedActorConnection(BaseModel):
@@ -49,19 +65,9 @@ class SuggestionFilters(BaseModel):
     on_server: bool | None = None  # reserved for the Phase 7 Jellyfin integration
 
 
-class Suggestion(BaseModel):
-    movie_id: int
-    title: str
-    poster_path: str | None = None
-    release_year: int | None = None
-    origin_country: str | None = None
-    connecting_actor_id: int
-    connecting_actor_name: str
-
-    @computed_field
-    @property
-    def origin_countries(self) -> list[str]:
-        return parse_countries(self.origin_country)
+class Suggestion(DiscoveryCandidate):
+    connecting_actor_id: int | None = None
+    connecting_actor_name: str | None = None
 
 
 class KeystoneActor(BaseModel):

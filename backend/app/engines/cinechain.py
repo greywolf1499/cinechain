@@ -213,9 +213,13 @@ class CineChainEngine(BaseChallengeEngine):
         exclude_movie_ids: list[int],
         filters: SuggestionFilters,
         rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[Suggestion]:
-        cast = await cache_repo.get_movie_cast(self.session, self.tmdb, current_movie_id)
+        cast = await cache_repo.get_movie_cast(
+            self.session, self.tmdb, current_movie_id, (rules or {}).get("max_cast_order")
+        )
         exclude = set(exclude_movie_ids) | {current_movie_id}
+        country_hydrations = 0
 
         suggestions: dict[int, Suggestion] = {}
         for member in cast:
@@ -225,6 +229,13 @@ class CineChainEngine(BaseChallengeEngine):
             for movie in credits_:
                 if movie.tmdb_id in exclude or movie.tmdb_id in suggestions:
                     continue
+                if not passes_filters(movie, filters.model_copy(update={"country": None})):
+                    continue
+                if filters.country and movie.origin_country is None and country_hydrations < 20:
+                    country_hydrations += 1
+                    movie = await cache_repo.get_movie(
+                        self.session, self.tmdb, movie.tmdb_id, refresh=True
+                    )
                 if not passes_filters(movie, filters):
                     continue
                 suggestions[movie.tmdb_id] = Suggestion(

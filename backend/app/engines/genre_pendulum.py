@@ -35,7 +35,13 @@ from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import ConstraintInfo, ValidationResult
+from app.schemas.engine import (
+    ConstraintInfo,
+    FilterSpec,
+    Suggestion,
+    SuggestionFilters,
+    ValidationResult,
+)
 from app.services import cache_repo
 from app.services.movie_filters import is_reality_eligible
 
@@ -130,6 +136,10 @@ def movie_genres(row: CachedMovie) -> set[int]:
 
 
 class GenrePendulumEngine(MutatorEngine):
+    discovery_filters: ClassVar[list[FilterSpec]] = [
+        FilterSpec(key="target_genre", kind="toggle", label="Target genre only",
+                   source="genre_ids", default=True, help="The current swing's genre; unknown tags stay visible."),
+    ]
     tagline = "The genre swings as you go"
     tags: ClassVar[list[str]] = ["Any film", "Genre cycle", "Genre overlap"]
     rulebook: ClassVar[RuleSection] = RuleSection(
@@ -280,6 +290,19 @@ class GenrePendulumEngine(MutatorEngine):
         )
 
     # --- Pick Next ---
+
+    async def get_suggestions(
+        self,
+        current_movie_id: int,
+        exclude_movie_ids: list[int],
+        filters: SuggestionFilters,
+        rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
+    ) -> list[Suggestion]:
+        self._steps_logged = len(history or [])
+        return await super().get_suggestions(
+            current_movie_id, exclude_movie_ids, filters, rules, history
+        )
 
     async def discover_candidates(
         self,

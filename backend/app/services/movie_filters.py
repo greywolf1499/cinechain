@@ -5,11 +5,11 @@ Used by both the engine's suggestion logic and the /people/{id}/credits route.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 
 from app.models.cache import CachedMovie, CachedMovieRating
 from app.schemas.engine import SuggestionFilters
+from app.utils.countries import parse_countries
 from app.utils.dates import parse_release_year
 
 # TMDB `status` values that mean "not actually released yet" - the ONLY thing
@@ -35,7 +35,7 @@ def passes_filters(movie: CachedMovie, filters: SuggestionFilters) -> bool:
     if not is_reality_eligible(movie):
         return False
     if filters.country is not None:
-        countries = json.loads(movie.origin_country) if movie.origin_country else []
+        countries = parse_countries(movie.origin_country)
         if filters.country not in countries:
             return False
     if filters.decade is not None:

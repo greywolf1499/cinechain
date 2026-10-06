@@ -110,8 +110,11 @@ class CanonIslandEngine(CineChainEngine):
         exclude_movie_ids: list[int],
         filters: SuggestionFilters,
         rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[Suggestion]:
-        suggestions = await super().get_suggestions(current_movie_id, exclude_movie_ids, filters)
+        suggestions = await super().get_suggestions(
+            current_movie_id, exclude_movie_ids, filters, rules, history
+        )
         list_id = (rules or {}).get(ALLOWED_LIST_KEY)
         if not list_id:
             return suggestions

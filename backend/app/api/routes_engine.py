@@ -20,6 +20,7 @@ from app.models.curated import CuratedList
 from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
 from app.models.user import User
 from app.schemas.engine import (
+    FilterSpec,
     LlmStatus,
     PathTagsResult,
     PitchRequest,
@@ -71,6 +72,7 @@ class EngineMeta(BaseModel):
     tags: list[str]
     rulebook: RuleSection
     glossary: dict[str, str]
+    discovery_filters: list[FilterSpec]
 
 
 class RulebookOverlay(BaseModel):
@@ -115,6 +117,7 @@ def list_engines(
             capabilities=cls.capabilities,
             requires=cls.requires,
             seed_policy=cls.seed_policy,
+            discovery_filters=cls.discovery_filters,
             tagline=cls.tagline,
             tags=cls.tags,
             rulebook=render(cls.rulebook, cls.rulebook_values(DEFAULT_RULES_CONFIG)),

@@ -34,6 +34,7 @@ from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
 from app.schemas.engine import (
     ConstraintInfo,
+    FilterSpec,
     SharedActorConnection,
     Suggestion,
     SuggestionFilters,
@@ -41,7 +42,7 @@ from app.schemas.engine import (
 )
 from app.services import cache_repo, pathfinder
 from app.services.graph import PathConstraints
-from app.services.movie_filters import is_reality_eligible
+from app.services.movie_filters import is_reality_eligible, passes_filters
 from app.services.tmdb import TMDBError
 from app.utils.dates import parse_release_year
 
@@ -215,15 +216,47 @@ class MutatorEngine(CineChainEngine):
         exclude_movie_ids: list[int],
         filters: SuggestionFilters,
         rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[Suggestion]:
         if not self.cast_link_required(rules):
-            return []  # suggestions are cast-link shaped; Pick Next serves the rule pool
-        suggestions = await super().get_suggestions(current_movie_id, exclude_movie_ids, filters)
+            params: dict[str, Any] = {"primary_release_date.lte": today_iso()}
+            if filters.country:
+                params["with_origin_country"] = filters.country
+            if filters.decade is not None:
+                params["primary_release_date.gte"] = f"{filters.decade}-01-01"
+                params["primary_release_date.lte"] = min(
+                    today_iso(), f"{filters.decade + 9}-12-31"
+                )
+            if filters.genre_id is not None:
+                params["with_genres"] = str(filters.genre_id)
+            rows = await cache_repo.discover_movies(self.session, self.tmdb, pages=1, **params)
+            if filters.country:
+                rows = [
+                    await cache_repo.get_movie(
+                        self.session, self.tmdb, row.tmdb_id,
+                        refresh=row.origin_country is None,
+                    )
+                    for row in rows
+                ]
+            pool = [
+                candidate_from_row(row) for row in rows
+                if row.tmdb_id not in exclude_movie_ids and passes_filters(row, filters)
+            ]
+            frontier = await self._load(current_movie_id, hydrate=True, rules=rules)
+            pool = await self._filter_pool(frontier, pool, rules)
+            pool = await self.filter_by_modifiers(current_movie_id, pool, rules, history)
+            return [
+                Suggestion(**candidate.model_dump(exclude={"origin_countries"}))
+                for candidate in pool
+            ]
+        suggestions = await super().get_suggestions(
+            current_movie_id, exclude_movie_ids, filters, rules, history
+        )
         frontier = await self._load(current_movie_id)
         kept = []
         for suggestion in suggestions:
             row = self.session.get(CachedMovie, suggestion.movie_id)
-            if row is not None and not self._pair_blocked(frontier, row, rules):
+            if row is not None and not self._pair_blocked(frontier, row, rules, history):
                 kept.append(suggestion)
         return kept
 
@@ -270,6 +303,10 @@ class MutatorEngine(CineChainEngine):
 
 
 class ChronoClimbEngine(MutatorEngine):
+    discovery_filters: ClassVar[list[FilterSpec]] = [
+        FilterSpec(key="release_year", kind="range", label="Release year", source="release_year",
+                   help="Narrow the release years beyond the frontier. Unknown years stay visible."),
+    ]
     """Chrono Climb / Descent: every hop must move strictly forward (climb) or
     backward (descent) in time. Any film qualifies; shared cast is optional."""
 
@@ -424,6 +461,12 @@ PASSPORT_FILMS_PER_COUNTRY = 4
 
 
 class WorldPassportEngine(MutatorEngine):
+    discovery_filters: ClassVar[list[FilterSpec]] = [
+        FilterSpec(key="country", kind="select", label="Country", source="origin_country",
+                   help="Pool countries and counts; primary countries on cooldown cannot be picked."),
+        FilterSpec(key="new_country", kind="toggle", label="New stamps only", source="new_country",
+                   default="after_three_stamps", help="On by default after three countries are stamped."),
+    ]
     """Every film's primary country must differ from the previous film's. Any
     film qualifies; shared cast is optional."""
 

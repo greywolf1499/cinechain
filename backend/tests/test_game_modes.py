@@ -1,17 +1,43 @@
 """Phase 21a game modes: Canon-Only Island, Decade Sieve and Movie Night Roulette."""
 
+from typing import get_args
+
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.db import get_session
 from app.main import app
 from app.models.cache import CachedMovie, CachedMovieRating
 from app.models.curated import CanonMovieBadge, CuratedList
+from app.schemas.engine import FilterSource, FilterSpec
 
 TMDB_BASE = "https://api.themoviedb.org/3"
+
+
+def test_discovery_filters_are_safe_engine_metadata(client):
+    engines = {engine["game_type"]: engine for engine in client.get("/api/engines").json()}
+    for engine in engines.values():
+        for spec in engine["discovery_filters"]:
+            assert spec["source"] in get_args(FilterSource)
+            assert spec["kind"] in {"select", "toggle", "range"}
+            assert spec["server_param"] in {None, "include_off_tier"}
+    for game_type in (
+        "world_passport", "chrono_climb", "historical_time_travel",
+        "genre_pendulum", "tug_of_war", "rabbit_hole",
+    ):
+        assert engines[game_type]["discovery_filters"]
+    assert engines["cinechain"]["discovery_filters"] == []
+    assert engines["historical_time_travel"]["discovery_filters"][0]["source"] == "narrative_year"
+    assert engines["genre_pendulum"]["discovery_filters"][0]["default"] is True
+    with pytest.raises(ValidationError):
+        FilterSpec(key="unsafe", kind="toggle", label="Unsafe", source="candidate.eval()")
+    with pytest.raises(ValidationError):
+        FilterSpec(key="unsafe", kind="toggle", label="Unsafe",
+                   source="new_country", server_param="arbitrary_query")
 
 
 @pytest.fixture()

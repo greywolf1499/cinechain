@@ -1,3 +1,4 @@
+import asyncio
 import random
 from datetime import timedelta
 
@@ -7,7 +8,7 @@ from sqlmodel import Session, select
 from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client, run_participant_guard
 from app.db import get_session
 from app.engines import chaos, rabbit_hole
-from app.engines.base import RunSetupError
+from app.engines.base import BaseChallengeEngine, RunSetupError
 from app.engines.meet_in_middle import (
     MEET_IN_THE_MIDDLE,
     SIDE_HEAD,
@@ -58,7 +59,7 @@ from app.models.run import (
     RunStep,
 )
 from app.models.user import User
-from app.schemas.discovery import DiscoveryCandidate
+from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
 from app.schemas.engine import (
     ConstraintInfo,
     RunStats,
@@ -1638,28 +1639,84 @@ async def get_run_suggestions(
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
-    country: str | None = Query(default=None),
-    decade: int | None = Query(default=None),
+    country: str | None = Query(default=None, pattern="^[A-Z]{2}$"),
+    decade: int | None = Query(default=None, ge=1880, le=2100, multiple_of=10),
     genre_id: int | None = Query(default=None),
     chaser: bool = Query(default=False),
     sort_by: str | None = Query(default=None, pattern="^underdog$"),
+    frontier_movie_id: int | None = Query(default=None),
 ) -> list[Suggestion]:
     current = _last_step(session, run.id)
     if current is None:
         return []
+    history = _run_history(session, run.id)
+    if frontier_movie_id is not None and frontier_movie_id != current.movie_id:
+        current = next((step for step in reversed(history) if step.movie_id == frontier_movie_id), None)
+        if current is None:
+            raise HTTPException(status_code=422, detail="Search frontier must belong to this run.")
     logged_movie_ids = [
         step.movie_id
         for step in session.exec(select(RunStep).where(RunStep.run_id == run.id)).all()
     ]
     engine = get_engine(run.game_type, session, tmdb)
     filters = SuggestionFilters(country=country, decade=decade, genre_id=genre_id)
+    try:
+        async with asyncio.timeout(20):
+            return await _checked_suggestions(
+                session, run, engine, current, history, logged_movie_ids, filters, chaser, sort_by
+            )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Search took too long. Try again or narrow the filters.") from exc
+
+
+async def _checked_suggestions(
+    session: Session,
+    run: Run,
+    engine: BaseChallengeEngine,
+    current: RunStep,
+    history: list[RunStep],
+    logged_movie_ids: list[int],
+    filters: SuggestionFilters,
+    chaser: bool,
+    sort_by: str | None,
+) -> list[Suggestion]:
     suggestions = await engine.get_suggestions(
-        current.movie_id, logged_movie_ids, filters, rules=_run_rules(run)
+        current.movie_id, logged_movie_ids, filters, rules=_run_rules(run), history=history
     )
+    checked: list[Suggestion] = []
+    for suggestion in suggestions[:20]:
+        validation = await engine.validate_next_step(
+            current.movie_id, suggestion.movie_id,
+            cast_limit=_run_rules(run).get("max_cast_order"),
+            rules=_run_rules(run),
+            previous_transition=current.transition_metadata,
+            history=history,
+        )
+        if validation.valid:
+            suggestion.connections = [
+                DiscoveryConnection(
+                    kind=connection.kind, actor_id=connection.actor_id,
+                    actor_name=connection.actor_name, profile_path=connection.profile_path,
+                    character_in_frontier=connection.character_in_from,
+                    character_in_candidate=connection.character_in_to,
+                    role_in_frontier=connection.role_in_from, role_in_candidate=connection.role_in_to,
+                )
+                for connection in validation.connections
+            ]
+            row = session.get(CachedMovie, suggestion.movie_id)
+            if row is not None:
+                suggestion.origin_country = row.origin_country
+                suggestion.genre_ids = row.genre_ids or []
+                suggestion.runtime = row.runtime
+                suggestion.popularity = row.popularity
+                suggestion.narrative_year = row.narrative_year
+                suggestion.narrative_era_label = row.narrative_era_label
+            checked.append(suggestion)
+    suggestions = checked
     if chaser or sort_by:
         by_id = {s.movie_id: s for s in suggestions}
         kept = await pool_options.shape_pool(
-            session, tmdb, [s.movie_id for s in suggestions], chaser=chaser, sort_by=sort_by
+            session, engine.tmdb, [s.movie_id for s in suggestions], chaser=chaser, sort_by=sort_by
         )
         suggestions = [by_id[movie_id] for movie_id in kept]
     return suggestions
@@ -1748,6 +1805,9 @@ async def discover_next_movies(
     chaser: bool = Query(
         default=False, description="Only palate cleansers: <= 95 min, Comedy/Animation"
     ),
+    include_off_tier: bool = Query(
+        default=False, description="Rabbit Hole only: include linked films that cost a life"
+    ),
     sort_by: str | None = Query(
         default=None,
         pattern="^underdog$",
@@ -1765,6 +1825,8 @@ async def discover_next_movies(
     """
     engine = get_engine(run.game_type, session, tmdb)
     rules = _run_rules(run)
+    if include_off_tier and not isinstance(engine, RabbitHoleEngine):
+        raise HTTPException(status_code=422, detail="Off-tier discovery is only supported by Rabbit Hole.")
     previous = _last_step(session, run.id)
     try:
         candidates = await engine.discover_with_modifiers(
@@ -1778,6 +1840,7 @@ async def discover_next_movies(
                 else None
             ),
             history=_run_history(session, run.id),
+            **({"include_off_tier": include_off_tier} if isinstance(engine, RabbitHoleEngine) else {}),
         )
     except NotImplementedError:
         raise HTTPException(

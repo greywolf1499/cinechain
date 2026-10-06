@@ -31,7 +31,7 @@ from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, Run, RunStep
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import ConstraintInfo, RabbitHoleState, ValidationResult
+from app.schemas.engine import ConstraintInfo, FilterSpec, RabbitHoleState, ValidationResult
 from app.services.movie_filters import rating_of
 from app.utils.dates import parse_release_year
 
@@ -156,6 +156,11 @@ def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
 
 
 class RabbitHoleEngine(CineChainEngine):
+    discovery_filters: ClassVar[list[FilterSpec]] = [
+        FilterSpec(key="include_off_tier", kind="toggle", label="Include off-tier films",
+                   source="tier_compliant", default=False, server_param="include_off_tier",
+                   help="Off-tier films cost one life when logged. Other rules still apply."),
+    ]
     tagline = "Descend. Survive. Don't blink."
     tags: ClassVar[list[str]] = ["Shared cast", "3 lives", "Rogue-like"]
     rulebook: ClassVar[RuleSection] = RuleSection(
@@ -363,6 +368,23 @@ class RabbitHoleEngine(CineChainEngine):
 
     # --- Pick Next ---
 
+    async def discover_with_modifiers(
+        self,
+        frontier_movie_id: int,
+        mode: str = "or",
+        cast_limit: int | None = None,
+        rules: dict | None = None,
+        previous_transition: dict | None = None,
+        history: Sequence[RunStep] | None = None,
+        *,
+        include_off_tier: bool = False,
+    ) -> list[DiscoveryCandidate]:
+        pool = await self.discover_candidates(
+            frontier_movie_id, mode, cast_limit, rules, previous_transition, history,
+            include_off_tier=include_off_tier,
+        )
+        return await self.filter_by_modifiers(frontier_movie_id, pool, rules, history)
+
     async def discover_candidates(
         self,
         frontier_movie_id: int,
@@ -371,6 +393,8 @@ class RabbitHoleEngine(CineChainEngine):
         rules: dict | None = None,
         previous_transition: dict | None = None,
         history: Sequence[RunStep] | None = None,
+        *,
+        include_off_tier: bool = False,
     ) -> list[DiscoveryCandidate]:
         """Cast-linked films that already satisfy the active tier's rule (films whose data can't
         be checked yet stay, flagged unverified)."""
@@ -388,7 +412,7 @@ class RabbitHoleEngine(CineChainEngine):
                 if row is None:
                     continue
                 verdict = compliance(self.session, tier, row)
-                if verdict is False:
+                if verdict is False and not include_off_tier:
                     continue
                 candidate.tier_compliant = verdict
                 candidate.constraint_unverified = verdict is None

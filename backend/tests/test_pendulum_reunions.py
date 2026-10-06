@@ -143,6 +143,24 @@ def log(client, run_id, movie_id, **extra):
     return client.post(f"/api/runs/{run_id}/steps", json={"movie_id": movie_id, **extra})
 
 
+def test_search_further_continues_the_current_pendulum_swing(client):
+    movies = {
+        1: {"title": "First horror", "genres": [HORROR, THRILLER], "cast": [(100, "A")]},
+        2: {"title": "Second horror", "genres": [HORROR, THRILLER], "cast": [(100, "B")]},
+        3: {"title": "Wrong old swing", "genres": [HORROR], "cast": [(100, "C")]},
+        4: {"title": "Next thriller", "genres": [THRILLER], "cast": [(100, "D")]},
+    }
+    with respx.mock:
+        mock_movies(movies)
+        run = make_run(client, "genre_pendulum", require_cast_link=True)
+        assert log(client, run["id"], 1).status_code == 201
+        assert log(client, run["id"], 2).status_code == 201
+        response = client.get(f"/api/runs/{run['id']}/suggestions", params={"decade": 2000})
+        assert response.status_code == 200, response.text
+        assert [candidate["movie_id"] for candidate in response.json()] == [4]
+        assert response.json()[0]["connections"][0]["actor_id"] == 100
+
+
 # --- pure helpers ---------------------------------------------------------------------
 
 

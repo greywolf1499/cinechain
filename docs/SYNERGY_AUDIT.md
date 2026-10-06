@@ -340,6 +340,8 @@ is unreachable.
 | S2-17 | P2 | Either wire `/runs/{id}/suggestions` to a server-side "Search further" action for a selected country/decade (when the client-side pool is empty for that filter), or delete it. Dead endpoints rot. |
 | S2-18 | P2 | `DiscoveryCandidate.runtime` exists but is `None` for uncached films. A runtime filter must treat unknown as "unverified" (show the film, with a `?` chip) to match the lenient-unknown rule of `modifiers.py`. |
 
+**S4 implementation correction:** Time-Travel's frontier is its narrative setting year, so its range uses `narrative_year`, not `release_year`. The orphaned suggestions endpoint did not actually search beyond the pool for standalone runs: `MutatorEngine.get_suggestions` returned an empty list without a cast-link modifier. S4 adds one-page filtered standalone discovery and up to 20 history-aware validations under a 20-second request deadline, with nullable connector fields rather than invented actors. Crew/person and trope chips remain because they reflect real connection/extraction capabilities; mode-specific Tug filters now come from engine metadata.
+
 ---
 
 ## Step 3 — Synergy, Modifiers & Rulesets

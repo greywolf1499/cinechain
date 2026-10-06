@@ -50,6 +50,7 @@ class TrackerEngine(BaseChallengeEngine):
         exclude_movie_ids: list[int],
         filters: SuggestionFilters,
         rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
     ) -> list[Suggestion]:
         return []
 

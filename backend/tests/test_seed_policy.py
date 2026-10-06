@@ -21,7 +21,14 @@ def seed_cache(db_engine, monkeypatch):
     network = AsyncMock(side_effect=AssertionError("Seed setup must not call TMDB"))
     monkeypatch.setattr(TMDBClient, "get_movie", network)
     with Session(db_engine) as session:
-        session.add(CuratedList(id="canon", title="Test canon", url="https://letterboxd.com/test/list/canon/", badge_prefix="TEST"))
+        session.add(
+            CuratedList(
+                id="canon",
+                title="Test canon",
+                url="https://letterboxd.com/test/list/canon/",
+                badge_prefix="TEST",
+            )
+        )
         session.flush()
         for movie_id, countries, year, runtime, poster in (
             (1, ["JP"], 1970, 100, "/1.jpg"),
@@ -32,24 +39,40 @@ def seed_cache(db_engine, monkeypatch):
             (6, ["AU"], 1975, 20, None),
             (7, ["JP"], 1975, 100, "/7.jpg"),
         ):
-            session.add(CachedMovie(
-                tmdb_id=movie_id, title=f"Film {movie_id}", release_date=f"{year}-06-01",
-                origin_country=json.dumps(countries), runtime=runtime, poster_path=poster,
-                status="Released", popularity=5,
-            ))
+            session.add(
+                CachedMovie(
+                    tmdb_id=movie_id,
+                    title=f"Film {movie_id}",
+                    release_date=f"{year}-06-01",
+                    origin_country=json.dumps(countries),
+                    runtime=runtime,
+                    poster_path=poster,
+                    status="Released",
+                    popularity=5,
+                )
+            )
             if movie_id != 7:
-                session.add(CanonMovieBadge(
-                    curated_list_id="canon", movie_id=movie_id, badge_label=f"TEST #{movie_id}",
-                    rank=movie_id,
-                ))
+                session.add(
+                    CanonMovieBadge(
+                        curated_list_id="canon",
+                        movie_id=movie_id,
+                        badge_label=f"TEST #{movie_id}",
+                        rank=movie_id,
+                    )
+                )
         session.commit()
     return network
 
 
 def suggest(client, game_type, rules=None, exclude=None):
-    response = client.post("/api/movies/seed-suggestion", json={
-        "game_type": game_type, "rules_config": rules or {}, "exclude": exclude or [],
-    })
+    response = client.post(
+        "/api/movies/seed-suggestion",
+        json={
+            "game_type": game_type,
+            "rules_config": rules or {},
+            "exclude": exclude or [],
+        },
+    )
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -64,26 +87,40 @@ def test_every_engine_exposes_a_valid_seed_policy(client):
 
 
 @pytest.mark.parametrize(("country", "allowed"), [("JP", {1, 2}), ("AU", {2, 3, 6})])
-def test_regional_dice_stays_in_checklist_for_thirty_rolls(client, seed_cache, monkeypatch, country, allowed):
+def test_regional_dice_stays_in_checklist_for_thirty_rolls(
+    client, seed_cache, monkeypatch, country, allowed
+):
     prepare = AsyncMock(side_effect=AssertionError("Dice must not prepare a run"))
     monkeypatch.setattr(RegionalDeepDiveEngine, "prepare_run", prepare)
     for _ in range(30):
-        result = suggest(client, "regional_deep_dive", {
-            "curated_list_id": "canon", "target_country": country,
-        })
+        result = suggest(
+            client,
+            "regional_deep_dive",
+            {
+                "curated_list_id": "canon",
+                "target_country": country,
+            },
+        )
         assert result["suggestion"]["tmdb_id"] in allowed
     prepare.assert_not_awaited()
     seed_cache.assert_not_awaited()
 
 
-@pytest.mark.parametrize(("mode", "rules", "allowed"), [
-    ("decade_sieve", {"target_decade": 1970}, {1, 2, 4, 6, 7}),
-    ("canon_island", {"allowed_curated_list_id": "canon"}, {1, 2, 3, 4, 5, 6}),
-])
+@pytest.mark.parametrize(
+    ("mode", "rules", "allowed"),
+    [
+        ("decade_sieve", {"target_decade": 1970}, {1, 2, 4, 6, 7}),
+        ("canon_island", {"allowed_curated_list_id": "canon"}, {1, 2, 3, 4, 5, 6}),
+    ],
+)
 def test_derived_dice_and_options_respect_bounds(client, seed_cache, mode, rules, allowed):
-    options = client.post("/api/movies/seed-options", json={
-        "game_type": mode, "rules_config": rules,
-    })
+    options = client.post(
+        "/api/movies/seed-options",
+        json={
+            "game_type": mode,
+            "rules_config": rules,
+        },
+    )
     assert options.status_code == 200, options.text
     assert set(options.json()["allowed_ids"]) == allowed
     for _ in range(15):
@@ -93,23 +130,37 @@ def test_derived_dice_and_options_respect_bounds(client, seed_cache, mode, rules
 
 def test_niche_slice_without_posters_still_has_runtime_eligible_seeds(client, seed_cache):
     rules = {"curated_list_id": "canon", "target_country": "AU", "min_runtime": 40}
-    assert suggest(client, "regional_deep_dive", rules, exclude=[1, 2, 3, 4, 5])["suggestion"] is None
+    assert (
+        suggest(client, "regional_deep_dive", rules, exclude=[1, 2, 3, 4, 5])["suggestion"] is None
+    )
     result = suggest(client, "regional_deep_dive", rules, exclude=[1, 2, 4, 5, 6])
     assert result["suggestion"]["tmdb_id"] == 3  # unknown runtime, no poster
     assert result["reason"] == "On the TEST #3 list"
     seed_cache.assert_not_awaited()
 
 
-@pytest.mark.parametrize("mode", [
-    "march_madness", "rt_split", "roulette", "method_actor", "auteur_marathon",
-])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "march_madness",
+        "rt_split",
+        "roulette",
+        "method_actor",
+        "auteur_marathon",
+    ],
+)
 def test_board_modes_reject_seeds_before_preparation(client, seed_cache, monkeypatch, mode):
     engine = ENGINE_REGISTRY[mode]
     prepare = AsyncMock(side_effect=AssertionError("Illegal seed must fail before preparation"))
     monkeypatch.setattr(engine, "prepare_run", prepare)
-    response = client.post("/api/runs", json={
-        "name": "Illegal seed", "game_type": mode, "seed_movie_id": 1,
-    })
+    response = client.post(
+        "/api/runs",
+        json={
+            "name": "Illegal seed",
+            "game_type": mode,
+            "seed_movie_id": 1,
+        },
+    )
     assert response.status_code == 422, response.text
     assert engine.display_name in response.json()["detail"]
     result = suggest(client, mode)
@@ -119,17 +170,26 @@ def test_board_modes_reject_seeds_before_preparation(client, seed_cache, monkeyp
     seed_cache.assert_not_awaited()
 
 
-@pytest.mark.parametrize(("mode", "rules", "seed"), [
-    ("regional_deep_dive", {"curated_list_id": "canon", "target_country": "AU"}, 4),
-    ("canon_island", {"allowed_curated_list_id": "canon"}, 7),
-    ("decade_sieve", {"target_decade": 1970}, 5),
-])
+@pytest.mark.parametrize(
+    ("mode", "rules", "seed"),
+    [
+        ("regional_deep_dive", {"curated_list_id": "canon", "target_country": "AU"}, 4),
+        ("canon_island", {"allowed_curated_list_id": "canon"}, 7),
+        ("decade_sieve", {"target_decade": 1970}, 5),
+    ],
+)
 def test_nonmember_seed_fails_before_hydration(client, seed_cache, monkeypatch, mode, rules, seed):
     prepare = AsyncMock(side_effect=AssertionError("Nonmember seed must not prepare"))
     monkeypatch.setattr(ENGINE_REGISTRY[mode], "prepare_run", prepare)
-    response = client.post("/api/runs", json={
-        "name": "Illegal slice", "game_type": mode, "rules_config": rules, "seed_movie_id": seed,
-    })
+    response = client.post(
+        "/api/runs",
+        json={
+            "name": "Illegal slice",
+            "game_type": mode,
+            "rules_config": rules,
+            "seed_movie_id": seed,
+        },
+    )
     assert response.status_code == 422, response.text
     assert "slice" in response.json()["detail"]
     prepare.assert_not_awaited()
@@ -151,34 +211,51 @@ def test_pair_dice_keeps_partner_exclusion_when_rotation_exhausts(client, seed_c
 
 
 def test_seed_api_validates_rules_and_strips_forged_expedition(client, seed_cache):
-    invalid = client.post("/api/movies/seed-suggestion", json={
-        "game_type": "regional_deep_dive", "rules_config": {"expedition": {"movie_ids": [4]}},
-    })
+    invalid = client.post(
+        "/api/movies/seed-suggestion",
+        json={
+            "game_type": "regional_deep_dive",
+            "rules_config": {"expedition": {"movie_ids": [4]}},
+        },
+    )
     assert invalid.status_code == 422
     rules = {"curated_list_id": "canon", "target_country": "JP", "expedition": {"movie_ids": [4]}}
     assert suggest(client, "regional_deep_dive", rules)["suggestion"]["tmdb_id"] in {1, 2}
     for minimum in (-1, True, "40"):
-        response = client.post("/api/movies/seed-suggestion", json={
-            "game_type": "cinechain", "rules_config": {"min_runtime": minimum},
-        })
+        response = client.post(
+            "/api/movies/seed-suggestion",
+            json={
+                "game_type": "cinechain",
+                "rules_config": {"min_runtime": minimum},
+            },
+        )
         assert response.status_code == 422
     seed_cache.assert_not_awaited()
 
 
 def test_legacy_get_keeps_movie_shape_and_accepts_derived_rules(client, seed_cache):
-    response = client.get("/api/movies/seed-suggestion", params={
-        "game_type": "regional_deep_dive",
-        "rules_config": json.dumps({"curated_list_id": "canon", "target_country": "AU"}),
-    })
+    response = client.get(
+        "/api/movies/seed-suggestion",
+        params={
+            "game_type": "regional_deep_dive",
+            "rules_config": json.dumps({"curated_list_id": "canon", "target_country": "AU"}),
+        },
+    )
     assert response.status_code == 200, response.text
     assert response.json()["tmdb_id"] in {2, 3, 6}
     assert "suggestion" not in response.json()
-    assert client.get("/api/movies/seed-suggestion", params={"rules_config": "[]"}).status_code == 422
-    assert client.get("/api/movies/seed-suggestion", params={"rules_config": "{"}).status_code == 422
+    assert (
+        client.get("/api/movies/seed-suggestion", params={"rules_config": "[]"}).status_code == 422
+    )
+    assert (
+        client.get("/api/movies/seed-suggestion", params={"rules_config": "{"}).status_code == 422
+    )
     seed_cache.assert_not_awaited()
 
 
 def test_empty_slice_has_a_reason_and_no_unbounded_fallback(client, seed_cache):
-    result = suggest(client, "regional_deep_dive", {"curated_list_id": "canon", "target_country": "FR"})
+    result = suggest(
+        client, "regional_deep_dive", {"curated_list_id": "canon", "target_country": "FR"}
+    )
     assert result == {"suggestion": None, "reason": "No indexed films match this slice yet."}
     seed_cache.assert_not_awaited()

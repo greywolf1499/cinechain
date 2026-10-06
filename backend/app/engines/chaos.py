@@ -22,7 +22,8 @@ RULEBOOK = RuleSection(
     ["The active handicap is {chaos_label}. Satisfy it on the next logged film."],
     ["Logging a film clears the active handicap; unknown facts do not block after hydration."],
     ["Wildcards cannot bypass a known handicap violation."],
-    ["Read the handicap before selecting a connector; narrow the pool before committing."], ["wildcard"],
+    ["Read the handicap before selecting a connector; narrow the pool before committing."],
+    ["wildcard"],
 )
 
 from sqlmodel import Session
@@ -57,11 +58,19 @@ def _b_movie(movie: CachedMovie, rating: float | None) -> bool | None:
 
 
 def _epic_length(movie: CachedMovie, rating: float | None) -> bool | None:
-    return None if not movie.runtime else predicate("runtime_ge", value=EPIC_RUNTIME).check(movie, facts_of(movie, []))
+    return (
+        None
+        if not movie.runtime
+        else predicate("runtime_ge", value=EPIC_RUNTIME).check(movie, facts_of(movie, []))
+    )
 
 
 def _short_flick(movie: CachedMovie, rating: float | None) -> bool | None:
-    return None if not movie.runtime else predicate("runtime_le", value=SHORT_RUNTIME).check(movie, facts_of(movie, []))
+    return (
+        None
+        if not movie.runtime
+        else predicate("runtime_le", value=SHORT_RUNTIME).check(movie, facts_of(movie, []))
+    )
 
 
 def _foreign_tongue(movie: CachedMovie, rating: float | None) -> bool | None:
@@ -71,14 +80,34 @@ def _foreign_tongue(movie: CachedMovie, rating: float | None) -> bool | None:
 HANDICAPS: dict[str, Handicap] = {
     h.id: h
     for h in (
-        Handicap("pre_1970", "Time Machine: Pre-1970 only", _pre_1970, "",
-                 predicate("year_lt", value=PRE_YEAR)),
-        Handicap("b_movie", "Campy Cinema: Under 6.0 rating", _b_movie, "vote_average",
-                 predicate("rating_lt", value=B_MOVIE_RATING)),
-        Handicap("epic_length", "The Long Haul: Over 150 mins", _epic_length, "runtime",
-                 predicate("runtime_ge", value=EPIC_RUNTIME)),
-        Handicap("short_flick", "Lightning Fast: Under 85 mins", _short_flick, "runtime",
-                 predicate("runtime_le", value=SHORT_RUNTIME)),
+        Handicap(
+            "pre_1970",
+            "Time Machine: Pre-1970 only",
+            _pre_1970,
+            "",
+            predicate("year_lt", value=PRE_YEAR),
+        ),
+        Handicap(
+            "b_movie",
+            "Campy Cinema: Under 6.0 rating",
+            _b_movie,
+            "vote_average",
+            predicate("rating_lt", value=B_MOVIE_RATING),
+        ),
+        Handicap(
+            "epic_length",
+            "The Long Haul: Over 150 mins",
+            _epic_length,
+            "runtime",
+            predicate("runtime_ge", value=EPIC_RUNTIME),
+        ),
+        Handicap(
+            "short_flick",
+            "Lightning Fast: Under 85 mins",
+            _short_flick,
+            "runtime",
+            predicate("runtime_le", value=SHORT_RUNTIME),
+        ),
         Handicap(
             "foreign_tongue",
             "Passport Punch: Non-English only",

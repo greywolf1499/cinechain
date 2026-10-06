@@ -264,7 +264,9 @@ def tally_v2(
         multiplier = 2 if anchor == puller else 1
         if territory is None:
             kind: TugEffect = (
-                "sudden_neutral" if config["sudden_death_enabled"] and turns >= config["sudden_death_after"] else "neutral"
+                "sudden_neutral"
+                if config["sudden_death_enabled"] and turns >= config["sudden_death_after"]
+                else "neutral"
             )
             streak_team, streak = None, 0
             if kind == "sudden_neutral":
@@ -299,7 +301,11 @@ def tally_v2(
             points = multiplier + steal
             anchor = None if anchor == puller else anchor
         else:
-            kind = "sudden_neutral" if config["sudden_death_enabled"] and turns >= config["sudden_death_after"] else "neutral"
+            kind = (
+                "sudden_neutral"
+                if config["sudden_death_enabled"] and turns >= config["sudden_death_after"]
+                else "neutral"
+            )
             streak_team, streak = None, 0
             if kind == "sudden_neutral":
                 opponent = TEAM_B if puller == TEAM_A else TEAM_A
@@ -321,14 +327,18 @@ def tally_v2(
                 multiplier=multiplier,
             )
         )
-        target = max(
-            1,
-            config["target_lead"]
-            - max(
-                (turns - config["sudden_death_after"]) // config["sudden_death_every"],
-                0,
-            ),
-        ) if config["sudden_death_enabled"] else config["target_lead"]
+        target = (
+            max(
+                1,
+                config["target_lead"]
+                - max(
+                    (turns - config["sudden_death_after"]) // config["sudden_death_every"],
+                    0,
+                ),
+            )
+            if config["sudden_death_enabled"]
+            else config["target_lead"]
+        )
 
     sudden_death = config["sudden_death_enabled"] and turns >= config["sudden_death_after"]
     return TugTally(
@@ -410,20 +420,39 @@ def tally_v3(
             rounds += 1
             round_teams.clear()
             completed_pulls = rounds * (2 if paired else 1)
-            sudden = config["sudden_death_enabled"] and completed_pulls >= config["sudden_death_after"]
+            sudden = (
+                config["sudden_death_enabled"] and completed_pulls >= config["sudden_death_after"]
+            )
             if sudden:
-                target = max(1, config["target_lead"] - (
-                    completed_pulls - config["sudden_death_after"]
-                ) // config["sudden_death_every"])
-                first = TEAM_B if rope > 0 else TEAM_A if rope < 0 else (
-                    TEAM_B if first == TEAM_A else TEAM_A
+                target = max(
+                    1,
+                    config["target_lead"]
+                    - (completed_pulls - config["sudden_death_after"])
+                    // config["sudden_death_every"],
+                )
+                first = (
+                    TEAM_B
+                    if rope > 0
+                    else TEAM_A
+                    if rope < 0
+                    else (TEAM_B if first == TEAM_A else TEAM_A)
                 )
             next_team = first if paired else TEAM_A
         else:
             next_team = opponent
     return TugTally(
-        scores, (None, 0), None, target, sudden, pulls, next_team,
-        rope, streaks, banks, rounds, not round_teams,
+        scores,
+        (None, 0),
+        None,
+        target,
+        sudden,
+        pulls,
+        next_team,
+        rope,
+        streaks,
+        banks,
+        rounds,
+        not round_teams,
     )
 
 
@@ -496,42 +525,94 @@ def preview_pull(
 class TugOfWarEngine(CineChainEngine):
     rule_fields: ClassVar[list[RuleField]] = [
         *CineChainEngine.rule_fields,
-        RuleField(key="target_lead", kind="int", label="Target lead", min=2,
-                  max=MAX_TARGET_LEAD, default=7),
-        RuleField(key="sudden_death_enabled", kind="bool", label="Sudden Death", default=True,
-                  help="Shrink the target at round boundaries; trailing team pulls first."),
-        RuleField(key="steal_enabled", kind="bool", label="Allow raids", default=True, group="advanced"),
-        RuleField(key="momentum_cap", kind="int", label="Momentum cap", min=1, max=5,
-                  default=DEFAULT_MOMENTUM_CAP, group="advanced"),
-        RuleField(key="sudden_death_after", kind="int", label="Sudden Death after pulls",
-                  min=4, max=50, default=DEFAULT_SUDDEN_DEATH_AFTER, group="advanced"),
-        RuleField(key="sudden_death_every", kind="int", label="Shrink target every pulls",
-                  min=1, max=10, default=DEFAULT_SUDDEN_DEATH_EVERY, group="advanced"),
+        RuleField(
+            key="target_lead",
+            kind="int",
+            label="Target lead",
+            min=2,
+            max=MAX_TARGET_LEAD,
+            default=7,
+        ),
+        RuleField(
+            key="sudden_death_enabled",
+            kind="bool",
+            label="Sudden Death",
+            default=True,
+            help="Shrink the target at round boundaries; trailing team pulls first.",
+        ),
+        RuleField(
+            key="steal_enabled", kind="bool", label="Allow raids", default=True, group="advanced"
+        ),
+        RuleField(
+            key="momentum_cap",
+            kind="int",
+            label="Momentum cap",
+            min=1,
+            max=5,
+            default=DEFAULT_MOMENTUM_CAP,
+            group="advanced",
+        ),
+        RuleField(
+            key="sudden_death_after",
+            kind="int",
+            label="Sudden Death after pulls",
+            min=4,
+            max=50,
+            default=DEFAULT_SUDDEN_DEATH_AFTER,
+            group="advanced",
+        ),
+        RuleField(
+            key="sudden_death_every",
+            kind="int",
+            label="Shrink target every pulls",
+            min=1,
+            max=10,
+            default=DEFAULT_SUDDEN_DEATH_EVERY,
+            group="advanced",
+        ),
     ]
     presets: ClassVar[list[Preset]] = [
-        Preset(id="friendly", label="Friendly", blurb="A quick five-point match.",
-               values={"target_lead": 5, "sudden_death_enabled": True}),
-        Preset(id="rivalry", label="Rivalry", blurb="Seven points with Sudden Death.",
-               values={"target_lead": 7, "sudden_death_enabled": True}),
-        Preset(id="blood_feud", label="Blood Feud", blurb="Nine points, no shrinking target.",
-               values={"target_lead": 9, "sudden_death_enabled": False}),
+        Preset(
+            id="friendly",
+            label="Friendly",
+            blurb="A quick five-point match.",
+            values={"target_lead": 5, "sudden_death_enabled": True},
+        ),
+        Preset(
+            id="rivalry",
+            label="Rivalry",
+            blurb="Seven points with Sudden Death.",
+            values={"target_lead": 7, "sudden_death_enabled": True},
+        ),
+        Preset(
+            id="blood_feud",
+            label="Blood Feud",
+            blurb="Nine points, no shrinking target.",
+            values={"target_lead": 9, "sudden_death_enabled": False},
+        ),
     ]
     default_preset = "rivalry"
     discovery_filters: ClassVar[list[FilterSpec]] = [
-        FilterSpec(key="tug_effect", kind="select", label="Pull effect", source="tug_effect",
-                   default="home", help="Build your territory, Raid the opponent, or Bank a neutral film."),
+        FilterSpec(
+            key="tug_effect",
+            kind="select",
+            label="Pull effect",
+            source="tug_effect",
+            default="home",
+            help="Build your territory, Raid the opponent, or Bank a neutral film.",
+        ),
     ]
     tagline = "Pull the rope your way"
     tags: ClassVar[list[str]] = ["Shared cast", "Two teams", "Era or geography"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Win by leading the rope by {target_lead} points (current target: {effective_target}).",
-        ["{tug_first_turn} Team A is {territory_a}; Team B is {territory_b}.",
-         "{tug_turn}"],
-        ["{tug_scoring}",
-         "{sudden_rule}"],
+        ["{tug_first_turn} Team A is {territory_a}; Team B is {territory_b}.", "{tug_turn}"],
+        ["{tug_scoring}", "{sudden_rule}"],
         ["The other team wins if it reaches the lead target first.", "{fail_goal}"],
-        ["Your pick sets your opponent's options: leave a frontier they cannot easily exploit.",
-         "{tug_tip}"],
+        [
+            "Your pick sets your opponent's options: leave a frontier they cannot easily exploit.",
+            "{tug_tip}",
+        ],
         ["seed", "build", "raid", "bank", "streak", "sudden_death"],
     )
 
@@ -542,35 +623,57 @@ class TugOfWarEngine(CineChainEngine):
         legacy = (rules or {}).get(TUG_RULES_VERSION_KEY) == 1
         v3 = (rules or {}).get(TUG_RULES_VERSION_KEY, 3) == 3
         return {
-            **super().rulebook_values(rules), **config,
+            **super().rulebook_values(rules),
+            **config,
             "effective_target": state.get("effective_target", config["target_lead"]),
-            "territory_a": f"pre-{config['era_a_before']}" if config["dimension"] == DIMENSION_ERA else "US and Europe",
-            "territory_b": f"post-{config['era_b_after']}" if config["dimension"] == DIMENSION_ERA else "the rest of the world",
-            "tug_first_turn": "Log shared-cast films." if legacy else
-            "Each round gives both teams one shared-cast pull; victory is settled after both pulls." if v3 else
-            "Take alternating shared-cast turns.",
+            "territory_a": f"pre-{config['era_a_before']}"
+            if config["dimension"] == DIMENSION_ERA
+            else "US and Europe",
+            "territory_b": f"post-{config['era_b_after']}"
+            if config["dimension"] == DIMENSION_ERA
+            else "the rest of the world",
+            "tug_first_turn": "Log shared-cast films."
+            if legacy
+            else "Each round gives both teams one shared-cast pull; victory is settled after both pulls."
+            if v3
+            else "Take alternating shared-cast turns.",
             "tug_tip": "Choose actors with routes back into your territory; logging an opposing-territory film helps that side."
-            if legacy else "Raid to break their streak; bank to double your next scoring pull without resetting their streak."
-            if v3 else "A raid removes only available points; bank when the doubled next pull outweighs waiting.",
+            if legacy
+            else "Raid to break their streak; bank to double your next scoring pull without resetting their streak."
+            if v3
+            else "A raid removes only available points; bank when the doubled next pull outweighs waiting.",
             "tug_turn": "Each watched film scores for its territory, regardless of who logged it; neutral films score neither team."
-            if legacy else "Build on your territory, raid the opponent's, or bank with a neutral film.",
+            if legacy
+            else "Build on your territory, raid the opponent's, or bank with a neutral film.",
             "tug_scoring": "Legacy scoring: each watched territory film gives its territory one point; neutral films score neither team."
-            if legacy else (
+            if legacy
+            else (
                 f"Build grows your own streak up to {config['momentum_cap']}, independent of the other team's builds. "
-                + ("Raid moves the rope 2 points and resets their streak. "
-                   if config["steal_enabled"] else "Raids are disabled; opposing films are neutral. ")
+                + (
+                    "Raid moves the rope 2 points and resets their streak. "
+                    if config["steal_enabled"]
+                    else "Raids are disabled; opposing films are neutral. "
+                )
                 + "Bank moves it 0, resets your streak and doubles your next scoring pull; each team keeps its own bank."
-            ) if v3 else (
+            )
+            if v3
+            else (
                 f"Build adds streak points up to {config['momentum_cap']}; a bank doubles the next scoring pull. "
-                + ("Raids gain 1 and remove up to 1 available opponent point, doubled by a bank."
-                   if config["steal_enabled"] else "Raids are disabled: opposing-territory films count as neutral.")
+                + (
+                    "Raids gain 1 and remove up to 1 available opponent point, doubled by a bank."
+                    if config["steal_enabled"]
+                    else "Raids are disabled: opposing-territory films count as neutral."
+                )
             ),
-            "sudden_rule": "Legacy scoring has no momentum or Sudden Death." if legacy else
-            "Sudden Death is disabled; the target stays fixed." if not config["sudden_death_enabled"] else
-            f"After {config['sudden_death_after']} pulls, Sudden Death shrinks the target every {config['sudden_death_every']} pulls, only at complete round boundaries. Trailing team pulls first; ties alternate initiative. Banks remain zero-point pulls."
-            if v3 else
-            f"Sudden Death begins after {config['sudden_death_after']} pulls: neutral films give the opponent 1 point and the target shrinks every {config['sudden_death_every']} pulls.",
+            "sudden_rule": "Legacy scoring has no momentum or Sudden Death."
+            if legacy
+            else "Sudden Death is disabled; the target stays fixed."
+            if not config["sudden_death_enabled"]
+            else f"After {config['sudden_death_after']} pulls, Sudden Death shrinks the target every {config['sudden_death_every']} pulls, only at complete round boundaries. Trailing team pulls first; ties alternate initiative. Banks remain zero-point pulls."
+            if v3
+            else f"Sudden Death begins after {config['sudden_death_after']} pulls: neutral films give the opponent 1 point and the target shrinks every {config['sudden_death_every']} pulls.",
         }
+
     game_type = TUG_OF_WAR
     display_name = "Tug of War"
     description = (
@@ -668,10 +771,15 @@ class TugOfWarEngine(CineChainEngine):
                 "pulls": [asdict(pull) for pull in result.pulls],
             }
             if rules.get(TUG_RULES_VERSION_KEY) == 3:
-                state[MOMENTUM_KEY].update({
-                    "rope": result.rope, "streaks": result.streaks, "banks": result.banks,
-                    "rounds": result.rounds, "round_complete": result.round_complete,
-                })
+                state[MOMENTUM_KEY].update(
+                    {
+                        "rope": result.rope,
+                        "streaks": result.streaks,
+                        "banks": result.banks,
+                        "rounds": result.rounds,
+                        "round_complete": result.round_complete,
+                    }
+                )
         if any(rules.get(key) != value for key, value in state.items()):
             run.rules_config = state
             self.session.add(run)
@@ -730,7 +838,12 @@ class TugOfWarEngine(CineChainEngine):
             effect, points = preview_pull(result.next_team, territory, result, rules)
             candidate.tug_effect = effect
             candidate.tug_points = points
-            candidate.tug_breaks_streak = effect == "invasion" and result.streaks.get(
-                TEAM_B if result.next_team == TEAM_A else TEAM_A, 0,
-            ) > 0
+            candidate.tug_breaks_streak = (
+                effect == "invasion"
+                and result.streaks.get(
+                    TEAM_B if result.next_team == TEAM_A else TEAM_A,
+                    0,
+                )
+                > 0
+            )
         return candidates

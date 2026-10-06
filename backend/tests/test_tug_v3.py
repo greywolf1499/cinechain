@@ -29,8 +29,7 @@ BANK_HEAVY = ("build", "raid", *("bank",) * 30)
 
 
 def test_alternating_builds_keep_both_streaks_and_cap():
-    steps = [step(i, TEAM_A if i % 2 else TEAM_B, 1950 if i % 2 else 2010)
-             for i in range(1, 9)]
+    steps = [step(i, TEAM_A if i % 2 else TEAM_B, 1950 if i % 2 else 2010) for i in range(1, 9)]
     result = tally(steps, V3, PLAYERS)
     assert result.streaks == {TEAM_A: 3, TEAM_B: 3}
     assert [pull.points for pull in result.pulls] == [1, 1, 2, 2, 3, 3, 3, 3]
@@ -60,8 +59,12 @@ def test_bank_is_per_team_doubles_next_pull_and_preview_matches():
 
 def test_sudden_death_uses_complete_rounds_and_trailing_initiative():
     rules = {**V3, "sudden_death_after": 4}
-    steps = [step(1, TEAM_A, 2010), step(2, TEAM_B, 1990),
-             step(3, TEAM_A, 1950), step(4, TEAM_B, 2010)]
+    steps = [
+        step(1, TEAM_A, 2010),
+        step(2, TEAM_B, 1990),
+        step(3, TEAM_A, 1950),
+        step(4, TEAM_B, 2010),
+    ]
     result = tally(steps, rules, PLAYERS)
     assert result.sudden_death and result.next_team == TEAM_B
     after_first = tally([*steps, step(5, TEAM_B, 1950)], rules, PLAYERS)
@@ -84,9 +87,13 @@ def simulate(version: int, actions: tuple[str, ...] = ("build", "raid", "bank"))
         for index in range(1, 501):
             puller = result.next_team
             action = rng.choice(actions)
-            territory = puller if action == "build" else (
-                TEAM_B if puller == TEAM_A else TEAM_A
-            ) if action == "raid" else None
+            territory = (
+                puller
+                if action == "build"
+                else (TEAM_B if puller == TEAM_A else TEAM_A)
+                if action == "raid"
+                else None
+            )
             year = 1950 if territory == TEAM_A else 2010 if territory == TEAM_B else 1990
             history.append(step(index, puller, year))
             result = tally(history, rules, PLAYERS)
@@ -142,7 +149,11 @@ def test_lookahead_is_cached_deduplicated_and_excludes_watched(client, db_engine
         run_id = tug(client)["id"]
     with Session(db_engine) as session:
         session.add(CachedActor(tmdb_id=42, name="Cached", credits_fetched_at=utcnow()))
-        session.add(CachedMovie(tmdb_id=101, title="Choice", release_date="1960-01-01", cast_fetched_at=utcnow()))
+        session.add(
+            CachedMovie(
+                tmdb_id=101, title="Choice", release_date="1960-01-01", cast_fetched_at=utcnow()
+            )
+        )
         session.add(CachedMovie(tmdb_id=102, title="Score", release_date="2010-01-01"))
         session.add(CachedMovie(tmdb_id=103, title="Bank", release_date="1990-01-01"))
         session.commit()
@@ -153,12 +164,17 @@ def test_lookahead_is_cached_deduplicated_and_excludes_watched(client, db_engine
         result = client.get(f"/api/runs/{run_id}/tug/lookahead?movie_ids=101,101,404")
     assert result.status_code == 200
     assert result.json() == {
-        "movies": {"101": {"scoring": 1, "neutral": 1, "partial": False},
-                   "404": {"scoring": 0, "neutral": 0, "partial": True}},
+        "movies": {
+            "101": {"scoring": 1, "neutral": 1, "partial": False},
+            "404": {"scoring": 0, "neutral": 0, "partial": True},
+        },
         "partial": True,
     }
     assert client.get(f"/api/runs/{run_id}/tug/lookahead?movie_ids=0").status_code == 422
-    assert client.get(f"/api/runs/{run_id}/tug/lookahead?movie_ids={','.join(['1'] * 11)}").status_code == 422
+    assert (
+        client.get(f"/api/runs/{run_id}/tug/lookahead?movie_ids={','.join(['1'] * 11)}").status_code
+        == 422
+    )
     assert client.get("/api/runs/missing/tug/lookahead?movie_ids=1").status_code == 404
 
 
@@ -166,9 +182,11 @@ def test_lookahead_slow_cache_loader_returns_partial_within_budget(client, monke
     with respx.mock:
         mock_films()
         run_id = tug(client)["id"]
+
     def slow_cast(self, movie_id, limit):
         time.sleep(2)
         return []
+
     monkeypatch.setattr(CacheRepo, "get_cached_cast", slow_cast)
     started = time.monotonic()
     response = client.get(f"/api/runs/{run_id}/tug/lookahead?movie_ids=101,102")
@@ -215,10 +233,15 @@ def test_persisted_v2_run_keeps_raid_clamp_and_immediate_completion(client, bob,
 def test_v3_seed_planned_and_client_state_do_not_score(client):
     with respx.mock:
         mock_films()
-        run_id = tug(client, tug_momentum={
-            "rope": 999, "streaks": {TEAM_A: 99, TEAM_B: 99},
-            "banks": {TEAM_A: True, TEAM_B: True}, "rounds": 999,
-        })["id"]
+        run_id = tug(
+            client,
+            tug_momentum={
+                "rope": 999,
+                "streaks": {TEAM_A: 99, TEAM_B: 99},
+                "banks": {TEAM_A: True, TEAM_B: True},
+                "rounds": 999,
+            },
+        )["id"]
         assert log(client, run_id, 2, status="planned").status_code == 201
         state = detail(client, run_id)["rules_config"]["tug_momentum"]
     assert state["rope"] == 0 and state["rounds"] == 0

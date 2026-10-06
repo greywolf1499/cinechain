@@ -41,8 +41,11 @@ class TrackerEngine(BaseChallengeEngine):
 
         positions = {film["movie_id"]: index for index, film in enumerate(track)}
         previous = positions.get(history[-1].movie_id, -1) if history else -1
-        return [movie_id for movie_id, index in positions.items()
-                if marathon_skip(rules) is None or index > previous]
+        return [
+            movie_id
+            for movie_id, index in positions.items()
+            if marathon_skip(rules) is None or index > previous
+        ]
 
     async def validate_primary(
         self,
@@ -83,6 +86,7 @@ class DecadeSieveEngine(TrackerEngine):
     def bounty_bounds(self, rules: dict, history: Sequence[RunStep]) -> dict:
         decade = rules["target_decade"]
         return {**super().bounty_bounds(rules, history), "year": (decade, decade + 9)}
+
     tagline = "One decade, no escape"
     tags: ClassVar[list[str]] = ["Any film", "One decade"]
     rulebook: ClassVar[RuleSection] = RuleSection(
@@ -90,13 +94,20 @@ class DecadeSieveEngine(TrackerEngine):
         ["Log any film from the selected decade; no cast connection is required."],
         ["Each watched film adds to your exploration; complete the run manually."],
         ["Films outside the decade cannot be logged."],
-        ["Mix genres and countries to make one decade feel expansive.",
-         "Check release dates on remakes and reissues."], ["seed"],
+        [
+            "Mix genres and countries to make one decade feel expansive.",
+            "Check release dates on remakes and reissues.",
+        ],
+        ["seed"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict:
-        return {**super().rulebook_values(rules), "target_decade": (rules or {}).get("target_decade", 1970)}
+        return {
+            **super().rulebook_values(rules),
+            "target_decade": (rules or {}).get("target_decade", 1970),
+        }
+
     seed_policy = "derived"
     display_name = "Decade Sieve"
     description = (
@@ -166,11 +177,16 @@ class RouletteEngine(TrackerEngine):
     tags: ClassVar[list[str]] = ["Random pick"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Let a random draw choose movie night.",
-        ["Set filters, spin from the cached matching pool, and log your pick; any film may be logged."],
+        [
+            "Set filters, spin from the cached matching pool, and log your pick; any film may be logged."
+        ],
         ["Watched films record your discoveries; complete the run manually."],
         ["An empty pool needs wider filters, not a wildcard."],
-        ["Widen one filter at a time if the wheel runs dry.",
-         "Use a blind draft when you want a choice without browsing endlessly."], ["seed"],
+        [
+            "Widen one filter at a time if the wheel runs dry.",
+            "Use a blind draft when you want a choice without browsing endlessly.",
+        ],
+        ["seed"],
     )
     seed_policy = "none"
     display_name = "Movie Night Roulette"

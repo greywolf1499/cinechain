@@ -115,8 +115,12 @@ logger = logging.getLogger(__name__)
 
 
 def _cached_tug_lookahead(
-    session: Session, movie_ids: list[int], rules: dict, excluded: set[int],
-    deadline: float, results: dict[int, TugReachable],
+    session: Session,
+    movie_ids: list[int],
+    rules: dict,
+    excluded: set[int],
+    deadline: float,
+    results: dict[int, TugReachable],
 ) -> None:
     repo = cache_repo.CacheRepo(session)
     limit = rules.get("max_cast_order") or 15
@@ -146,12 +150,16 @@ def _cached_tug_lookahead(
                     continue
                 if movie.runtime is not None and movie.runtime < rules.get("min_runtime", 0):
                     continue
-                territory = _territory(parse_release_year(movie.release_date), movie.origin_country, rules)
+                territory = _territory(
+                    parse_release_year(movie.release_date), movie.origin_country, rules
+                )
                 if (rules.get("dimension", "era") == "era" and movie.release_date is None) or (
                     rules.get("dimension") == "geography" and movie.origin_country is None
                 ):
                     count.partial = True
-                if territory is None or (territory != opponent and not rules.get("steal_enabled", True)):
+                if territory is None or (
+                    territory != opponent and not rules.get("steal_enabled", True)
+                ):
                     count.neutral += 1
                 else:
                     count.scoring += 1
@@ -173,9 +181,11 @@ async def tug_lookahead(
         raise HTTPException(422, detail="Supply 1 to 10 positive movie IDs")
     ids = list(dict.fromkeys(int(item) for item in raw))
     rules = dict(run.rules_config or {})
-    excluded = {step.movie_id for step in _run_history(session, run.id)} if rules.get(
-        "allow_repeats", "strict"
-    ) != "allowed" else set()
+    excluded = (
+        {step.movie_id for step in _run_history(session, run.id)}
+        if rules.get("allow_repeats", "strict") != "allowed"
+        else set()
+    )
     results = {movie_id: TugReachable(partial=True) for movie_id in ids}
     deadline = time.monotonic() + TUG_LOOKAHEAD_SECONDS
     bind = session.get_bind()
@@ -192,7 +202,10 @@ async def tug_lookahead(
         timed_out = True
         logger.info("Tug lookahead reached its %.1fs cache-only deadline", TUG_LOOKAHEAD_SECONDS)
     snapshot = dict(results)
-    return TugLookahead(movies=snapshot, partial=timed_out or any(value.partial for value in snapshot.values()))
+    return TugLookahead(
+        movies=snapshot, partial=timed_out or any(value.partial for value in snapshot.values())
+    )
+
 
 MANUAL_STATUS_REASONS = {
     RUN_STATUS_COMPLETED: "Marked as completed",
@@ -287,7 +300,10 @@ def _run_rules(run: Run) -> dict:
 
 
 def _acting_user(
-    session: Session, run: Run, current_user: User, acting_participant_id: str | None,
+    session: Session,
+    run: Run,
+    current_user: User,
+    acting_participant_id: str | None,
 ) -> User:
     if acting_participant_id is None:
         return current_user
@@ -309,8 +325,11 @@ def _step_actor_id(step: RunStep) -> str | None:
 
 def _count_wildcards_consumed(session: Session, run_id: str) -> int:
     steps = session.exec(select(RunStep).where(RunStep.run_id == run_id)).all()
-    return sum(int(bool((step.transition_metadata or {}).get("wildcard_used")))
-               + (step.transition_metadata or {}).get("overlay_wildcard_spent", 0) for step in steps)
+    return sum(
+        int(bool((step.transition_metadata or {}).get("wildcard_used")))
+        + (step.transition_metadata or {}).get("overlay_wildcard_spent", 0)
+        for step in steps
+    )
 
 
 def _ensure_run_open(run: Run) -> None:
@@ -333,13 +352,19 @@ def _apply_run_outcome(session: Session, tmdb: TMDBClient, run: Run) -> None:
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if engine_class is None:
         return
-    steps = session.exec(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.logged_at)).all()
+    steps = session.exec(
+        select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.logged_at)
+    ).all()
     engine = engine_class(session, tmdb)
     engine.sync_run_state(run, steps)
     outcome = engine.evaluate_run_outcome(run, list(steps))
     if outcome is not None:
         run.status = outcome.status
-        run.status_reason = _with_bounty_stars(run, outcome.reason) if outcome.status == RUN_STATUS_COMPLETED else outcome.reason
+        run.status_reason = (
+            _with_bounty_stars(run, outcome.reason)
+            if outcome.status == RUN_STATUS_COMPLETED
+            else outcome.reason
+        )
         run.completed_at = utcnow()
         session.add(run)
 
@@ -376,10 +401,15 @@ async def _enforce_run_rules(
     skipping = set(payload.skip_overlays)
     if skipping:
         if not force or payload.status != "watched":
-            raise HTTPException(422, detail="Overlay skips require a watched film and explicit wildcard confirmation")
+            raise HTTPException(
+                422,
+                detail="Overlay skips require a watched film and explicit wildcard confirmation",
+            )
         options = await _overlay_skip_options(session, overlay_engine, run)
         if not skipping <= {item["key"] for item in options if item["can_skip"]}:
-            raise HTTPException(409, detail="An overlay can only be skipped when no reachable film satisfies it")
+            raise HTTPException(
+                409, detail="An overlay can only be skipped when no reachable film satisfies it"
+            )
         if any(checks.get(key) is None or checks[key].ok is not False for key in skipping):
             raise HTTPException(409, detail="Only an unmet overlay requirement can be skipped")
         budget = rules.get("wildcards_budget", 0)
@@ -387,16 +417,29 @@ async def _enforce_run_rules(
             raise HTTPException(409, detail="No wildcards remaining for this overlay skip")
         extra_metadata["overlay_skips"] = sorted(skipping)
         extra_metadata["overlay_wildcard_spent"] = len(skipping) if budget != -1 else 0
-        rules = {**rules, "modifiers": [entry for entry in rules.get("modifiers", [])
-                                      if entry["key"] not in skipping]}
+        rules = {
+            **rules,
+            "modifiers": [
+                entry for entry in rules.get("modifiers", []) if entry["key"] not in skipping
+            ],
+        }
     for key, verdict in checks.items():
         if key not in skipping and verdict.ok is False:
-            raise HTTPException(409, detail={"valid": False, "blocked": True, "reason": verdict.reason, "connections": []})
+            raise HTTPException(
+                409,
+                detail={
+                    "valid": False,
+                    "blocked": True,
+                    "reason": verdict.reason,
+                    "connections": [],
+                },
+            )
     if run.game_type == TUG_OF_WAR:
         tug_engine = TugOfWarEngine(session, tmdb)
         players = tug_engine.team_players(run)
         team = fork_team or (
-            team_of(players, user.id) if rules.get("table_mode") is True
+            team_of(players, user.id)
+            if rules.get("table_mode") is True
             else payload.tug_team or team_of(players, user.id)
         )
         if team not in (TEAM_A, TEAM_B) or players.get(team) is None:
@@ -513,7 +556,12 @@ async def _enforce_run_rules(
                 )
             broke_a_rule = True
         linked_metadata = engine.link_metadata(result, payload.transition_metadata)
-        if skipping and result.connections and linked_metadata is None and not payload.transition_metadata:
+        if (
+            skipping
+            and result.connections
+            and linked_metadata is None
+            and not payload.transition_metadata
+        ):
             linked_metadata = result.connections[0].model_dump()
         if result.valid:
             for key in BONUS_LINK_KEYS:
@@ -535,7 +583,8 @@ async def _enforce_run_rules(
             # Crew & Craft links name a person (any role); the classic ones an actor.
             chosen = (
                 linked_metadata
-                if linked_metadata and ("person_id" in linked_metadata or "actor_id" in linked_metadata)
+                if linked_metadata
+                and ("person_id" in linked_metadata or "actor_id" in linked_metadata)
                 else payload.transition_metadata
             ) or {}
             chosen_actor_id = chosen.get("person_id", chosen.get("actor_id"))
@@ -593,7 +642,9 @@ async def _enforce_run_rules(
         budget = current.get("wildcards_budget", 0)
         spent = extra_metadata["overlay_wildcard_spent"]
         if budget != -1 and budget < spent:
-            raise HTTPException(409, detail="Not enough wildcards for both the overlay skip and other violations")
+            raise HTTPException(
+                409, detail="Not enough wildcards for both the overlay skip and other violations"
+            )
         run.rules_config = {**current, "wildcards_budget": budget - spent if budget != -1 else -1}
         session.add(run)
     return extra_metadata, linked_metadata
@@ -774,8 +825,15 @@ async def create_run(
             number_check = checks.get("number_in_title")
             if number_check and number_check.ok is False:
                 raise HTTPException(422, detail=f"Seed movie rejected: {number_check.reason}")
-            overlay_seed_history.append(RunStep(run_id="", movie_id=seed_id, movie_title=movie.title,
-                                               transition_metadata={SEED_KEY: True}, status="watched"))
+            overlay_seed_history.append(
+                RunStep(
+                    run_id="",
+                    movie_id=seed_id,
+                    movie_title=movie.title,
+                    transition_metadata={SEED_KEY: True},
+                    status="watched",
+                )
+            )
         try:
             rules_config = engine.prepare_overlays(rules_config, overlay_seed_history)
         except RunSetupError as exc:
@@ -833,9 +891,14 @@ async def create_run(
         if bounties.board_enabled(run.rules_config):
             rules = run.rules_config or {}
             run.rules_config = bounties.prepare_board(
-                rules, feasible=lambda bounty_id: engine.bounty_feasible(
-                    rules, history, bounties.BOUNTIES[bounty_id],
-                ).drawable,
+                rules,
+                feasible=lambda bounty_id: (
+                    engine.bounty_feasible(
+                        rules,
+                        history,
+                        bounties.BOUNTIES[bounty_id],
+                    ).drawable
+                ),
             )
         session.commit()
         session.refresh(run)
@@ -875,6 +938,7 @@ def update_run(
     session.refresh(run)
     return _to_run_detail(session, run)
 
+
 @router.post("/{run_id}/wrap", response_model=RunDetail)
 def wrap_marathon(
     session: Session = Depends(get_session),
@@ -908,7 +972,11 @@ def update_run_rules(
 ):
     # A Bounty Board run earns its wildcards: the budget isn't editable.
     bounty_run = bounties.board_enabled(run.rules_config)
-    if "wildcards_budget" in payload.model_fields_set and payload.wildcards_budget != -1 and not bounty_run:
+    if (
+        "wildcards_budget" in payload.model_fields_set
+        and payload.wildcards_budget != -1
+        and not bounty_run
+    ):
         consumed = _count_wildcards_consumed(session, run.id)
         if payload.wildcards_budget < consumed:
             raise HTTPException(
@@ -950,15 +1018,19 @@ def update_run_rules(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems)
             )
         if engine.bounty_ids(merged, []) is not None and (
-            engine.active_modifiers(run.rules_config).get("number_in_title") != engine.active_modifiers(merged).get("number_in_title")
+            engine.active_modifiers(run.rules_config).get("number_in_title")
+            != engine.active_modifiers(merged).get("number_in_title")
         ):
-            raise HTTPException(422, detail="Number in title on a filtered checklist can only be chosen at creation")
+            raise HTTPException(
+                422, detail="Number in title on a filtered checklist can only be chosen at creation"
+            )
         try:
             merged = engine.prepare_overlays(merged, _run_history(session, run.id))
         except RunSetupError as exc:
             raise HTTPException(exc.status_code, detail=str(exc)) from exc
     if run.game_type in ("method_actor", "auteur_marathon") and "order" in update:
         from app.engines.method_actor import marathon_skip
+
         merged["max_skip"] = marathon_skip(merged)
     run.rules_config = merged
     session.add(run)
@@ -1032,12 +1104,15 @@ async def _log_step(
     actor = _acting_user(session, run, user, payload.acting_participant_id)
     split = run.game_type == RT_SPLIT
     if payload.no_contest and not split:
-        raise HTTPException(422, detail="No-contest is only available on Rotten Tomatoes Split runs")
+        raise HTTPException(
+            422, detail="No-contest is only available on Rotten Tomatoes Split runs"
+        )
     if payload.no_contest and payload.status != "watched":
         raise HTTPException(422, detail="Log a no-contest film as watched")
     rh_resources = (
         {key: run.rules_config[key] for key in rabbit_hole.RESOURCE_KEYS if key in run.rules_config}
-        if run.game_type == rabbit_hole.RABBIT_HOLE and rabbit_hole.procedural(run.rules_config) else None
+        if run.game_type == rabbit_hole.RABBIT_HOLE and rabbit_hole.procedural(run.rules_config)
+        else None
     )
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id, require_detail=True)
     if split and not payload.no_contest:
@@ -1059,17 +1134,29 @@ async def _log_step(
         else:
             assert payload.household_score is not None
             extra_metadata.update(
-                RottenTomatoesSplitEngine(session, tmdb).settle(movie.tmdb_id, payload.household_score)
+                RottenTomatoesSplitEngine(session, tmdb).settle(
+                    movie.tmdb_id, payload.household_score
+                )
             )
     rules = run.rules_config or {}
     engine = get_engine(run.game_type, session, tmdb) if bounties.board_enabled(rules) else None
-    history = [*_run_history(session, run.id), RunStep(
-        run_id=run.id, movie_id=movie.tmdb_id, movie_title=movie.title,
-        transition_metadata=extra_metadata,
-    )]
+    history = [
+        *_run_history(session, run.id),
+        RunStep(
+            run_id=run.id,
+            movie_id=movie.tmdb_id,
+            movie_title=movie.title,
+            transition_metadata=extra_metadata,
+        ),
+    ]
     bounty = await bounties.evaluate(
-        session, tmdb, rules, movie,
-        feasible=(lambda quest: engine.bounty_feasible(rules, history, quest).drawable) if engine else None,
+        session,
+        tmdb,
+        rules,
+        movie,
+        feasible=(lambda quest: engine.bounty_feasible(rules, history, quest).drawable)
+        if engine
+        else None,
         context=_bounty_context(engine, rules, history) if engine else "",
     )
     if bounty is not None:
@@ -1106,9 +1193,7 @@ async def _log_step(
         before_lives = (
             lives_of(run.rules_config)[0] if run.game_type == rabbit_hole.RABBIT_HOLE else None
         )
-        awarded_rules = engine.award_bounty(
-            run.rules_config or {}, *bounty
-        )
+        awarded_rules = engine.award_bounty(run.rules_config or {}, *bounty)
         if before_lives is not None:
             extra_metadata["bounty_life_awarded"] = (
                 awarded_rules.get(LIVES_KEY, before_lives) > before_lives
@@ -1167,7 +1252,10 @@ def mark_step_watched(
     if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
         raise HTTPException(403, detail="Switch to the participant who queued this film")
     _check_watched_overlays(session, tmdb, run, step)
-    if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3):
+    if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (
+        2,
+        3,
+    ):
         players = TugOfWarEngine(session, tmdb).team_players(run)
         team = step_turn_team(step, players)
         if team is not None and all(players.values()):
@@ -1212,7 +1300,10 @@ def update_step(
         _check_watched_overlays(session, tmdb, run, step)
         if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
             raise HTTPException(403, detail="Switch to the participant who queued this film")
-        if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3):
+        if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (
+            2,
+            3,
+        ):
             players = TugOfWarEngine(session, tmdb).team_players(run)
             team = step_turn_team(step, players)
             if team is not None and all(players.values()):
@@ -1267,7 +1358,9 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
     rules_before_revoke = dict(run.rules_config or {})
     rules = dict(run.rules_config or {})
     if metadata.get("overlay_wildcard_spent"):
-        rules["wildcards_budget"] = rules.get("wildcards_budget", 0) + metadata["overlay_wildcard_spent"]
+        rules["wildcards_budget"] = (
+            rules.get("wildcards_budget", 0) + metadata["overlay_wildcard_spent"]
+        )
         run.rules_config = rules
     board = bounties.active_bounties(rules)
     for change in reversed(metadata.get("bounty_expiry_changes") or []):
@@ -1278,8 +1371,11 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
         run.rules_config = {**rules, bounties.ACTIVE_KEY: board}
     if metadata.get(bounties.COMPLETED_METADATA_KEY):
         # Undo the earned reward and board swap.
-        revoke = get_engine(run.game_type, session, tmdb).revoke_bounty \
-            if metadata.get("bounty_reward") else bounties.revoke
+        revoke = (
+            get_engine(run.game_type, session, tmdb).revoke_bounty
+            if metadata.get("bounty_reward")
+            else bounties.revoke
+        )
         run.rules_config = revoke(
             run.rules_config or {},
             metadata[bounties.COMPLETED_METADATA_KEY],
@@ -1299,8 +1395,11 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
         }
         run.rules_config = restored_rules
         if rabbit_hole.procedural(run.rules_config) and "rh_resources_before" in metadata:
-            restored = {key: value for key, value in run.rules_config.items()
-                        if key not in rabbit_hole.RESOURCE_KEYS}
+            restored = {
+                key: value
+                for key, value in run.rules_config.items()
+                if key not in rabbit_hole.RESOURCE_KEYS
+            }
             restored.update(metadata["rh_resources_before"])
             restored[LIVES_KEY] = min(restored[rabbit_hole.MAX_LIVES_KEY], restored[LIVES_KEY])
             run.rules_config = restored
@@ -1310,8 +1409,10 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if engine_class is not None:
         engine_class(session, tmdb).sync_run_state(run, remaining)
-        if run.status == RUN_STATUS_COMPLETED and run.status_reason and (
-            "conquered in" in run.status_reason
+        if (
+            run.status == RUN_STATUS_COMPLETED
+            and run.status_reason
+            and ("conquered in" in run.status_reason)
         ):
             candidate = Run.model_validate(run.model_dump())
             candidate.status = RUN_STATUS_ACTIVE
@@ -1666,29 +1767,52 @@ async def validate_step(
     else:
         previous = _last_step(session, run.id)
     movie = await engine._load(payload.movie_id)
-    failed = [key for key, verdict in engine.overlay_checks(movie, rules, _run_history(session, run.id)).items()
-              if verdict.ok is False]
+    failed = [
+        key
+        for key, verdict in engine.overlay_checks(
+            movie, rules, _run_history(session, run.id)
+        ).items()
+        if verdict.ok is False
+    ]
     if failed:
         connections = []
         options = await _overlay_skip_options(session, engine, run)
         skippable = [item["key"] for item in options if item["can_skip"] and item["key"] in failed]
         if set(skippable) == set(failed):
-            skip_rules = {**rules, "modifiers": [entry for entry in rules.get("modifiers", [])
-                                               if entry["key"] not in skippable]}
-            other = await engine.validate_candidate(payload.movie_id, skip_rules) if previous is None else await engine.validate_next_step(
-                previous.movie_id, payload.movie_id, cast_limit=rules.get("max_cast_order"),
-                rules=skip_rules, previous_transition=previous.transition_metadata,
-                history=_run_history(session, run.id),
+            skip_rules = {
+                **rules,
+                "modifiers": [
+                    entry for entry in rules.get("modifiers", []) if entry["key"] not in skippable
+                ],
+            }
+            other = (
+                await engine.validate_candidate(payload.movie_id, skip_rules)
+                if previous is None
+                else await engine.validate_next_step(
+                    previous.movie_id,
+                    payload.movie_id,
+                    cast_limit=rules.get("max_cast_order"),
+                    rules=skip_rules,
+                    previous_transition=previous.transition_metadata,
+                    history=_run_history(session, run.id),
+                )
             )
             if not other.valid:
                 return other.model_copy(update={"blocked": True})
             connections = other.connections
             if movie.runtime is not None and movie.runtime < rules.get("min_runtime", 0):
-                return ValidationResult(valid=False, blocked=True, reason="Overlay substitute is under the runtime minimum")
-        return ValidationResult(valid=False, blocked=set(skippable) != set(failed),
-                                reason="Overlay requirement does not match this title",
-                                connections=connections,
-                                overlay_skippable=skippable)
+                return ValidationResult(
+                    valid=False,
+                    blocked=True,
+                    reason="Overlay substitute is under the runtime minimum",
+                )
+        return ValidationResult(
+            valid=False,
+            blocked=set(skippable) != set(failed),
+            reason="Overlay requirement does not match this title",
+            connections=connections,
+            overlay_skippable=skippable,
+        )
     if previous is None:
         return await engine.validate_candidate(payload.movie_id, rules)
     result = await engine.validate_next_step(
@@ -1910,9 +2034,11 @@ async def get_run_constraint(
         history,
     )
     if constraint and constraint.overlay_progress:
-        constraint = constraint.model_copy(update={
-            "overlay_progress": await _overlay_skip_options(session, engine, run),
-        })
+        constraint = constraint.model_copy(
+            update={
+                "overlay_progress": await _overlay_skip_options(session, engine, run),
+            }
+        )
     if (
         isinstance(engine, RabbitHoleEngine)
         and constraint is not None
@@ -1985,17 +2111,31 @@ async def reroll_rabbit_hole_tier(
     if rabbit_hole.procedural(rules):
         feasibility.invalidate(session)
         alternatives = [
-            test for test in rabbit_hole.tier_options()
+            test
+            for test in rabbit_hole.tier_options()
             if current_tier.predicate is not None
             and (test.id, test.params) != (current_tier.predicate.id, current_tier.predicate.params)
-            and (feasibility.pass_rate(
-                session, rabbit_hole.TierPredicates((test, *current_tier.curses)), ids,
-            ) or 0) >= 0.03
+            and (
+                feasibility.pass_rate(
+                    session,
+                    rabbit_hole.TierPredicates((test, *current_tier.curses)),
+                    ids,
+                )
+                or 0
+            )
+            >= 0.03
         ]
         if not alternatives:
-            raise HTTPException(409, detail="No feasible reachable alternative tier; no resource was spent")
-        replacement = random.Random(f"{rules[rabbit_hole.RH_SEED_KEY]}:{depth}").choice(alternatives)
-        rules[TIER_OVERRIDE_KEY] = {"depth": depth, "predicate": rabbit_hole.predicate_data(replacement)}
+            raise HTTPException(
+                409, detail="No feasible reachable alternative tier; no resource was spent"
+            )
+        replacement = random.Random(f"{rules[rabbit_hole.RH_SEED_KEY]}:{depth}").choice(
+            alternatives
+        )
+        rules[TIER_OVERRIDE_KEY] = {
+            "depth": depth,
+            "predicate": rabbit_hole.predicate_data(replacement),
+        }
         if tokens:
             rules["reroll_tokens"] = tokens - 1
         else:
@@ -2007,8 +2147,11 @@ async def reroll_rabbit_hole_tier(
         return _to_run_detail(session, run)
     evidence = feasibility.Evidence(session)
     choices = [
-        tier.number for tier in rabbit_hole.TIERS
-        if tier.number > 1 and tier.number != current_tier.number and tier.predicate is not None
+        tier.number
+        for tier in rabbit_hole.TIERS
+        if tier.number > 1
+        and tier.number != current_tier.number
+        and tier.predicate is not None
         and evidence.check(tier.predicate, ids).drawable
     ]
     if not choices:
@@ -2029,7 +2172,9 @@ def skip_rabbit_hole_curse(
 ) -> RunDetail:
     rules = dict(_run_rules(run))
     if run.game_type != rabbit_hole.RABBIT_HOLE or not rabbit_hole.procedural(rules):
-        raise HTTPException(400, detail="Skip-curse relics are only available on procedural Rabbit Hole runs")
+        raise HTTPException(
+            400, detail="Skip-curse relics are only available on procedural Rabbit Hole runs"
+        )
     _ensure_run_open(run)
     _ensure_no_pending_fork(run)
     depth = len(_run_history(session, run.id))
@@ -2066,7 +2211,9 @@ async def get_run_suggestions(
         return []
     history = _run_history(session, run.id)
     if frontier_movie_id is not None and frontier_movie_id != current.movie_id:
-        current = next((step for step in reversed(history) if step.movie_id == frontier_movie_id), None)
+        current = next(
+            (step for step in reversed(history) if step.movie_id == frontier_movie_id), None
+        )
         if current is None:
             raise HTTPException(status_code=422, detail="Search frontier must belong to this run.")
     logged_movie_ids = [
@@ -2081,7 +2228,9 @@ async def get_run_suggestions(
                 session, run, engine, current, history, logged_movie_ids, filters, chaser, sort_by
             )
     except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Search took too long. Try again or narrow the filters.") from exc
+        raise HTTPException(
+            status_code=504, detail="Search took too long. Try again or narrow the filters."
+        ) from exc
 
 
 async def _checked_suggestions(
@@ -2101,7 +2250,8 @@ async def _checked_suggestions(
     checked: list[Suggestion] = []
     for suggestion in suggestions[:20]:
         validation = await engine.validate_next_step(
-            current.movie_id, suggestion.movie_id,
+            current.movie_id,
+            suggestion.movie_id,
             cast_limit=_run_rules(run).get("max_cast_order"),
             rules=_run_rules(run),
             previous_transition=current.transition_metadata,
@@ -2110,11 +2260,14 @@ async def _checked_suggestions(
         if validation.valid:
             suggestion.connections = [
                 DiscoveryConnection(
-                    kind=connection.kind, actor_id=connection.actor_id,
-                    actor_name=connection.actor_name, profile_path=connection.profile_path,
+                    kind=connection.kind,
+                    actor_id=connection.actor_id,
+                    actor_name=connection.actor_name,
+                    profile_path=connection.profile_path,
                     character_in_frontier=connection.character_in_from,
                     character_in_candidate=connection.character_in_to,
-                    role_in_frontier=connection.role_in_from, role_in_candidate=connection.role_in_to,
+                    role_in_frontier=connection.role_in_from,
+                    role_in_candidate=connection.role_in_to,
                 )
                 for connection in validation.connections
             ]
@@ -2161,7 +2314,8 @@ async def roll_custom_bounty(
         rules = run.rules_config or {}
         history = _run_history(session, run.id)
         run.rules_config = await bounties.roll_custom(
-            session, rules,
+            session,
+            rules,
             feasible=lambda quest: engine.bounty_feasible(rules, history, quest).drawable,
             context=_bounty_context(engine, rules, history),
         )
@@ -2175,8 +2329,12 @@ async def roll_custom_bounty(
 
 def _bounty_context(engine: BaseChallengeEngine, rules: dict, history: list[RunStep]) -> str:
     ids = engine.bounty_ids(rules, history)
-    remaining = len(set(ids) - {step.movie_id for step in history}) if ids is not None else "open pool"
-    tier = tier_for_depth(len(history), rules).rule if isinstance(engine, RabbitHoleEngine) else "none"
+    remaining = (
+        len(set(ids) - {step.movie_id for step in history}) if ids is not None else "open pool"
+    )
+    tier = (
+        tier_for_depth(len(history), rules).rule if isinstance(engine, RabbitHoleEngine) else "none"
+    )
     expedition = rules.get("expedition") or {}
     return (
         f"mode={engine.game_type}; bounds={engine.bounty_bounds(rules, history)}; "
@@ -2186,7 +2344,9 @@ def _bounty_context(engine: BaseChallengeEngine, rules: dict, history: list[RunS
     )
 
 
-def _expire_bounties(session: Session, engine: BaseChallengeEngine, run: Run, step: RunStep) -> None:
+def _expire_bounties(
+    session: Session, engine: BaseChallengeEngine, run: Run, step: RunStep
+) -> None:
     rules = run.rules_config or {}
     if not bounties.board_enabled(rules):
         return
@@ -2206,10 +2366,16 @@ def _expire_bounties(session: Session, engine: BaseChallengeEngine, run: Run, st
         index = active.index(bounty_id)
         active.remove(bounty_id)
         replacement = bounties.draw_replacement(
-            [*active, bounty_id], rules.get(bounties.COMPLETED_KEY) or [], random.Random(),
-            feasible=lambda candidate: engine.bounty_feasible(
-                rules, history, bounties.BOUNTIES[candidate],
-            ).drawable,
+            [*active, bounty_id],
+            rules.get(bounties.COMPLETED_KEY) or [],
+            random.Random(),
+            feasible=lambda candidate: (
+                engine.bounty_feasible(
+                    rules,
+                    history,
+                    bounties.BOUNTIES[candidate],
+                ).drawable
+            ),
         )
         if replacement:
             active.insert(index, replacement)
@@ -2221,7 +2387,9 @@ def _expire_bounties(session: Session, engine: BaseChallengeEngine, run: Run, st
         prior_reasons = metadata.get("bounty_expiry_reasons") or {}
         step.transition_metadata = {
             **(step.transition_metadata or {}),
-            "bounty_expired": list(dict.fromkeys([*(metadata.get("bounty_expired") or []), *reasons])),
+            "bounty_expired": list(
+                dict.fromkeys([*(metadata.get("bounty_expired") or []), *reasons])
+            ),
             "bounty_expiry_reasons": {**prior_reasons, **reasons},
             "bounty_expiry_changes": [*(metadata.get("bounty_expiry_changes") or []), *changes],
         }
@@ -2246,12 +2414,19 @@ def discard_bounty(
     engine = get_engine(run.game_type, session, tmdb)
     history = _run_history(session, run.id)
     replacement = bounties.draw_replacement(
-        active, rules.get(bounties.COMPLETED_KEY) or [], random.Random(),
-        feasible=lambda candidate: engine.bounty_feasible(rules, history, bounties.BOUNTIES[candidate]).drawable,
+        active,
+        rules.get(bounties.COMPLETED_KEY) or [],
+        random.Random(),
+        feasible=lambda candidate: (
+            engine.bounty_feasible(rules, history, bounties.BOUNTIES[candidate]).drawable
+        ),
     )
     board = [replacement if item == bounty_id else item for item in active]
-    run.rules_config = {**rules, bounties.ACTIVE_KEY: [item for item in board if item],
-                       "bounty_discards_left": 0}
+    run.rules_config = {
+        **rules,
+        bounties.ACTIVE_KEY: [item for item in board if item],
+        "bounty_discards_left": 0,
+    }
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -2259,45 +2434,72 @@ def discard_bounty(
 
 
 async def _reachable_pool(
-    session: Session, engine: BaseChallengeEngine, run: Run, *, off_tier: bool = False,
+    session: Session,
+    engine: BaseChallengeEngine,
+    run: Run,
+    *,
+    off_tier: bool = False,
     include_overlay_failures: bool = False,
 ) -> list[int]:
     history = _run_history(session, run.id)
     rules = _run_rules(run)
     if not history:
         seeds = await engine.seed_candidates(rules)
-        return [row.tmdb_id for row in session.exec(select(CachedMovie)).all()
-                if (seeds is None or row.tmdb_id in seeds)
-                and is_reality_eligible(row)
-                and (row.runtime is None or row.runtime >= rules.get("min_runtime", 0))
-                and (include_overlay_failures or all(verdict.ok is not False for verdict in engine.overlay_checks(row, rules, history).values()))]
+        return [
+            row.tmdb_id
+            for row in session.exec(select(CachedMovie)).all()
+            if (seeds is None or row.tmdb_id in seeds)
+            and is_reality_eligible(row)
+            and (row.runtime is None or row.runtime >= rules.get("min_runtime", 0))
+            and (
+                include_overlay_failures
+                or all(
+                    verdict.ok is not False
+                    for verdict in engine.overlay_checks(row, rules, history).values()
+                )
+            )
+        ]
     tail = history[-1]
     candidates = await engine.discover_with_modifiers(
-        frontier_movie_id=tail.movie_id, mode="or", cast_limit=rules.get("max_cast_order"),
-        rules=rules, previous_transition=tail.transition_metadata, history=history,
+        frontier_movie_id=tail.movie_id,
+        mode="or",
+        cast_limit=rules.get("max_cast_order"),
+        rules=rules,
+        previous_transition=tail.transition_metadata,
+        history=history,
         **({"include_off_tier": off_tier} if isinstance(engine, RabbitHoleEngine) else {}),
     )
     await engine._hydrate_pool(
-        candidates, rules, needs=frozenset({"runtime", "original_language", "vote_average"}),
+        candidates,
+        rules,
+        needs=frozenset({"runtime", "original_language", "vote_average"}),
     )
     used = {step.movie_id for step in history}
     return [
-        candidate.movie_id for candidate in candidates
+        candidate.movie_id
+        for candidate in candidates
         if (rules.get("allow_repeats") == "allowed" or candidate.movie_id not in used)
         and (row := session.get(CachedMovie, candidate.movie_id)) is not None
         and is_reality_eligible(row)
         and (row.runtime is None or row.runtime >= rules.get("min_runtime", 0))
-        and (include_overlay_failures or all(ok is not False for ok in candidate.overlay_ok.values()))
+        and (
+            include_overlay_failures or all(ok is not False for ok in candidate.overlay_ok.values())
+        )
     ]
 
 
-async def _overlay_skip_options(session: Session, engine: BaseChallengeEngine, run: Run) -> list[dict]:
+async def _overlay_skip_options(
+    session: Session, engine: BaseChallengeEngine, run: Run
+) -> list[dict]:
     from app.engines.modifier_registry import contexts
 
     history = _run_history(session, run.id)
     rules = _run_rules(run)
-    specs = [(spec, ctx) for spec, ctx in contexts(engine.active_modifiers(rules), history)
-             if spec.needs == frozenset({"title"})]
+    specs = [
+        (spec, ctx)
+        for spec, ctx in contexts(engine.active_modifiers(rules), history)
+        if spec.needs == frozenset({"title"})
+    ]
     if not specs:
         return []
     if "discover_candidates" in engine.capabilities:
@@ -2309,9 +2511,10 @@ async def _overlay_skip_options(session: Session, engine: BaseChallengeEngine, r
     used = {step.movie_id for step in history}
     bounds = engine.bounty_bounds(rules, history)
     evidence = feasibility.evidence_for(session)
-    checklist = {film["movie_id"]: film for film in (
-        rules.get("filmography") or (rules.get("expedition") or {}).get("films") or []
-    )}
+    checklist = {
+        film["movie_id"]: film
+        for film in (rules.get("filmography") or (rules.get("expedition") or {}).get("films") or [])
+    }
     rows = []
     unknown = False
     for movie_id in ids:
@@ -2331,29 +2534,43 @@ async def _overlay_skip_options(session: Session, engine: BaseChallengeEngine, r
         progress = spec.progress(ctx)
         assert progress is not None
         available = unknown or any(spec.check(ctx, row).ok is not False for row in rows)
-        result.append({**progress, "available": available,
-                       "can_skip": spec.scope == "sequence" and bool(rows) and not available
-                       and (budget == -1 or budget > 0) and run.status == RUN_STATUS_ACTIVE})
+        result.append(
+            {
+                **progress,
+                "available": available,
+                "can_skip": spec.scope == "sequence"
+                and bool(rows)
+                and not available
+                and (budget == -1 or budget > 0)
+                and run.status == RUN_STATUS_ACTIVE,
+            }
+        )
     return result
 
 
 def _check_watched_overlays(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) -> None:
     if step.status == "watched":
         return
-    if not any(entry.get("key") in ("alphabet_run", "number_in_title", "ascending_numbers")
-               for entry in _run_rules(run).get("modifiers", [])):
+    if not any(
+        entry.get("key") in ("alphabet_run", "number_in_title", "ascending_numbers")
+        for entry in _run_rules(run).get("modifiers", [])
+    ):
         return
     engine = get_engine(run.game_type, session, tmdb)
     history = [other for other in _run_history(session, run.id) if other.id != step.id]
     movie = session.get(CachedMovie, step.movie_id)
     if movie is None:
-        raise HTTPException(409, detail="Film details are missing; reload the film before marking watched")
+        raise HTTPException(
+            409, detail="Film details are missing; reload the film before marking watched"
+        )
     skips = (step.transition_metadata or {}).get("overlay_skips") or []
     for key, verdict in engine.overlay_checks(movie, _run_rules(run), history).items():
         if key not in skips and verdict.ok is False:
             raise HTTPException(409, detail=verdict.reason)
-    if step.status == "planned" and any(entry.get("key") in ("alphabet_run", "ascending_numbers")
-                                      for entry in _run_rules(run).get("modifiers", [])):
+    if step.status == "planned" and any(
+        entry.get("key") in ("alphabet_run", "ascending_numbers")
+        for entry in _run_rules(run).get("modifiers", [])
+    ):
         step.logged_at = utcnow()
 
 
@@ -2376,14 +2593,18 @@ async def roll_chaos(
     ids = await _reachable_pool(session, engine, run)
     evidence = Evidence(session)
     feasible_ids = [
-        handicap.id for handicap in chaos.HANDICAPS.values()
+        handicap.id
+        for handicap in chaos.HANDICAPS.values()
         if evidence.check(handicap.predicate, ids).drawable
         and not feasibility.contradicts(
-            handicap.predicate, engine.bounty_bounds(_run_rules(run), _run_history(session, run.id)),
+            handicap.predicate,
+            engine.bounty_bounds(_run_rules(run), _run_history(session, run.id)),
         )
     ]
     if not feasible_ids:
-        raise HTTPException(409, detail="No nontrivial feasible handicap fits the current pool; no roll was applied")
+        raise HTTPException(
+            409, detail="No nontrivial feasible handicap fits the current pool; no roll was applied"
+        )
     rolled = chaos.roll(feasible=feasible_ids)
     rolled["skipped"] = [h.label for h in chaos.HANDICAPS.values() if h.id not in feasible_ids]
     run.rules_config = {**_run_rules(run), chaos.ACTIVE_KEY: rolled}
@@ -2450,7 +2671,9 @@ async def discover_next_movies(
     engine = get_engine(run.game_type, session, tmdb)
     rules = _run_rules(run)
     if include_off_tier and not isinstance(engine, RabbitHoleEngine):
-        raise HTTPException(status_code=422, detail="Off-tier discovery is only supported by Rabbit Hole.")
+        raise HTTPException(
+            status_code=422, detail="Off-tier discovery is only supported by Rabbit Hole."
+        )
     previous = _last_step(session, run.id)
     try:
         candidates = await engine.discover_with_modifiers(
@@ -2464,7 +2687,11 @@ async def discover_next_movies(
                 else None
             ),
             history=_run_history(session, run.id),
-            **({"include_off_tier": include_off_tier} if isinstance(engine, RabbitHoleEngine) else {}),
+            **(
+                {"include_off_tier": include_off_tier}
+                if isinstance(engine, RabbitHoleEngine)
+                else {}
+            ),
         )
     except NotImplementedError:
         raise HTTPException(

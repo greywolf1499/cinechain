@@ -122,16 +122,30 @@ async def get_split_pool(
 
     watched = set(session.exec(select(RunStep.movie_id).where(RunStep.run_id == run.id)).all())
     engine = RottenTomatoesSplitEngine(session, tmdb)
-    history = session.exec(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.logged_at)).all()
+    history = session.exec(
+        select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.logged_at)
+    ).all()
     return SplitPool(
         omdb_enabled=omdb.enabled,
         min_divergence=MIN_DIVERGENCE,
         scanned=scanned,
         candidates=[
-            _candidate(movie, scores).model_copy(update={
-                "overlay_ok": {key: verdict.ok for key, verdict in engine.overlay_checks(movie, run.rules_config or {}, history).items()},
-            })
+            _candidate(movie, scores).model_copy(
+                update={
+                    "overlay_ok": {
+                        key: verdict.ok
+                        for key, verdict in engine.overlay_checks(
+                            movie, run.rules_config or {}, history
+                        ).items()
+                    },
+                }
+            )
             for movie, scores in engine.split_pool(exclude_ids=list(watched), limit=None)
-            if all(verdict.ok is not False for verdict in engine.overlay_checks(movie, run.rules_config or {}, history).values())
+            if all(
+                verdict.ok is not False
+                for verdict in engine.overlay_checks(
+                    movie, run.rules_config or {}, history
+                ).values()
+            )
         ][:POOL_SIZE],
     )

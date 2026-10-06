@@ -94,10 +94,14 @@ class OMDbClient:
         if (
             not isinstance(entries, list)
             or any(not isinstance(entry, dict) for entry in entries)
-            or any(data.get(key) is not None and not isinstance(data[key], str)
-                   for key in ("imdbRating", "Metascore"))
-            or any(entry.get("Value") is not None and not isinstance(entry["Value"], str)
-                   for entry in entries)
+            or any(
+                data.get(key) is not None and not isinstance(data[key], str)
+                for key in ("imdbRating", "Metascore")
+            )
+            or any(
+                entry.get("Value") is not None and not isinstance(entry["Value"], str)
+                for entry in entries
+            )
         ):
             logger.warning("OMDb returned malformed score fields; leaving them retryable")
             return OMDbLookup(ratings=None, transient=True)

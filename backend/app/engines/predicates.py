@@ -24,13 +24,18 @@ class MovieFacts:
 
 
 def facts_of(
-    movie: CachedMovie, directors: list[CachedMovieDirector], rating: float | None = None,
+    movie: CachedMovie,
+    directors: list[CachedMovieDirector],
+    rating: float | None = None,
 ) -> MovieFacts:
     return MovieFacts(
-        runtime=movie.runtime, year=parse_release_year(movie.release_date),
-        popularity=movie.popularity, language=movie.original_language,
+        runtime=movie.runtime,
+        year=parse_release_year(movie.release_date),
+        popularity=movie.popularity,
+        language=movie.original_language,
         countries=None if movie.origin_country is None else parse_countries(movie.origin_country),
-        director_genders=[d.gender for d in directors], genre_ids=list(movie.genre_ids or []),
+        director_genders=[d.gender for d in directors],
+        genre_ids=list(movie.genre_ids or []),
         text=" ".join(filter(None, (movie.title, movie.tagline, movie.overview))).lower(),
         rating=rating,
     )
@@ -71,10 +76,16 @@ class FilmPredicate:
         field_name, comparison = self.id.rsplit("_", 1)
         value = self.params["value"]
         offset = 1 if field_name in ("year", "runtime") else 0
-        return {field_name: (
-            value + (offset if comparison == "gt" else 0) if comparison in ("gt", "ge") else None,
-            value - (offset if comparison == "lt" else 0) if comparison in ("lt", "le") else None,
-        )}
+        return {
+            field_name: (
+                value + (offset if comparison == "gt" else 0)
+                if comparison in ("gt", "ge")
+                else None,
+                value - (offset if comparison == "lt" else 0)
+                if comparison in ("lt", "le")
+                else None,
+            )
+        }
 
     def check(self, movie: CachedMovie | None, facts: MovieFacts) -> bool | None:
         if self.id == "female_director":
@@ -111,7 +122,10 @@ _SPECS = {
     "runtime_ge": ("Runtime at least", "🏔️", frozenset({"runtime"}), 3),
     "non_english": ("Non-English", "🌍", frozenset({"original_language"}), 2),
     "non_us_non_english": (
-        "Non-English, non-US", "🌍", frozenset({"original_language", "origin_country"}), 3,
+        "Non-English, non-US",
+        "🌍",
+        frozenset({"original_language", "origin_country"}),
+        3,
     ),
     "rating_lt": ("Rating under", "🎬", frozenset({"rating"}), 3),
     "popularity_lt": ("Popularity under", "💎", frozenset({"popularity"}), 3),

@@ -6,8 +6,14 @@ from app.schemas.discovery import DiscoveryCandidate
 from app.utils.countries import parse_countries
 
 FilterSource = Literal[
-    "origin_country", "release_year", "narrative_year", "runtime", "genre_ids",
-    "tug_effect", "tier_compliant", "new_country",
+    "origin_country",
+    "release_year",
+    "narrative_year",
+    "runtime",
+    "genre_ids",
+    "tug_effect",
+    "tier_compliant",
+    "new_country",
 ]
 
 RuleValue = bool | str | int | None

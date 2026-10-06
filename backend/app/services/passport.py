@@ -23,6 +23,7 @@ from app.utils.countries import parse_country_codes
 
 TOP_DIRECTORS = 5
 
+
 def decade_label(year: int) -> str:
     return f"{(year // 10) * 10}s"
 

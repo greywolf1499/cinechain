@@ -128,9 +128,15 @@ def curated_slices(
     engine = RegionalDeepDiveEngine(session, tmdb)
     rows = engine._slice_rows(list_id)
     movies = {movie.tmdb_id: movie for _, movie in rows}
-    countries = sorted({c for movie in movies.values() for c in parse_countries(movie.origin_country)})
+    countries = sorted(
+        {c for movie in movies.values() for c in parse_countries(movie.origin_country)}
+    )
     decades = sorted(
-        {decade for movie in movies.values() if (decade := _decade_of(movie.release_date)) is not None}
+        {
+            decade
+            for movie in movies.values()
+            if (decade := _decade_of(movie.release_date)) is not None
+        }
     )
     latest = session.exec(
         select(SystemTask)

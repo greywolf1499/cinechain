@@ -14,7 +14,8 @@ RULEBOOK = RuleSection(
     ["Offer three legal films; another participant vetoes one, then picks from the remaining two."],
     ["The accepted film becomes the next step under the main mode's rules."],
     ["A Golden Veto can cancel the entire offer by spending an account token."],
-    ["Offer three films you are willing to watch; your partner controls the last choice."], ["fork", "veto"],
+    ["Offer three films you are willing to watch; your partner controls the last choice."],
+    ["fork", "veto"],
 )
 
 from app.utils.ids import utcnow

@@ -101,7 +101,10 @@ class LegacyModifier:
         elif self.key == modifiers.COOLDOWN_KEY:
             unknown = modifiers.primary_country(film) is None
             reason = modifiers._cooldown_violation(
-                {self.key: values["steps"]}, ctx.earlier, film, ctx.history,
+                {self.key: values["steps"]},
+                ctx.earlier,
+                film,
+                ctx.history,
             )
         # Cast links are asynchronous and remain in the engine's primary-link path.
         return Verdict(False if reason else None if unknown else True, reason)
@@ -122,14 +125,46 @@ def legacy_entries() -> dict[str, ModifierSpec]:
     from app.engines.modifiers import RULEBOOK
 
     entries = [
-        LegacyModifier("chrono_direction", "Chrono direction", "↕", "Move strictly through release years.",
-                       "pair", frozenset(), ChronoParams, RULEBOOK["chrono_direction"]),
-        LegacyModifier("runtime_staircase", "Runtime staircase", "↗", "Each film must be longer or shorter.",
-                       "pair", frozenset({"runtime"}), RuntimeParams, RULEBOOK["runtime_staircase"]),
-        LegacyModifier("country_cooldown", "Country cooldown", "🌍", "Avoid recently visited countries.",
-                       "pair", frozenset({"origin_country"}), CooldownParams, RULEBOOK["country_cooldown"]),
-        LegacyModifier("require_cast_link", "Require shared cast", "🔗", "Add shared cast to a standalone rule.",
-                       "pair", frozenset(), CastParams, RULEBOOK["require_cast_link"]),
+        LegacyModifier(
+            "chrono_direction",
+            "Chrono direction",
+            "↕",
+            "Move strictly through release years.",
+            "pair",
+            frozenset(),
+            ChronoParams,
+            RULEBOOK["chrono_direction"],
+        ),
+        LegacyModifier(
+            "runtime_staircase",
+            "Runtime staircase",
+            "↗",
+            "Each film must be longer or shorter.",
+            "pair",
+            frozenset({"runtime"}),
+            RuntimeParams,
+            RULEBOOK["runtime_staircase"],
+        ),
+        LegacyModifier(
+            "country_cooldown",
+            "Country cooldown",
+            "🌍",
+            "Avoid recently visited countries.",
+            "pair",
+            frozenset({"origin_country"}),
+            CooldownParams,
+            RULEBOOK["country_cooldown"],
+        ),
+        LegacyModifier(
+            "require_cast_link",
+            "Require shared cast",
+            "🔗",
+            "Add shared cast to a standalone rule.",
+            "pair",
+            frozenset(),
+            CastParams,
+            RULEBOOK["require_cast_link"],
+        ),
     ]
     return {entry.key: entry for entry in entries}
 
@@ -141,16 +176,32 @@ def registry() -> dict[str, ModifierSpec]:
 def param_values(key: str, value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
-    field = "steps" if key == "country_cooldown" else "enabled" if key == "require_cast_link" else "direction"
+    field = (
+        "steps"
+        if key == "country_cooldown"
+        else "enabled"
+        if key == "require_cast_link"
+        else "direction"
+    )
     return {field: value}
 
 
-def contexts(active: dict[str, Any], history: Sequence[RunStep] | None = None,
-             earlier: CachedMovie | None = None) -> list[tuple[ModifierSpec, ModCtx]]:
+def contexts(
+    active: dict[str, Any],
+    history: Sequence[RunStep] | None = None,
+    earlier: CachedMovie | None = None,
+) -> list[tuple[ModifierSpec, ModCtx]]:
     specs = registry()
-    return [(specs[key], ModCtx(specs[key].params.model_validate(param_values(key, value)),
-                               history or (), earlier))
-            for key in specs if (value := active.get(key)) is not None]
+    return [
+        (
+            specs[key],
+            ModCtx(
+                specs[key].params.model_validate(param_values(key, value)), history or (), earlier
+            ),
+        )
+        for key in specs
+        if (value := active.get(key)) is not None
+    ]
 
 
 class AlphabetParams(Params):
@@ -193,7 +244,11 @@ class TitleModifier(LegacyModifier):
         alphabet = self.key == "alphabet_run"
         position = 0 if alphabet else params.get("start", 1) - 1
         count = 0
-        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if params.get("direction") != "za" else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+        letters = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            if params.get("direction") != "za"
+            else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+        )
         for step in ctx.history:
             if step.status != "watched":
                 continue
@@ -213,13 +268,18 @@ class TitleModifier(LegacyModifier):
                     count += 1
                 elif letter and letter in letters:
                     index = letters.index(letter)
-                    if index == position or (not params["strict"] and index >= max(0, position - 1)):
+                    if index == position or (
+                        not params["strict"] and index >= max(0, position - 1)
+                    ):
                         position = index + 1
                         count += 1
             else:
                 nums = title_numbers(step.movie_title, params["allow_years"])
-                eligible = [n for n in nums if n == position + 1] if params.get("mode") == "count_up" \
+                eligible = (
+                    [n for n in nums if n == position + 1]
+                    if params.get("mode") == "count_up"
                     else [n for n in nums if n > position]
+                )
                 if skipped or eligible:
                     position = position + 1 if skipped else min(eligible)
                     count += 1
@@ -234,18 +294,40 @@ class TitleModifier(LegacyModifier):
             return Verdict(ok, None if ok else "Number in title: this title has no eligible number")
         position, _ = self.state(ctx)
         if self.key == "alphabet_run":
-            letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if params["direction"] == "az" else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+            letters = (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                if params["direction"] == "az"
+                else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+            )
             if position >= 26:
                 return Verdict()
             letter = first_letter(film.title, params["ignore_articles"])
             expected = letters[position]
             index = letters.find(letter) if letter else -1
-            ok = expected in params["wild_letters"] or letter == "#" or index == position \
+            ok = (
+                expected in params["wild_letters"]
+                or letter == "#"
+                or index == position
                 or (not params["strict"] and index >= max(0, position - 1))
-            return Verdict(ok, None if ok else f"A-Z: Next: {expected}; {film.title} starts with {letter or 'no letter'}")
+            )
+            return Verdict(
+                ok,
+                None
+                if ok
+                else f"A-Z: Next: {expected}; {film.title} starts with {letter or 'no letter'}",
+            )
         nums = title_numbers(film.title, params["allow_years"])
-        ok = position + 1 in nums if params["mode"] == "count_up" else any(n > position for n in nums)
-        return Verdict(ok, None if ok else f"Ascending numbers: Next: {position + 1}; no matching number in {film.title}")
+        ok = (
+            position + 1 in nums
+            if params["mode"] == "count_up"
+            else any(n > position for n in nums)
+        )
+        return Verdict(
+            ok,
+            None
+            if ok
+            else f"Ascending numbers: Next: {position + 1}; no matching number in {film.title}",
+        )
 
     def progress(self, ctx: ModCtx) -> dict[str, Any] | None:
         if self.key == "number_in_title":
@@ -253,7 +335,11 @@ class TitleModifier(LegacyModifier):
         position, count = self.state(ctx)
         params = ctx.params.model_dump()
         if self.key == "alphabet_run":
-            letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if params["direction"] == "az" else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+            letters = (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                if params["direction"] == "az"
+                else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+            )
             next_token = letters[position] if position < 26 else None
             label = f"🔤 Next: {next_token or 'Complete'} · {position}/26"
         else:
@@ -265,34 +351,85 @@ class TitleModifier(LegacyModifier):
         position, count = self.state(ctx)
         params = ctx.params.model_dump()
         if self.key == "alphabet_run" and position >= 26:
-            return RunOutcome("completed", f"{'A to Z' if params['direction'] == 'az' else 'Z to A'} conquered in {count} films")
-        if self.key == "ascending_numbers" and params["mode"] == "count_up" and position >= params["target"]:
-            return RunOutcome("completed", f"Count to {params['target']} conquered in {count} films")
+            return RunOutcome(
+                "completed",
+                f"{'A to Z' if params['direction'] == 'az' else 'Z to A'} conquered in {count} films",
+            )
+        if (
+            self.key == "ascending_numbers"
+            and params["mode"] == "count_up"
+            and position >= params["target"]
+        ):
+            return RunOutcome(
+                "completed", f"Count to {params['target']} conquered in {count} films"
+            )
         return None
 
 
 TITLE_MODIFIERS = [
-    TitleModifier("alphabet_run", "A-Z", "🔤", "Watch titles in alphabet order; Q, X and Z can be wild.",
-                  "sequence", frozenset({"title"}), AlphabetParams, RuleSection(
-                      "Conquer the alphabet in title order.",
-                      ["Pick the next letter shown in the progress chip; configured wild letters and digit-leading titles can stand in."],
-                      ["Only watched films advance progress; seeds count only when seed_sets_start is enabled."],
-                      ["A wrong letter blocks the pick. A wildcard can stand in only when no legal reachable title fits."],
-                      ["Ignore articles to make The Matrix an M film; keep connectors for the next letter."], ["wildcard"])),
-    TitleModifier("number_in_title", "Number in title", "🔢", "Every title must contain an eligible number.",
-                  "film", frozenset({"title"}), NumberParams, RuleSection(
-                      "Watch numbered titles.",
-                      ["Choose titles with digits, number words, ordinals or standalone uppercase Roman numerals II to XX."],
-                      ["This is a film filter, not a separate victory condition."],
-                      ["Years from 1900 to 2099 do not count unless allow_years is enabled."],
-                      ["Se7en and Rocky II qualify; I, Robot and Mix do not."], [])),
-    TitleModifier("ascending_numbers", "Ascending numbers", "🔢", "Increase title numbers or count up to a target.",
-                  "sequence", frozenset({"title"}), AscendingParams, RuleSection(
-                      "Climb the numbers in film titles.",
-                      ["Choose a larger number, or exactly the next number in count_up mode."],
-                      ["Only watched non-seed films advance progress; count_up wins at the target."],
-                      ["Wrong numbers block the pick. A wildcard can stand in only when no reachable title fits."],
-                      ["Titles with multiple numbers use the smallest eligible one; years need explicit opt-in."], ["wildcard"])),
+    TitleModifier(
+        "alphabet_run",
+        "A-Z",
+        "🔤",
+        "Watch titles in alphabet order; Q, X and Z can be wild.",
+        "sequence",
+        frozenset({"title"}),
+        AlphabetParams,
+        RuleSection(
+            "Conquer the alphabet in title order.",
+            [
+                "Pick the next letter shown in the progress chip; configured wild letters and digit-leading titles can stand in."
+            ],
+            [
+                "Only watched films advance progress; seeds count only when seed_sets_start is enabled."
+            ],
+            [
+                "A wrong letter blocks the pick. A wildcard can stand in only when no legal reachable title fits."
+            ],
+            ["Ignore articles to make The Matrix an M film; keep connectors for the next letter."],
+            ["wildcard"],
+        ),
+    ),
+    TitleModifier(
+        "number_in_title",
+        "Number in title",
+        "🔢",
+        "Every title must contain an eligible number.",
+        "film",
+        frozenset({"title"}),
+        NumberParams,
+        RuleSection(
+            "Watch numbered titles.",
+            [
+                "Choose titles with digits, number words, ordinals or standalone uppercase Roman numerals II to XX."
+            ],
+            ["This is a film filter, not a separate victory condition."],
+            ["Years from 1900 to 2099 do not count unless allow_years is enabled."],
+            ["Se7en and Rocky II qualify; I, Robot and Mix do not."],
+            [],
+        ),
+    ),
+    TitleModifier(
+        "ascending_numbers",
+        "Ascending numbers",
+        "🔢",
+        "Increase title numbers or count up to a target.",
+        "sequence",
+        frozenset({"title"}),
+        AscendingParams,
+        RuleSection(
+            "Climb the numbers in film titles.",
+            ["Choose a larger number, or exactly the next number in count_up mode."],
+            ["Only watched non-seed films advance progress; count_up wins at the target."],
+            [
+                "Wrong numbers block the pick. A wildcard can stand in only when no reachable title fits."
+            ],
+            [
+                "Titles with multiple numbers use the smallest eligible one; years need explicit opt-in."
+            ],
+            ["wildcard"],
+        ),
+    ),
 ]
 
 
@@ -340,11 +477,13 @@ class TitleCoveragePredicate:
         params = self.ctx.params.model_dump()
         if self.spec.key == "alphabet_run":
             return self.token in params["wild_letters"] or first_letter(
-                movie.title, params["ignore_articles"],
+                movie.title,
+                params["ignore_articles"],
             ) in (self.token, "#")
         assert isinstance(self.token, int)
         return self.token in title_numbers(movie.title, params["allow_years"]) or (
-            params["mode"] == "increasing" and any(
+            params["mode"] == "increasing"
+            and any(
                 number >= self.token for number in title_numbers(movie.title, params["allow_years"])
             )
         )

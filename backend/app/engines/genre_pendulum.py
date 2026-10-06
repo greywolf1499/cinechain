@@ -137,24 +137,41 @@ def movie_genres(row: CachedMovie) -> set[int]:
 
 class GenrePendulumEngine(MutatorEngine):
     discovery_filters: ClassVar[list[FilterSpec]] = [
-        FilterSpec(key="target_genre", kind="toggle", label="Target genre only",
-                   source="genre_ids", default=True, help="The current swing's genre; unknown tags stay visible."),
+        FilterSpec(
+            key="target_genre",
+            kind="toggle",
+            label="Target genre only",
+            source="genre_ids",
+            default=True,
+            help="The current swing's genre; unknown tags stay visible.",
+        ),
     ]
     tagline = "The genre swings as you go"
     tags: ClassVar[list[str]] = ["Any film", "Genre cycle", "Genre overlap"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Follow the genre cycle while keeping an overlap between consecutive films.",
-        ["Carry the target genre and share a genre with the previous film.",
-         "The cycle is {genre_cycle}; the target changes every {swing_frequency} steps."],
-        ["{win_goal}"], ["Missing overlap or the target genre blocks the hop.", "{fail_goal}"],
-        ["Choose multi-genre films that bridge the current target to the next swing.",
-         "Look ahead at the cycle before exhausting a narrow genre."], ["seed"],
+        [
+            "Carry the target genre and share a genre with the previous film.",
+            "The cycle is {genre_cycle}; the target changes every {swing_frequency} steps.",
+        ],
+        ["{win_goal}"],
+        ["Missing overlap or the target genre blocks the hop.", "{fail_goal}"],
+        [
+            "Choose multi-genre films that bridge the current target to the next swing.",
+            "Look ahead at the cycle before exhausting a narrow genre.",
+        ],
+        ["seed"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict:
         cycle, frequency = pendulum_config(rules)
-        return {**super().rulebook_values(rules), "genre_cycle": " -> ".join(cycle), "swing_frequency": frequency}
+        return {
+            **super().rulebook_values(rules),
+            "genre_cycle": " -> ".join(cycle),
+            "swing_frequency": frequency,
+        }
+
     game_type = GENRE_PENDULUM
     display_name = "The Genre Pendulum"
     description = (

@@ -24,9 +24,13 @@ class CanonIslandEngine(CineChainEngine):
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Explore a shared-cast chain entirely inside your chosen canon list.",
         ["Pick a list member linked to the current film; even the seed must belong to the list."],
-        ["{win_goal}"], ["Films outside the list are blocked, even with a wildcard.", "{fail_goal}"],
-        ["Look for actors appearing in several list entries before committing to a rare film.",
-         "Use the list as your search boundary, not the whole catalogue."], ["seed", "wildcard"],
+        ["{win_goal}"],
+        ["Films outside the list are blocked, even with a wildcard.", "{fail_goal}"],
+        [
+            "Look for actors appearing in several list entries before committing to a rare film.",
+            "Use the list as your search boundary, not the whole catalogue.",
+        ],
+        ["seed", "wildcard"],
     )
     """The classic shared-cast chain, but the engine blocks any film that isn't
     on the run's `allowed_curated_list_id` (a `CuratedList` id). Candidate pools

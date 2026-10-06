@@ -18,14 +18,26 @@ from app.services import blind_fork, bounties, veto
 
 CUSTOM_RULES = {
     **DEFAULT_RULES_CONFIG,
-    "target_lead": 7, "target_points": 5, "dimension": "era",
-    "era_a_before": 1960, "era_b_after": 2010, "momentum_cap": 4,
-    "sudden_death_after": 20, "sudden_death_every": 3,
-    "max_lives": 5, "lives_remaining": 2, "escape_depth": 30,
-    "genre_cycle": ["Comedy", "Drama"], "swing_frequency": 3,
-    "target_decade": 1980, "target_country": "IN", "max_skip": 3,
-    "direction": "descent", "chrono_direction": "descent",
-    "actor": {"name": "Test Actor"}, "director": {"name": "Test Director"},
+    "target_lead": 7,
+    "target_points": 5,
+    "dimension": "era",
+    "era_a_before": 1960,
+    "era_b_after": 2010,
+    "momentum_cap": 4,
+    "sudden_death_after": 20,
+    "sudden_death_every": 3,
+    "max_lives": 5,
+    "lives_remaining": 2,
+    "escape_depth": 30,
+    "genre_cycle": ["Comedy", "Drama"],
+    "swing_frequency": 3,
+    "target_decade": 1980,
+    "target_country": "IN",
+    "max_skip": 3,
+    "direction": "descent",
+    "chrono_direction": "descent",
+    "actor": {"name": "Test Actor"},
+    "director": {"name": "Test Director"},
     "tunnel_hints_remaining": 4,
     "win_condition": {"type": "movies_watched", "count": 8},
     "fail_condition": {"type": "max_repeats_used", "count": 1},
@@ -51,10 +63,19 @@ def test_every_engine_declares_and_renders_rulebook(engine_class, rules):
 def test_all_overlay_fragments_and_modifier_registry():
     assert set(modifiers.RULEBOOK) == {*modifiers.PAIR_MODIFIER_KEYS, modifiers.CAST_LINK_KEY}
     values = {
-        "chaos_label": "Pre-1970", "bounty_reward": "one life",
-        "chrono_word": "before", "runtime_word": "shorter", "country_cooldown": 4,
+        "chaos_label": "Pre-1970",
+        "bounty_reward": "one life",
+        "chrono_word": "before",
+        "runtime_word": "shorter",
+        "country_cooldown": 4,
     }
-    for section in [bounties.RULEBOOK, chaos.RULEBOOK, blind_fork.RULEBOOK, veto.RULEBOOK, *modifiers.RULEBOOK.values()]:
+    for section in [
+        bounties.RULEBOOK,
+        chaos.RULEBOOK,
+        blind_fork.RULEBOOK,
+        veto.RULEBOOK,
+        *modifiers.RULEBOOK.values(),
+    ]:
         assert_section(render(section, values))
 
 
@@ -70,7 +91,9 @@ def test_missing_placeholder_is_a_hard_error(field):
 
 @pytest.fixture()
 def rulebook_client(config_dir):
-    db = create_engine(f"sqlite:///{config_dir}/rulebooks.db", connect_args={"check_same_thread": False})
+    db = create_engine(
+        f"sqlite:///{config_dir}/rulebooks.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(db)
     user = User(username="reader", password_hash="not-a-real-password", display_name="Reader")
     with Session(db) as session:
@@ -93,7 +116,9 @@ def rulebook_client(config_dir):
 
 def new_run(db, user, mode="cinechain", rules=None, partner=False):
     with Session(db) as session:
-        run = Run(name="Rules test", game_type=mode, rules_config=rules or dict(DEFAULT_RULES_CONFIG))
+        run = Run(
+            name="Rules test", game_type=mode, rules_config=rules or dict(DEFAULT_RULES_CONFIG)
+        )
         session.add(run)
         session.commit()
         session.refresh(run)
@@ -116,7 +141,9 @@ def test_engine_metadata_has_server_copy_and_rulebooks(rulebook_client):
     assert {entry["game_type"] for entry in result.json()} == set(ENGINE_REGISTRY)
     for entry in result.json():
         assert entry["tagline"] and entry["tags"]
-        assert entry["rulebook"]["goal"] and entry["rulebook"]["turn"] and entry["rulebook"]["scoring"]
+        assert (
+            entry["rulebook"]["goal"] and entry["rulebook"]["turn"] and entry["rulebook"]["scoring"]
+        )
         assert set(entry["rulebook"]["glossary"]) <= entry["glossary"].keys()
     rabbit = next(entry for entry in result.json() if entry["game_type"] == "rabbit_hole")
     assert "New runs instead deal a seeded deck" in " ".join(rabbit["rulebook"]["turn"])
@@ -144,9 +171,13 @@ def test_run_endpoint_renders_all_modes(rulebook_client, mode):
 def test_overlay_activation_and_actual_settings(rulebook_client):
     client, db, user = rulebook_client
     rules = {
-        **CUSTOM_RULES, "bounty_board": True, "blind_fork": True,
-        "active_chaos": {"id": "pre_1970"}, "runtime_staircase": "descending",
-        "country_cooldown": 4, "api_key": "must-not-leak",
+        **CUSTOM_RULES,
+        "bounty_board": True,
+        "blind_fork": True,
+        "active_chaos": {"id": "pre_1970"},
+        "runtime_staircase": "descending",
+        "country_cooldown": 4,
+        "api_key": "must-not-leak",
     }
     run_id = new_run(db, user, rules=rules, partner=True)
     data = client.get(f"/api/runs/{run_id}/rulebook").json()
@@ -161,9 +192,17 @@ def test_overlay_activation_and_actual_settings(rulebook_client):
 def test_default_and_disabled_modifiers_and_coop_veto(rulebook_client):
     client, db, user = rulebook_client
     passport = new_run(db, user, "world_passport")
-    assert [overlay["key"] for overlay in client.get(f"/api/runs/{passport}/rulebook").json()["overlays"]] == ["country_cooldown"]
-    disabled = new_run(db, user, "world_passport", {"country_cooldown": 0, "require_cast_link": True})
-    assert [overlay["key"] for overlay in client.get(f"/api/runs/{disabled}/rulebook").json()["overlays"]] == ["require_cast_link"]
+    assert [
+        overlay["key"]
+        for overlay in client.get(f"/api/runs/{passport}/rulebook").json()["overlays"]
+    ] == ["country_cooldown"]
+    disabled = new_run(
+        db, user, "world_passport", {"country_cooldown": 0, "require_cast_link": True}
+    )
+    assert [
+        overlay["key"]
+        for overlay in client.get(f"/api/runs/{disabled}/rulebook").json()["overlays"]
+    ] == ["require_cast_link"]
     tunnel = new_run(db, user, "meet_in_the_middle", partner=True)
     assert client.get(f"/api/runs/{tunnel}/rulebook").json()["overlays"] == []
     bracket = new_run(db, user, "march_madness", {"bounty_board": True})

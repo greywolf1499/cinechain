@@ -32,28 +32,37 @@ class Evidence:
         directors: dict[int, list[CachedMovieDirector]] = {}
         for director in session.exec(select(CachedMovieDirector)).all():
             directors.setdefault(director.movie_id, []).append(director)
-        ratings = {rating.movie_id: rating for rating in session.exec(select(CachedMovieRating)).all()}
+        ratings = {
+            rating.movie_id: rating for rating in session.exec(select(CachedMovieRating)).all()
+        }
         self.facts = {
-            movie_id: facts_of(movie, directors.get(movie_id, []), rating_from_cache(movie, ratings.get(movie_id)))
+            movie_id: facts_of(
+                movie, directors.get(movie_id, []), rating_from_cache(movie, ratings.get(movie_id))
+            )
             for movie_id, movie in self.movies.items()
         }
 
     def check(self, test: Predicate, ids: Iterable[int], *, exact: bool = True) -> Feasibility:
         results = [
             test.check(self.movies[movie_id], self.facts[movie_id])
-            if movie_id in self.movies else None
+            if movie_id in self.movies
+            else None
             for movie_id in ids
         ]
         if not results:
-            return Feasibility(not exact, "No remaining eligible films" if exact else "Cache has no evidence", None)
+            return Feasibility(
+                not exact, "No remaining eligible films" if exact else "Cache has no evidence", None
+            )
         possible = sum(result is not False for result in results)
         rate = possible / len(results)
         # Unknowns are possible, but cannot prove that a quest is trivial.
         observed_rate = None if any(result is None for result in results) else rate
         return Feasibility(
             possible > 0,
-            "No remaining eligible film matches this quest" if not possible
-            else "Too easy for the eligible pool" if observed_rate is not None and observed_rate > 0.8
+            "No remaining eligible film matches this quest"
+            if not possible
+            else "Too easy for the eligible pool"
+            if observed_rate is not None and observed_rate > 0.8
             else "A matching film is possible",
             observed_rate,
         )
@@ -104,6 +113,8 @@ def contradicts(test: Predicate, bounds: dict[str, tuple[float | None, float | N
 def within(facts: MovieFacts, bounds: dict[str, tuple[float | None, float | None]]) -> bool:
     for field, (low, high) in bounds.items():
         value = getattr(facts, field)
-        if value is not None and (low is not None and value < low or high is not None and value > high):
+        if value is not None and (
+            low is not None and value < low or high is not None and value > high
+        ):
             return False
     return True

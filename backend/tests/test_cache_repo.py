@@ -460,7 +460,12 @@ async def test_movie_imdb_id_is_preferred_and_preserved(config_dir):
     with _session(config_dir) as session, respx.mock:
         repo = cache_repo.CacheRepo(session)
         movie = repo.upsert_movie(
-            {"id": 603, "title": "Localized title", "imdb_id": "tt0133093", "origin_country": ["US"]}
+            {
+                "id": 603,
+                "title": "Localized title",
+                "imdb_id": "tt0133093",
+                "origin_country": ["US"],
+            }
         )
         assert movie.imdb_id == "tt0133093"
         repo.upsert_movie({"id": 603, "title": "Localized title", "imdb_id": None})
@@ -484,8 +489,14 @@ async def test_stub_detail_hydrated_before_ratings_lookup(config_dir, imdb_id):
         session.commit()
         detail = respx.get(f"{TMDB_BASE}/movie/603").mock(
             return_value=httpx.Response(
-                200, json={"id": 603, "title": "The Matrix", "release_date": "1999-03-30",
-                           "imdb_id": imdb_id, "origin_country": ["US"]}
+                200,
+                json={
+                    "id": 603,
+                    "title": "The Matrix",
+                    "release_date": "1999-03-30",
+                    "imdb_id": imdb_id,
+                    "origin_country": ["US"],
+                },
             )
         )
         route = respx.get(OMDB_BASE).mock(

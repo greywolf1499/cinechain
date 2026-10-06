@@ -90,9 +90,13 @@ async def _decide(
                 status="watched",
                 watched_at=utcnow(),
                 transition_metadata={
-                    "bracket_round": round_name, "matchup_id": matchup_id,
-                    **({"acting_participant_id": actor.id}
-                       if (run.rules_config or {}).get("table_mode") is True else {}),
+                    "bracket_round": round_name,
+                    "matchup_id": matchup_id,
+                    **(
+                        {"acting_participant_id": actor.id}
+                        if (run.rules_config or {}).get("table_mode") is True
+                        else {}
+                    ),
                 },
                 **_step_fields_from_movie(movie),
             )
@@ -123,7 +127,14 @@ async def advance_bracket(
     _ensure_run_open(run)
     actor = _acting_user(session, run, current_user, payload.acting_participant_id)
     await _decide(
-        session, tmdb, run, current_user, bracket, payload.matchup_id, payload.winning_movie_id, actor
+        session,
+        tmdb,
+        run,
+        current_user,
+        bracket,
+        payload.matchup_id,
+        payload.winning_movie_id,
+        actor,
     )
     return _to_run_detail(session, run)
 
@@ -142,9 +153,7 @@ async def vote_in_bracket(
     _ensure_run_open(run)
     actor = _acting_user(session, run, current_user, payload.acting_participant_id)
     try:
-        updated = march_madness.record_vote(
-            bracket, payload.matchup_id, actor.id, payload.movie_id
-        )
+        updated = march_madness.record_vote(bracket, payload.matchup_id, actor.id, payload.movie_id)
     except march_madness.BracketError as exc:
         raise _bracket_error(exc) from exc
     participant_ids = [

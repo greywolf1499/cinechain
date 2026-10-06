@@ -124,19 +124,30 @@ class RottenTomatoesSplitEngine(TrackerEngine):
     tags: ClassVar[list[str]] = ["Tomatometer split", "Head to head", "Household rating"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Be the first side to {target_points} points.",
-        ["Choose a film with at least {divergence} points between RT critics and IMDb audience (IMDb x10).",
-         "Watch it, then give a household rating; retry missing scores or log it as no-contest."],
-        ["The side closer to the household rating gains 1 point; ties go to audience.",
-         "No-contest records the watched film with zero points."],
+        [
+            "Choose a film with at least {divergence} points between RT critics and IMDb audience (IMDb x10).",
+            "Watch it, then give a household rating; retry missing scores or log it as no-contest.",
+        ],
+        [
+            "The side closer to the household rating gains 1 point; ties go to audience.",
+            "No-contest records the watched film with zero points.",
+        ],
         ["The opposing side wins when it reaches {target_points} first."],
-        ["Pick a split where your household's taste is likely to favour your side.",
-         "A dramatic gap is an opportunity, not a guarantee of your point."], ["no_contest"],
+        [
+            "Pick a split where your household's taste is likely to favour your side.",
+            "A dramatic gap is an opportunity, not a guarantee of your point.",
+        ],
+        ["no_contest"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
-        return {**super().rulebook_values(rules), "target_points": target_points(rules),
-                "divergence": MIN_DIVERGENCE}
+        return {
+            **super().rulebook_values(rules),
+            "target_points": target_points(rules),
+            "divergence": MIN_DIVERGENCE,
+        }
+
     seed_policy = "none"
     game_type = RT_SPLIT
     requires: ClassVar[list[str]] = ["omdb"]

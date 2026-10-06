@@ -135,8 +135,11 @@ class RegionalDeepDiveEngine(TrackerEngine):
         ["Watch the prepared slice of your canon list in any order; cast links are not required."],
         ["Log every checklist film to finish the expedition."],
         ["Films outside the expedition are blocked."],
-        ["Start with an available film; no chronological route needs to be preserved.",
-         "Use the remaining checklist to plan variety within your chosen slice."], ["checklist", "seed"],
+        [
+            "Start with an available film; no chronological route needs to be preserved.",
+            "Use the remaining checklist to plan variety within your chosen slice.",
+        ],
+        ["checklist", "seed"],
     )
 
     @classmethod
@@ -145,8 +148,11 @@ class RegionalDeepDiveEngine(TrackerEngine):
         expedition = config.get(EXPEDITION_KEY) or {}
         country = expedition.get("country_name") or config.get("target_country") or "all countries"
         decade = expedition.get("decade") or config.get("target_decade")
-        return {**super().rulebook_values(rules),
-                "slice_name": f"{country}, {str(decade) + 's' if decade else 'all decades'}"}
+        return {
+            **super().rulebook_values(rules),
+            "slice_name": f"{country}, {str(decade) + 's' if decade else 'all decades'}",
+        }
+
     game_type = REGIONAL_DEEP_DIVE
     seed_policy = "derived"
     display_name = "Regional Deep Dive"
@@ -227,17 +233,13 @@ class RegionalDeepDiveEngine(TrackerEngine):
         films.sort(key=lambda f: (f["rank"] is None, f["rank"] or 0, f["title"]))
         return films
 
-    def _slice_ids(
-        self, curated_id: str, country: str | None, decade: int | None
-    ) -> list[int]:
+    def _slice_ids(self, curated_id: str, country: str | None, decade: int | None) -> list[int]:
         return [
             film["movie_id"] for film in self._slice(self._slice_rows(curated_id), country, decade)
         ]
 
     async def seed_candidates(self, rules: dict) -> list[int]:
-        return self._slice_ids(
-            rules[LIST_ID_KEY], rules.get(COUNTRY_KEY), rules.get(DECADE_KEY)
-        )
+        return self._slice_ids(rules[LIST_ID_KEY], rules.get(COUNTRY_KEY), rules.get(DECADE_KEY))
 
     async def prepare_run(self, rules: dict, user_id: str) -> dict:
         curated = self.session.get(CuratedList, rules[LIST_ID_KEY])

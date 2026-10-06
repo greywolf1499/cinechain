@@ -66,11 +66,7 @@ def suggest_seed(
             and (allowed_ids is not None or bool(movie.poster_path))
             and bool(movie.title)
             and is_reality_eligible(movie)
-            and (
-                not min_runtime
-                or movie.runtime is None
-                or movie.runtime >= min_runtime
-            )
+            and (not min_runtime or movie.runtime is None or movie.runtime >= min_runtime)
         )
 
     acclaimed = [m for m in (session.get(CachedMovie, i) for i in reasons) if eligible(m)]
@@ -96,5 +92,7 @@ def suggest_seed(
             choices = [m for m in pool if not strict or needs(m)]
             if choices:
                 movie = rng.choice(choices)
-                return SeedSuggestion(movie, reasons.get(movie.tmdb_id) or label or "From your slice")
+                return SeedSuggestion(
+                    movie, reasons.get(movie.tmdb_id) or label or "From your slice"
+                )
     return None

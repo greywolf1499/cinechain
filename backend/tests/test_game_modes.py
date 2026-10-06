@@ -26,8 +26,12 @@ def test_discovery_filters_are_safe_engine_metadata(client):
             assert spec["kind"] in {"select", "toggle", "range"}
             assert spec["server_param"] in {None, "include_off_tier"}
     for game_type in (
-        "world_passport", "chrono_climb", "historical_time_travel",
-        "genre_pendulum", "tug_of_war", "rabbit_hole",
+        "world_passport",
+        "chrono_climb",
+        "historical_time_travel",
+        "genre_pendulum",
+        "tug_of_war",
+        "rabbit_hole",
     ):
         assert engines[game_type]["discovery_filters"]
     assert engines["cinechain"]["discovery_filters"] == []
@@ -36,8 +40,13 @@ def test_discovery_filters_are_safe_engine_metadata(client):
     with pytest.raises(ValidationError):
         FilterSpec(key="unsafe", kind="toggle", label="Unsafe", source="candidate.eval()")
     with pytest.raises(ValidationError):
-        FilterSpec(key="unsafe", kind="toggle", label="Unsafe",
-                   source="new_country", server_param="arbitrary_query")
+        FilterSpec(
+            key="unsafe",
+            kind="toggle",
+            label="Unsafe",
+            source="new_country",
+            server_param="arbitrary_query",
+        )
 
 
 @pytest.fixture()

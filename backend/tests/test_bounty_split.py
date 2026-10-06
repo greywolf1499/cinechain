@@ -206,8 +206,16 @@ def test_a_run_without_the_toggle_has_no_board_and_forged_state_is_dropped(clien
 def test_invalid_and_unsupported_boards_are_refused(client, db_engine):
     assert make_run(client, bounty_board="yes").status_code == 422
     with Session(db_engine) as session:
-        session.add(CachedMovie(tmdb_id=900, title="Tier evidence", runtime=120, popularity=10,
-                                release_date="1990-01-01", status="Released"))
+        session.add(
+            CachedMovie(
+                tmdb_id=900,
+                title="Tier evidence",
+                runtime=120,
+                popularity=10,
+                release_date="1990-01-01",
+                status="Released",
+            )
+        )
         session.commit()
     assert make_run(client, "rabbit_hole", bounty_board=True).status_code == 201
     assert make_run(client, "march_madness", bounty_board=True).status_code == 422
@@ -546,8 +554,13 @@ def test_no_contest_logs_without_omdb_or_household_and_game_continues(client, db
         )
         retry = client.post(f"/api/runs/{run_id}/split/ratings/9/retry")
         assert retry.status_code == 200 and retry.json()["qualifies"] is False
-        step = log(client, run_id, 9, no_contest=True,
-                   transition_metadata={"point_to": "team_a", "split_no_contest": False})
+        step = log(
+            client,
+            run_id,
+            9,
+            no_contest=True,
+            transition_metadata={"point_to": "team_a", "split_no_contest": False},
+        )
         assert step.status_code == 201, step.text
         assert step.json()["transition_metadata"] == {"split_no_contest": True}
         assert step.json()["movie_origin_countries"] == ["US"]
@@ -579,12 +592,17 @@ def test_no_contest_marker_cannot_be_forged_for_a_rated_film(client, db_engine):
 def test_no_contest_rejects_other_modes_and_planned_steps(client):
     regular = make_run(client).json()["id"]
     assert log(client, regular, 12345, no_contest=True).status_code == 422
-    assert log(client, make_split(client), 12345, no_contest=True, status="planned").status_code == 422
+    assert (
+        log(client, make_split(client), 12345, no_contest=True, status="planned").status_code == 422
+    )
 
 
 def test_no_contest_is_excluded_even_if_old_metadata_claims_a_point():
     step = RunStep(
-        run_id="test", movie_id=1, movie_title="Legacy", status="watched",
+        run_id="test",
+        movie_id=1,
+        movie_title="Legacy",
+        status="watched",
         transition_metadata={"split_no_contest": True, "point_to": "team_a"},
     )
     assert compute_scores([step]) == {"team_a": 0, "team_b": 0}
@@ -611,8 +629,12 @@ def test_split_retry_forces_negative_cache_refresh_and_uses_id(client, db_engine
     with respx.mock:
         route = respx.get("https://www.omdbapi.com/").mock(
             return_value=httpx.Response(
-                200, json={"Response": "True", "imdbRating": "5.0",
-                           "Ratings": [{"Source": "Rotten Tomatoes", "Value": "90%"}]}
+                200,
+                json={
+                    "Response": "True",
+                    "imdbRating": "5.0",
+                    "Ratings": [{"Source": "Rotten Tomatoes", "Value": "90%"}],
+                },
             )
         )
         retry = client.post(f"/api/runs/{run_id}/split/ratings/9/retry")

@@ -139,21 +139,41 @@ def list_engines(
             presets=cls.presets,
             default_preset=cls.default_preset,
             bounty_reward=cls.bounty_reward,
-            modifiers=[{
-                "key": spec.key, "label": spec.label, "emoji": spec.emoji, "blurb": spec.blurb,
-                "scope": spec.scope, "params_schema": _modifier_schema(spec),
-                "compatible": spec.compatible(cls) is None,
-                "incompatible_reason": spec.compatible(cls),
-                "default_params": param_values(spec.key, cls.default_modifiers[spec.key])
-                if spec.key in cls.default_modifiers else None,
-            } for spec in registry().values()],
+            modifiers=[
+                {
+                    "key": spec.key,
+                    "label": spec.label,
+                    "emoji": spec.emoji,
+                    "blurb": spec.blurb,
+                    "scope": spec.scope,
+                    "params_schema": _modifier_schema(spec),
+                    "compatible": spec.compatible(cls) is None,
+                    "incompatible_reason": spec.compatible(cls),
+                    "default_params": param_values(spec.key, cls.default_modifiers[spec.key])
+                    if spec.key in cls.default_modifiers
+                    else None,
+                }
+                for spec in registry().values()
+            ],
             tagline=cls.tagline,
             tags=cls.tags,
-            rulebook=render(cls.rulebook, cls.rulebook_values({
-                **DEFAULT_RULES_CONFIG,
-                **{field.key: field.default for field in cls.rule_fields},
-                **next((preset.values for preset in cls.presets if preset.id == cls.default_preset), {}),
-            })),
+            rulebook=render(
+                cls.rulebook,
+                cls.rulebook_values(
+                    {
+                        **DEFAULT_RULES_CONFIG,
+                        **{field.key: field.default for field in cls.rule_fields},
+                        **next(
+                            (
+                                preset.values
+                                for preset in cls.presets
+                                if preset.id == cls.default_preset
+                            ),
+                            {},
+                        ),
+                    }
+                ),
+            ),
             glossary={key: GLOSSARY[key] for key in cls.rulebook.glossary},
             unavailable_reason=(
                 "Requires OMDb integration. Ask an admin to configure it in Settings → Integrations."
@@ -184,35 +204,54 @@ def run_rulebook(
         render_rules = {**rules, "tug_rules_version": 1}
     values = engine.rulebook_values(render_rules)
     if run.engine_version <= 1:
-        values.update({
-            "win_goal": "Legacy run: complete it manually when you are done.",
-            "fail_goal": "Legacy run: configured automatic fail conditions are not enforced.",
-        })
+        values.update(
+            {
+                "win_goal": "Legacy run: complete it manually when you are done.",
+                "fail_goal": "Legacy run: configured automatic fail conditions are not enforced.",
+            }
+        )
     active = engine.active_modifiers(rules)
     overlays: list[RulebookOverlay] = []
 
     def add(key: str, title: str, section: RuleSection, extra: dict | None = None) -> None:
-        overlays.append(RulebookOverlay(
-            key=key, title=title, rulebook=render(section, {**values, **(extra or {})}),
-        ))
+        overlays.append(
+            RulebookOverlay(
+                key=key,
+                title=title,
+                rulebook=render(section, {**values, **(extra or {})}),
+            )
+        )
 
     if rules.get(bounties.BOUNTY_BOARD_KEY) and engine.supports_bounty_board:
-        add("bounty_board", "Bounty Board", bounties.RULEBOOK, {
-            "bounty_reward": {
-                "life": "one life, capped at your maximum", "wildcard": "one wildcard",
-                "hint": "one tunnel hint", "star": "one star added to your victory record",
-            }[engine.bounty_reward],
-        })
+        add(
+            "bounty_board",
+            "Bounty Board",
+            bounties.RULEBOOK,
+            {
+                "bounty_reward": {
+                    "life": "one life, capped at your maximum",
+                    "wildcard": "one wildcard",
+                    "hint": "one tunnel hint",
+                    "star": "one star added to your victory record",
+                }[engine.bounty_reward],
+            },
+        )
     handicap = chaos.active(rules)
     if handicap:
         add("chaos", "Chaos handicap", chaos.RULEBOOK, {"chaos_label": handicap.label})
     for key, value in active.items():
         from app.engines.modifier_registry import registry
 
-        add(key, registry()[key].label, registry()[key].rulebook, {
-            key: value, "chrono_word": "before" if value == "descent" else "after",
-            "runtime_word": "shorter" if value == "descending" else "longer",
-        })
+        add(
+            key,
+            registry()[key].label,
+            registry()[key].rulebook,
+            {
+                key: value,
+                "chrono_word": "before" if value == "descent" else "after",
+                "runtime_word": "shorter" if value == "descending" else "longer",
+            },
+        )
     if rules.get(blind_fork.BLIND_FORK_KEY):
         add("blind_fork", "Blind Fork", blind_fork.RULEBOOK)
     participants = session.exec(select(RunParticipant).where(RunParticipant.run_id == run.id)).all()
@@ -224,21 +263,37 @@ def run_rulebook(
     if run.game_type == "tug_of_war" and render_rules.get("tug_rules_version") == 1:
         section = replace(section, glossary=["seed", "wildcard"])
     if run.engine_version <= 1:
-        section = replace(section, scoring=[
-            *section.scoring,
-            "Legacy engine: progress is recorded, but automatic win/fail completion is not enforced; finish the run manually.",
-        ])
-    terms = dict.fromkeys([*section.glossary, *(key for overlay in overlays for key in overlay.rulebook.glossary)])
+        section = replace(
+            section,
+            scoring=[
+                *section.scoring,
+                "Legacy engine: progress is recorded, but automatic win/fail completion is not enforced; finish the run manually.",
+            ],
+        )
+    terms = dict.fromkeys(
+        [*section.glossary, *(key for overlay in overlays for key in overlay.rulebook.glossary)]
+    )
     settings = {
         "Seed policy": engine.seed_policy,
         "Engine version": str(run.engine_version),
         "Repeat policy": str(values["allow_repeats"]),
         "Minimum runtime": f"{values['min_runtime']} minutes",
-        "Wildcard budget": "Unlimited" if values["wildcards_budget"] == -1 else str(values["wildcards_budget"]),
+        "Wildcard budget": "Unlimited"
+        if values["wildcards_budget"] == -1
+        else str(values["wildcards_budget"]),
     }
     mode_settings = {
-        "tug_of_war": ("target_lead", "effective_target", "territory_a", "territory_b",
-                       "momentum_cap", "sudden_death_after", "sudden_death_every", "steal_enabled", "sudden_death_enabled"),
+        "tug_of_war": (
+            "target_lead",
+            "effective_target",
+            "territory_a",
+            "territory_b",
+            "momentum_cap",
+            "sudden_death_after",
+            "sudden_death_every",
+            "steal_enabled",
+            "sudden_death_enabled",
+        ),
         "rt_split": ("target_points",),
         "decade_sieve": ("target_decade",),
         "regional_deep_dive": ("slice_name",),
@@ -267,13 +322,21 @@ def run_rulebook(
     for key in list_keys.get(run.game_type, ()):
         if rules.get(key):
             curated_list = session.get(CuratedList, rules[key])
-            settings["Canon list"] = curated_list.title if curated_list else f"Unavailable list ({rules[key]})"
+            settings["Canon list"] = (
+                curated_list.title if curated_list else f"Unavailable list ({rules[key]})"
+            )
     settings.update({key.replace("_", " ").title(): str(value) for key, value in active.items()})
-    settings["Bounty Board"] = "On" if any(overlay.key == "bounty_board" for overlay in overlays) else "Off"
+    settings["Bounty Board"] = (
+        "On" if any(overlay.key == "bounty_board" for overlay in overlays) else "Off"
+    )
     settings["Blind Fork"] = "On" if rules.get(blind_fork.BLIND_FORK_KEY) else "Off"
     return RunRulebook(
-        game_type=run.game_type, display_name=engine.display_name, rulebook=section,
-        overlays=overlays, glossary={key: GLOSSARY[key] for key in terms}, settings=settings,
+        game_type=run.game_type,
+        display_name=engine.display_name,
+        rulebook=section,
+        overlays=overlays,
+        glossary={key: GLOSSARY[key] for key in terms},
+        settings=settings,
     )
 
 

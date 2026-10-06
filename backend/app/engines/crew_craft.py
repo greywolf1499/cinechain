@@ -105,13 +105,25 @@ def describe_link(role_from: str | None, role_to: str | None, name: str) -> str:
 
 class CrewCraftEngine(CineChainEngine):
     tagline = "Follow the craft, not just the cast"
-    tags: ClassVar[list[str]] = ["Cast or crew", "Composer", "Cinematographer", "Writer", "Director"]
+    tags: ClassVar[list[str]] = [
+        "Cast or crew",
+        "Composer",
+        "Cinematographer",
+        "Writer",
+        "Director",
+    ]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Follow shared creative people from film to film.",
-        ["Link via an actor, director, writer, composer or cinematographer; cross-role links count."],
-        ["{win_goal}"], ["{fail_goal}"],
-        ["A prolific composer or writer can open routes that cast-only searches miss.",
-         "Compare roles before choosing the person who will shape the next hop."], ["seed", "wildcard"],
+        [
+            "Link via an actor, director, writer, composer or cinematographer; cross-role links count."
+        ],
+        ["{win_goal}"],
+        ["{fail_goal}"],
+        [
+            "A prolific composer or writer can open routes that cast-only searches miss.",
+            "Compare roles before choosing the person who will shape the next hop.",
+        ],
+        ["seed", "wildcard"],
     )
     game_type = CREW_CRAFT
     display_name = "Crew & Craft Trail"

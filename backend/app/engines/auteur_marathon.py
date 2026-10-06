@@ -81,7 +81,8 @@ def build_filmography(
     credits: Sequence[dict[str, Any]],
     runtimes: dict[int, tuple[int | None, Sequence[int]]] | None = None,
     today: date | None = None,
-    *, length: str | None = None,
+    *,
+    length: str | None = None,
 ) -> list[dict[str, Any]]:
     """Curates TMDB crew credits into the chronological filmography (see the module docstring).
 
@@ -115,14 +116,26 @@ def build_filmography(
     ordered = sorted(films, key=lambda f: (f["release_date"], f["movie_id"]))
     eligible = {film["movie_id"]: film for film in films}
     track = build_career_track(
-        [{**entry, "order": 0, "character": "Director", "genre_ids": eligible[entry["id"]]["genre_ids"]}
-         for entry in credits if entry.get("id") in eligible],
-        None, today, length=length, acting=False,
+        [
+            {
+                **entry,
+                "order": 0,
+                "character": "Director",
+                "genre_ids": eligible[entry["id"]]["genre_ids"],
+            }
+            for entry in credits
+            if entry.get("id") in eligible
+        ],
+        None,
+        today,
+        length=length,
+        acting=False,
     )
     annotated = {film["movie_id"]: film for film in track}
     selected = track if length is not None else ordered
-    return [{**annotated.get(film["movie_id"], {}), **eligible[film["movie_id"]]}
-            for film in selected]
+    return [
+        {**annotated.get(film["movie_id"], {}), **eligible[film["movie_id"]]} for film in selected
+    ]
 
 
 class AuteurMarathonEngine(TrackerEngine):
@@ -137,18 +150,24 @@ class AuteurMarathonEngine(TrackerEngine):
         ["{order_rule}"],
         ["{completion_rule}"],
         ["Off-track films are blocked; order violations require a soft-rule override."],
-        ["Save skips for hard-to-find features rather than rushing to familiar favourites.",
-         "Watch for recurring collaborators and themes across the career."], ["track", "seed", "wildcard"],
+        [
+            "Save skips for hard-to-find features rather than rushing to familiar favourites.",
+            "Watch for recurring collaborators and themes across the career.",
+        ],
+        ["track", "seed", "wildcard"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
         config = rules or {}
-        return {**super().rulebook_values(rules),
-                "person_name": (config.get("director") or {}).get("name", "your chosen director"),
-                "max_skip": marathon_skip(config),
-                "order_rule": marathon_order_rule(config),
-                "completion_rule": marathon_completion_rule(config)}
+        return {
+            **super().rulebook_values(rules),
+            "person_name": (config.get("director") or {}).get("name", "your chosen director"),
+            "max_skip": marathon_skip(config),
+            "order_rule": marathon_order_rule(config),
+            "completion_rule": marathon_completion_rule(config),
+        }
+
     seed_policy = "none"
     game_type = AUTEUR_MARATHON
     display_name = "The Auteur Marathon"
@@ -185,7 +204,9 @@ class AuteurMarathonEngine(TrackerEngine):
             if exc.status_code == 404:
                 raise RunSetupError(f"No person with TMDB id {director_id}") from exc
             raise RunSetupError(f"TMDB lookup failed: {exc}", 502) from exc
-        filmography = build_filmography(candidates, details, length=rules.get("track_length", "feature"))
+        filmography = build_filmography(
+            candidates, details, length=rules.get("track_length", "feature")
+        )
         filmography = await enrich_career_track(filmography, self.tmdb, self.session)
         era_problems = career_era_problems(rules.get("career_eras", []), filmography)
         if era_problems:

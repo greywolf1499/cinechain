@@ -163,33 +163,44 @@ def test_genre_pivot_requires_two_confirming_films_and_never_invents_missing_gen
     assert track == original
     for last_genres in ([35, 10749], []):
         changed = [*credits[:-1], {**credits[-1], "genre_ids": last_genres}]
-        assert not any("genre_pivot" in f["milestones"] for f in build_career_track(changed, None, TODAY))
+        assert not any(
+            "genre_pivot" in f["milestones"] for f in build_career_track(changed, None, TODAY)
+        )
 
 
 def test_comeback_boundary_and_language_crossover_are_fact_backed():
-    track = build_career_track([
-        credit(1, 2000, original_language="hi"),
-        credit(2, 2003, original_language="hi"),
-        credit(3, 2007, original_language="en"),
-        credit(4, 2008, original_language="hi"),
-    ], None, TODAY)
+    track = build_career_track(
+        [
+            credit(1, 2000, original_language="hi"),
+            credit(2, 2003, original_language="hi"),
+            credit(3, 2007, original_language="en"),
+            credit(4, 2008, original_language="hi"),
+        ],
+        None,
+        TODAY,
+    )
     assert "comeback" not in track[1]["milestones"]
     assert "comeback" in track[2]["milestones"]
     assert "language_crossover" in track[2]["milestones"]
     assert "en" in track[2]["evidence"]["language_crossover"]
-    boundary = [{**track[0], "release_date": "2000-06-02", "milestones": []},
-                {**track[2], "release_date": "2004-06-01", "milestones": []}]
+    boundary = [
+        {**track[0], "release_date": "2000-06-02", "milestones": []},
+        {**track[2], "release_date": "2004-06-01", "milestones": []},
+    ]
     assert not any("comeback" in f["milestones"] for f in flag_comebacks(boundary))
     unknown = [{**film, "original_language": None} for film in track]
-    assert not any("language_crossover" in film["milestones"]
-                   for film in flag_language_crossover([{**f, "milestones": []} for f in unknown]))
+    assert not any(
+        "language_crossover" in film["milestones"]
+        for film in flag_language_crossover([{**f, "milestones": []} for f in unknown])
+    )
 
 
 def test_against_type_uses_career_distances_not_a_genre_guess():
-    track = build_career_track([credit(i, 2000 + i, genres=[18], overview="romance")
-                                for i in range(1, 13)], None, TODAY)
-    vectors = {film["movie_id"]: np.array([1., 0.]) for film in track}
-    vectors[12] = np.array([0., 1.])
+    track = build_career_track(
+        [credit(i, 2000 + i, genres=[18], overview="romance") for i in range(1, 13)], None, TODAY
+    )
+    vectors = {film["movie_id"]: np.array([1.0, 0.0]) for film in track}
+    vectors[12] = np.array([0.0, 1.0])
     result = flag_against_type(track, vectors)
     assert "against_type" in result[-1]["milestones"]
     assert "against_type" not in track[-1]["milestones"]
@@ -207,22 +218,32 @@ def release(kind, day):
 
 def test_first_theatrical_needs_verified_release_types():
     track = build_career_track([credit(1, 2000), credit(2, 2001), credit(3, 2002)], None, TODAY)
-    dates = {1: [{"release_dates": [release(1, "2000-06-01")]}],
-             2: [{"release_dates": [release(3, "2001-06-01")]}]}
+    dates = {
+        1: [{"release_dates": [release(1, "2000-06-01")]}],
+        2: [{"release_dates": [release(3, "2001-06-01")]}],
+    }
     result = flag_first_theatrical(track, dates)
     assert "first_theatrical" in result[1]["milestones"]
     assert "2001-06-01" in result[1]["evidence"]["first_theatrical"]
     assert not any("first_theatrical" in f["milestones"] for f in flag_first_theatrical(track, {}))
     dates[1] = [{"release_dates": [release(3, "2000-06-01")]}]
-    assert not any("first_theatrical" in f["milestones"] for f in flag_first_theatrical(track, dates))
+    assert not any(
+        "first_theatrical" in f["milestones"] for f in flag_first_theatrical(track, dates)
+    )
 
 
 @pytest.mark.anyio
-async def test_career_postpass_is_bounded_and_embeddings_unavailable_is_optional(db_engine, monkeypatch):
-    track = build_career_track([credit(i, 2000 + i, overview="role") for i in range(1, 5)], None, TODAY)
+async def test_career_postpass_is_bounded_and_embeddings_unavailable_is_optional(
+    db_engine, monkeypatch
+):
+    track = build_career_track(
+        [credit(i, 2000 + i, overview="role") for i in range(1, 5)], None, TODAY
+    )
     tmdb = SimpleNamespace(get_movie_release_dates=AsyncMock(return_value=[]))
+
     async def offline(*args):
         raise embeddings.EmbeddingUnavailable("offline")
+
     monkeypatch.setattr(embeddings, "embed_batch", offline)
     with Session(db_engine) as session:
         result = await enrich_career_track(track, tmdb, session)
@@ -236,9 +257,11 @@ async def test_career_postpass_is_bounded_and_embeddings_unavailable_is_optional
 @pytest.mark.anyio
 async def test_optional_release_lookup_times_out_without_blocking_the_track(db_engine, monkeypatch):
     track = build_career_track([credit(i, 2000 + i) for i in range(1, 4)], None, TODAY)
+
     async def slow(movie_id):
         await asyncio.sleep(60)
         return []
+
     tmdb = SimpleNamespace(get_movie_release_dates=slow)
     monkeypatch.setattr(method_actor, "RELEASE_EVIDENCE_SECONDS", 0.01)
     with Session(db_engine) as session:
@@ -248,18 +271,28 @@ async def test_optional_release_lookup_times_out_without_blocking_the_track(db_e
 
 
 @pytest.mark.anyio
-async def test_postpass_uses_local_jit_vectors_and_villain_is_only_a_suggestion(db_engine, monkeypatch):
-    track = build_career_track([credit(i, 2000 + i, genres=[18], overview="romance")
-                               for i in range(1, 13)], None, TODAY)
+async def test_postpass_uses_local_jit_vectors_and_villain_is_only_a_suggestion(
+    db_engine, monkeypatch
+):
+    track = build_career_track(
+        [credit(i, 2000 + i, genres=[18], overview="romance") for i in range(1, 13)], None, TODAY
+    )
     track[-1].update(overview="Raj is a scientist helping his rural village.", character="Raj")
-    tmdb = SimpleNamespace(get_movie_release_dates=AsyncMock(return_value=[]),
-                           get_movie_keywords=AsyncMock(return_value=["villain"]))
+    tmdb = SimpleNamespace(
+        get_movie_release_dates=AsyncMock(return_value=[]),
+        get_movie_keywords=AsyncMock(return_value=["villain"]),
+    )
+
     async def embed(config, texts):
         assert config.provider == embeddings.PROVIDER_LOCAL
         return embeddings.EmbeddingBatch(
-            [np.array([0., 1.]) if "scientist" in text else np.array([1., 0.]) for text in texts],
+            [
+                np.array([0.0, 1.0]) if "scientist" in text else np.array([1.0, 0.0])
+                for text in texts
+            ],
             config.fingerprint,
         )
+
     monkeypatch.setattr(embeddings, "embed_batch", embed)
     with Session(db_engine) as session:
         result = await enrich_career_track(track, tmdb, session)
@@ -270,47 +303,73 @@ async def test_postpass_uses_local_jit_vectors_and_villain_is_only_a_suggestion(
 
 
 def test_every_milestone_has_evidence():
-    assert all(film["evidence"].get(milestone) for film in build_career_track(CAREER, None, TODAY)
-               for milestone in film["milestones"])
+    assert all(
+        film["evidence"].get(milestone)
+        for film in build_career_track(CAREER, None, TODAY)
+        for milestone in film["milestones"]
+    )
 
 
 def test_career_eras_are_player_editable_but_career_evidence_is_not(client):
     eras = [{"start_movie_id": 1, "end_movie_id": 3, "label": "My early favourites"}]
     with respx.mock:
         mock_actor()
-        run_id = make_run(client, career_eras=eras, filmography=[{"movie_id": 99, "milestones": ["villain"]}])
+        run_id = make_run(
+            client, career_eras=eras, filmography=[{"movie_id": 99, "milestones": ["villain"]}]
+        )
     before = detail(client, run_id)["rules_config"]
     assert before["career_eras"] == eras
-    response = client.patch(f"/api/runs/{run_id}/rules",
-                            json={"career_eras": [{**eras[0], "label": "Villain era"}],
-                                  "filmography": [{"movie_id": 99, "era_index": 99}]})
+    response = client.patch(
+        f"/api/runs/{run_id}/rules",
+        json={
+            "career_eras": [{**eras[0], "label": "Villain era"}],
+            "filmography": [{"movie_id": 99, "era_index": 99}],
+        },
+    )
     assert response.status_code == 200, response.text
     after = response.json()["rules_config"]
     assert after["career_eras"][0]["label"] == "Villain era"
     assert after["filmography"] == before["filmography"]
     assert after["wildcards_budget"] == 1  # An annotation-only PATCH must not reset gameplay.
-    for invalid in ([{**eras[0], "end_movie_id": 99}], [eras[0], eras[0]],
-                    [{**eras[0], "label": " "}], [{**eras[0], "start_movie_id": 8}]):
-        assert client.patch(f"/api/runs/{run_id}/rules", json={"career_eras": invalid}).status_code == 422
+    for invalid in (
+        [{**eras[0], "end_movie_id": 99}],
+        [eras[0], eras[0]],
+        [{**eras[0], "label": " "}],
+        [{**eras[0], "start_movie_id": 8}],
+    ):
+        assert (
+            client.patch(f"/api/runs/{run_id}/rules", json={"career_eras": invalid}).status_code
+            == 422
+        )
 
 
 @pytest.mark.parametrize("start,status_code", [(1, 422), (2, 201)])
 def test_creation_eras_reference_the_final_number_filtered_track(client, start, status_code):
-    credits = [{**film, "title": "Unnumbered Debut" if film["id"] == 1 else film["title"]} for film in CAREER]
+    credits = [
+        {**film, "title": "Unnumbered Debut" if film["id"] == 1 else film["title"]}
+        for film in CAREER
+    ]
     with respx.mock:
         mock_actor(credits)
-        response = client.post("/api/runs", json={
-            "name": "Numbered career",
-            "game_type": "method_actor",
-            "rules_config": {
-                "actor_id": ACTOR,
-                "modifiers": [{"key": "number_in_title", "params": {}}],
-                "career_eras": [{"start_movie_id": start, "end_movie_id": 3, "label": "Early era"}],
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "Numbered career",
+                "game_type": "method_actor",
+                "rules_config": {
+                    "actor_id": ACTOR,
+                    "modifiers": [{"key": "number_in_title", "params": {}}],
+                    "career_eras": [
+                        {"start_movie_id": start, "end_movie_id": 3, "label": "Early era"}
+                    ],
+                },
             },
-        })
+        )
     assert response.status_code == status_code, response.text
     if status_code == 201:
-        assert 1 not in {film["movie_id"] for film in response.json()["rules_config"]["filmography"]}
+        assert 1 not in {
+            film["movie_id"] for film in response.json()["rules_config"]["filmography"]
+        }
     else:
         assert "on-track span" in response.json()["detail"]
 
@@ -413,13 +472,20 @@ def test_creating_a_run_stores_the_actor_and_the_career_track(client):
     assert track[0]["milestones"] == ["debut"] and track[0]["age"] == 25
     assert track[2]["milestones"] == ["breakout", "prestige_peak", "comeback"]
 
+
 def test_preparation_attaches_first_theatrical_from_tmdb_release_dates(client):
     with respx.mock:
         mock_actor()
-        respx.get(f"{TMDB_BASE}/movie/1/release_dates").mock(return_value=httpx.Response(
-            200, json={"results": [{"release_dates": [release(1, "1985-06-01")]}]}))
-        respx.get(f"{TMDB_BASE}/movie/2/release_dates").mock(return_value=httpx.Response(
-            200, json={"results": [{"release_dates": [release(3, "1990-06-01")]}]}))
+        respx.get(f"{TMDB_BASE}/movie/1/release_dates").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"release_dates": [release(1, "1985-06-01")]}]}
+            )
+        )
+        respx.get(f"{TMDB_BASE}/movie/2/release_dates").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"release_dates": [release(3, "1990-06-01")]}]}
+            )
+        )
         run_id = make_run(client)
     film = detail(client, run_id)["rules_config"]["filmography"][1]
     assert "first_theatrical" in film["milestones"]
@@ -539,7 +605,9 @@ def test_person_search_lists_actors_first(client):
     assert people[0]["known_for"] == ["Y", "Z"] and people[0]["profile_path"] == "/a.jpg"
 
 
-@pytest.mark.parametrize("length,size", [("short", 6), ("feature", 12), ("full", 25), ("endless", 60)])
+@pytest.mark.parametrize(
+    "length,size", [("short", 6), ("feature", 12), ("full", 25), ("endless", 60)]
+)
 def test_marathon_length_caps(length, size):
     credits = [credit(i, 1900 + i, votes=1000 + i) for i in range(1, 81)]
     track = build_career_track(credits, None, TODAY, length=length)
@@ -589,7 +657,9 @@ def test_wrap_rejects_non_endless_marathons_and_other_modes(client):
         mock_actor()
         run_id = make_run(client)
     assert client.post(f"/api/runs/{run_id}/wrap").status_code == 422
-    other = client.post("/api/runs", json={"name": "Graph", "rules_config": {"track_length": "endless"}}).json()["id"]
+    other = client.post(
+        "/api/runs", json={"name": "Graph", "rules_config": {"track_length": "endless"}}
+    ).json()["id"]
     assert client.post(f"/api/runs/{other}/wrap").status_code == 422
     assert client.post("/api/runs/missing/wrap").status_code == 404
 
@@ -602,4 +672,7 @@ def test_order_maps_to_skips_and_length_is_creation_only(client):
     changed = client.patch(f"/api/runs/{run_id}/rules", json={"order": "free"})
     assert changed.status_code == 200, changed.text
     assert changed.json()["rules_config"]["max_skip"] is None
-    assert client.patch(f"/api/runs/{run_id}/rules", json={"track_length": "endless"}).status_code == 422
+    assert (
+        client.patch(f"/api/runs/{run_id}/rules", json={"track_length": "endless"}).status_code
+        == 422
+    )

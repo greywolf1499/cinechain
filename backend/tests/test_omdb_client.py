@@ -15,9 +15,7 @@ OMDB_BASE = "https://www.omdbapi.com/"
 async def test_lookup_by_imdb_id_uses_exact_id(settings):
     with respx.mock:
         route = respx.get(OMDB_BASE).mock(
-            return_value=httpx.Response(
-                200, json={"Response": "True", "imdbRating": "8.7"}
-            )
+            return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8.7"})
         )
         async with httpx.AsyncClient() as client:
             result = await OMDbClient(client, settings).lookup_by_imdb_id("tt0133093")
@@ -46,6 +44,7 @@ async def test_id_lookup_has_the_same_failure_classification(settings, response,
             result = await OMDbClient(client, settings).lookup_by_imdb_id("tt0133093")
     assert result.ratings is None
     assert result.transient is transient
+
 
 @pytest.fixture()
 def settings() -> Settings:

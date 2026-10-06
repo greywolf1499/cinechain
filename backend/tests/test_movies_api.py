@@ -122,11 +122,20 @@ def test_country_list_contracts_preserve_legacy_strings():
         assert movie.model_dump()["origin_countries"] == ["US", "GB"]
         assert movie.model_dump()["origin_country"] == "US, GB"
     step = RunStepPublic(
-        id="step", run_id="run", movie_id=1, step_number=1,
-        logged_by_user_id="user", logged_at=utcnow(), movie_title="Legacy",
+        id="step",
+        run_id="run",
+        movie_id=1,
+        step_number=1,
+        logged_by_user_id="user",
+        logged_at=utcnow(),
+        movie_title="Legacy",
         movie_origin_country="US, GB",
-        movie_poster_path=None, movie_release_year=None, transition_metadata=None,
-        user_notes=None, status="watched", watched_at=None,
+        movie_poster_path=None,
+        movie_release_year=None,
+        transition_metadata=None,
+        user_notes=None,
+        status="watched",
+        watched_at=None,
     )
     assert step.model_dump()["movie_origin_countries"] == ["US", "GB"]
     assert step.model_dump()["movie_origin_country"] == "US, GB"
@@ -138,10 +147,16 @@ def test_refresh_ratings_bypasses_fresh_negative_cache(client):
 
     _register_and_login(client)
     for session in app.dependency_overrides[get_session]():
-        session.add(CachedMovie(
-            tmdb_id=603, title="The Matrix", imdb_id="tt0133093",
-            origin_country="US, GB", overview="", tagline="",
-        ))
+        session.add(
+            CachedMovie(
+                tmdb_id=603,
+                title="The Matrix",
+                imdb_id="tt0133093",
+                origin_country="US, GB",
+                overview="",
+                tagline="",
+            )
+        )
         session.add(CachedMovieRating(movie_id=603))
         session.add(SystemSetting(key="omdb_api_key", value="test"))
         session.commit()

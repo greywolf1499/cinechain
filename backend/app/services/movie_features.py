@@ -55,7 +55,8 @@ TROPE_DESCRIPTIONS = {
 
 
 async def guard_tropes(
-    session: Session, proposals: list[tuple[CachedMovie, list[str]]],
+    session: Session,
+    proposals: list[tuple[CachedMovie, list[str]]],
 ) -> dict[int, list[str]]:
     """Verify overview/concept pairs in one fresh model space, never against stored vectors.
 
@@ -64,12 +65,15 @@ async def guard_tropes(
     """
     verified: dict[int, list[str]] = {}
     for start in range(0, len(proposals), TROPE_VERIFY_BATCH_SIZE):
-        verified.update(await _guard_trope_batch(session, proposals[start:start + TROPE_VERIFY_BATCH_SIZE]))
+        verified.update(
+            await _guard_trope_batch(session, proposals[start : start + TROPE_VERIFY_BATCH_SIZE])
+        )
     return verified
 
 
 async def _guard_trope_batch(
-    session: Session, proposals: list[tuple[CachedMovie, list[str]]],
+    session: Session,
+    proposals: list[tuple[CachedMovie, list[str]]],
 ) -> dict[int, list[str]]:
     accepted: dict[int, list[str]] = {movie.tmdb_id: [] for movie, _ in proposals}
     texts: list[str] = []
@@ -77,11 +81,19 @@ async def _guard_trope_batch(
     for movie, tropes in proposals:
         if not movie.genre_ids or not (movie.overview or "").strip():
             continue
-        candidates = list(dict.fromkeys(
-            tag.strip().lower().replace("_", "-").replace(" ", "-") for tag in tropes if tag.strip()
-        ))[:5]
-        candidates = [tag for tag in candidates if tag not in TROPE_GENRE_REQUIREMENTS
-                      or set(movie.genre_ids) & TROPE_GENRE_REQUIREMENTS[tag]]
+        candidates = list(
+            dict.fromkeys(
+                tag.strip().lower().replace("_", "-").replace(" ", "-")
+                for tag in tropes
+                if tag.strip()
+            )
+        )[:5]
+        candidates = [
+            tag
+            for tag in candidates
+            if tag not in TROPE_GENRE_REQUIREMENTS
+            or set(movie.genre_ids) & TROPE_GENRE_REQUIREMENTS[tag]
+        ]
         if not candidates:
             continue
         overview_index = len(texts)
@@ -93,15 +105,26 @@ async def _guard_trope_batch(
         return accepted
     config = embeddings.load_config(session)
     result = await embeddings.embed_batch(config, texts)
-    if result.fingerprint not in {config.fingerprint, config.local_fingerprint} or len(result.vectors) != len(texts):
-        raise embeddings.EmbeddingUnavailable("Trope guard received an unexpected model fingerprint or batch size")
-    if any(vector.ndim != 1 or vector.size == 0 or not np.all(np.isfinite(vector))
-           or np.linalg.norm(vector) == 0 for vector in result.vectors):
+    if result.fingerprint not in {config.fingerprint, config.local_fingerprint} or len(
+        result.vectors
+    ) != len(texts):
+        raise embeddings.EmbeddingUnavailable(
+            "Trope guard received an unexpected model fingerprint or batch size"
+        )
+    if any(
+        vector.ndim != 1
+        or vector.size == 0
+        or not np.all(np.isfinite(vector))
+        or np.linalg.norm(vector) == 0
+        for vector in result.vectors
+    ):
         raise embeddings.EmbeddingUnavailable("Trope guard received a malformed embedding")
     for movie_id, tag, overview_index, concept_index in checks:
         overview, concept = result.vectors[overview_index], result.vectors[concept_index]
         if overview.shape != concept.shape:
-            raise embeddings.EmbeddingUnavailable("Trope guard received incompatible vector dimensions")
+            raise embeddings.EmbeddingUnavailable(
+                "Trope guard received incompatible vector dimensions"
+            )
         confidence = embeddings.normalize_similarity(
             embeddings.cosine_similarity(overview, concept), result.fingerprint
         )
@@ -231,8 +254,11 @@ async def ensure_tropes(session: Session, movies: Iterable[CachedMovie]) -> dict
                 logger.warning("Trope extraction unavailable: %s", exc)
                 return movie, None
 
-    proposals = [(movie, tropes) for movie, tropes in await asyncio.gather(*(extract(m) for m in pending))
-                 if tropes is not None]
+    proposals = [
+        (movie, tropes)
+        for movie, tropes in await asyncio.gather(*(extract(m) for m in pending))
+        if tropes is not None
+    ]
     verified = {movie.tmdb_id: [] for movie in pending}
     try:
         verified.update(await guard_tropes(session, proposals))

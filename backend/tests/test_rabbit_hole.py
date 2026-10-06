@@ -95,6 +95,7 @@ def put_at_depth(db_engine, run_id, depth):
 def rabbit_run(client, **rules):
     async def legacy_prepare(self, config, user_id):
         return config
+
     # These historical assertions intentionally exercise stored v1 rules, not a new deck.
     with patch.object(RabbitHoleEngine, "prepare_run", legacy_prepare):
         return create_run(client, "rabbit_hole", **rules)
@@ -739,9 +740,14 @@ def procedural_run(client, **rules):
 def procedural_world(world):
     with Session(world) as session:
         for index in range(40):
-            add_film(session, 1000 + index, year=1960 + index * 2,
-                     lang="fr" if index % 2 else "en", runtime=75 + index * 3,
-                     vote=4 + index % 5)
+            add_film(
+                session,
+                1000 + index,
+                year=1960 + index * 2,
+                lang="fr" if index % 2 else "en",
+                runtime=75 + index * 3,
+                vote=4 + index % 5,
+            )
         session.commit()
     return world
 
@@ -754,17 +760,36 @@ def test_empty_cache_never_deals_unproven_rules(client):
 
 def test_seed_hydrates_evidence_before_procedural_preparation(client, db_engine):
     with respx.mock:
-        respx.get(f"{TMDB_BASE}/movie/90").mock(return_value=httpx.Response(200, json={
-            "id": 90, "title": "Cold-cache seed", "release_date": "1990-01-01",
-            "status": "Released", "runtime": 120, "original_language": "fr",
-            "origin_country": ["FR"], "overview": "Seed evidence", "genres": [],
-            "popularity": 10, "vote_average": 5, "vote_count": 100,
-        }))
+        respx.get(f"{TMDB_BASE}/movie/90").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 90,
+                    "title": "Cold-cache seed",
+                    "release_date": "1990-01-01",
+                    "status": "Released",
+                    "runtime": 120,
+                    "original_language": "fr",
+                    "origin_country": ["FR"],
+                    "overview": "Seed evidence",
+                    "genres": [],
+                    "popularity": 10,
+                    "vote_average": 5,
+                    "vote_count": 100,
+                },
+            )
+        )
         respx.get(f"{TMDB_BASE}/movie/90/credits").mock(
-            return_value=httpx.Response(200, json={"id": 90, "cast": [], "crew": []}))
-        response = client.post("/api/runs", json={
-            "name": "Seed evidence", "game_type": "rabbit_hole", "seed_movie_id": 90,
-        })
+            return_value=httpx.Response(200, json={"id": 90, "cast": [], "crew": []})
+        )
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "Seed evidence",
+                "game_type": "rabbit_hole",
+                "seed_movie_id": 90,
+            },
+        )
     assert response.status_code == 201, response.text
     detail = run_detail(client, response.json()["id"])
     assert detail["rules_config"]["rh_rules_version"] == 2
@@ -781,7 +806,9 @@ def test_new_runs_deal_versioned_feasible_decks(client, procedural_world, monkey
     assert first["tier_deck"] == second["tier_deck"]
     assert first["tier_deck"][0]["name"] == "Freefall"
     assert 5 <= len(first["tier_deck"]) <= 7
-    assert [entry["start_depth"] for entry in first["tier_deck"]] == list(range(0, len(first["tier_deck"]) * 5, 5))
+    assert [entry["start_depth"] for entry in first["tier_deck"]] == list(
+        range(0, len(first["tier_deck"]) * 5, 5)
+    )
     difficulties = [entry["difficulty"] for entry in first["tier_deck"][1:]]
     assert difficulties == sorted(difficulties)
     with Session(procedural_world) as session:
@@ -797,21 +824,33 @@ def test_procedural_deck_respects_mode_runtime_bounds(client, procedural_world):
         ids = [movie_id for movie_id, row in evidence.movies.items() if row.runtime >= 150]
         for tier in rabbit_hole.tiers_of(rules)[1:]:
             assert feasibility.pass_rate(session, rabbit_hole.tier_tests(tier), ids) >= 0.01
-            assert not feasibility.contradicts(rabbit_hole.tier_tests(tier), {"runtime": (150, None)})
+            assert not feasibility.contradicts(
+                rabbit_hole.tier_tests(tier), {"runtime": (150, None)}
+            )
 
 
 def test_exact_three_percent_draw_and_one_percent_curse_thresholds(db_engine, monkeypatch):
-    tests = [predicate("year_lt", value=2000), predicate("runtime_lt", value=100),
-             predicate("non_english"), predicate("rating_lt", value=6)]
+    tests = [
+        predicate("year_lt", value=2000),
+        predicate("runtime_lt", value=100),
+        predicate("non_english"),
+        predicate("rating_lt", value=6),
+    ]
     monkeypatch.setattr(rabbit_hole, "tier_options", lambda: tests)
     with Session(db_engine) as session:
         for index in range(100):
-            session.add(CachedMovie(tmdb_id=index + 1, title=str(index),
-                                    release_date="1990-01-01" if index < 3 else "2020-01-01",
-                                    runtime=80 if index in (0, 3, 4) else 120,
-                                    original_language="fr" if index in (0, 5, 6) else "en",
-                                    vote_average=5 if index in (0, 7, 8) else 8, vote_count=100,
-                                    popularity=10))
+            session.add(
+                CachedMovie(
+                    tmdb_id=index + 1,
+                    title=str(index),
+                    release_date="1990-01-01" if index < 3 else "2020-01-01",
+                    runtime=80 if index in (0, 3, 4) else 120,
+                    original_language="fr" if index in (0, 5, 6) else "en",
+                    vote_average=5 if index in (0, 7, 8) else 8,
+                    vote_count=100,
+                    popularity=10,
+                )
+            )
         session.commit()
         for test in tests:
             assert feasibility.cache_pass_rate(session, test) == 0.03
@@ -819,8 +858,12 @@ def test_exact_three_percent_draw_and_one_percent_curse_thresholds(db_engine, mo
         assert len(deck) == 5
         assert deck[3]["curses"] and deck[4]["curses"]
         for entry in deck[3:]:
-            combined = rabbit_hole.TierPredicates((rabbit_hole.test_from_data(entry),
-                        *(rabbit_hole.test_from_data(curse) for curse in entry["curses"])))
+            combined = rabbit_hole.TierPredicates(
+                (
+                    rabbit_hole.test_from_data(entry),
+                    *(rabbit_hole.test_from_data(curse) for curse in entry["curses"]),
+                )
+            )
             assert feasibility.cache_pass_rate(session, combined) == 0.01
         row = session.get(CachedMovie, 1)
         row.runtime = 120
@@ -839,8 +882,12 @@ def test_curses_stack_only_when_combined_rules_are_feasible(procedural_world):
             deck = rabbit_hole.draw_deck(session, seed, curses=True)
             for entry in deck[1:]:
                 assert not entry["curses"] if entry["number"] < 4 else True
-                combined = rabbit_hole.TierPredicates((rabbit_hole.test_from_data(entry),
-                            *(rabbit_hole.test_from_data(curse) for curse in entry["curses"])))
+                combined = rabbit_hole.TierPredicates(
+                    (
+                        rabbit_hole.test_from_data(entry),
+                        *(rabbit_hole.test_from_data(curse) for curse in entry["curses"]),
+                    )
+                )
                 assert feasibility.cache_pass_rate(session, combined) >= 0.01
                 stacked |= len(entry["curses"]) > 1
                 dropped |= entry["number"] >= 4 and not entry["curses"]
@@ -849,16 +896,25 @@ def test_curses_stack_only_when_combined_rules_are_feasible(procedural_world):
 
 @pytest.mark.parametrize("kind", ["life", "reroll", "skip_curse"])
 def test_relic_boundary_award_and_delete_restore_exact_resources(client, procedural_world, kind):
-    seed = next(seed for seed in range(100)
-                if random.Random(f"{seed}:relic:5").choice(["life", "reroll", "skip_curse"]) == kind)
+    seed = next(
+        seed
+        for seed in range(100)
+        if random.Random(f"{seed}:relic:5").choice(["life", "reroll", "skip_curse"]) == kind
+    )
     run_id = procedural_run(client, curses=True)
     update_rules(procedural_world, run_id, rh_seed=seed, lives_remaining=2)
     put_at_depth(procedural_world, run_id, 4)
     before = run_detail(client, run_id)["rules_config"]
-    response = log(client, run_id, 1001, transition_metadata={
-        "relic_awarded": {"kind": "life", "amount": 99},
-        "rh_resources_before": {"lives_remaining": 99}, "life_lost": True,
-    })
+    response = log(
+        client,
+        run_id,
+        1001,
+        transition_metadata={
+            "relic_awarded": {"kind": "life", "amount": 99},
+            "rh_resources_before": {"lives_remaining": 99},
+            "life_lost": True,
+        },
+    )
     assert response.status_code == 201, response.text
     step = response.json()
     assert step["transition_metadata"]["relic_awarded"] == {"kind": kind, "amount": 1, "depth": 5}
@@ -868,14 +924,21 @@ def test_relic_boundary_award_and_delete_restore_exact_resources(client, procedu
     assert client.delete(f"/api/runs/{run_id}/steps/{step['id']}").status_code == 204
     restored = run_detail(client, run_id)["rules_config"]
     assert {k: restored[k] for k in ("lives_remaining", "relics", "reroll_tokens")} == {
-        k: before[k] for k in ("lives_remaining", "relics", "reroll_tokens")}
+        k: before[k] for k in ("lives_remaining", "relics", "reroll_tokens")
+    }
     again = log(client, run_id, 1001).json()
-    assert again["transition_metadata"]["relic_awarded"] == step["transition_metadata"]["relic_awarded"]
+    assert (
+        again["transition_metadata"]["relic_awarded"]
+        == step["transition_metadata"]["relic_awarded"]
+    )
 
 
 def test_capped_life_relic_and_forced_step_undo(client, procedural_world):
-    seed = next(seed for seed in range(100)
-                if random.Random(f"{seed}:relic:5").choice(["life", "reroll"]) == "life")
+    seed = next(
+        seed
+        for seed in range(100)
+        if random.Random(f"{seed}:relic:5").choice(["life", "reroll"]) == "life"
+    )
     run_id = procedural_run(client)
     update_rules(procedural_world, run_id, rh_seed=seed)
     put_at_depth(procedural_world, run_id, 4)
@@ -922,8 +985,14 @@ def test_daily_seed_is_utc_stable_and_creation_only(client, procedural_world, mo
 
 
 def test_clients_cannot_forge_or_patch_procedural_state(client, procedural_world):
-    fake = {"rh_seed": 1, "rh_rules_version": 1, "tier_deck": [{"number": 99}],
-            "relics": {"skip_curse": 999}, "reroll_tokens": 999, "curse_skip": 0}
+    fake = {
+        "rh_seed": 1,
+        "rh_rules_version": 1,
+        "tier_deck": [{"number": 99}],
+        "relics": {"skip_curse": 999},
+        "reroll_tokens": 999,
+        "curse_skip": 0,
+    }
     run_id = procedural_run(client, **fake)
     before = run_detail(client, run_id)["rules_config"]
     assert before["rh_rules_version"] == 2 and before["tier_deck"][0]["number"] == 1
@@ -934,21 +1003,28 @@ def test_clients_cannot_forge_or_patch_procedural_state(client, procedural_world
     assert response.json()["rules_config"] == before
 
 
-def test_seeded_reroll_prefers_tokens_and_is_reversible_with_the_hop(client, procedural_world, monkeypatch):
+def test_seeded_reroll_prefers_tokens_and_is_reversible_with_the_hop(
+    client, procedural_world, monkeypatch
+):
     monkeypatch.setattr(rabbit_hole.secrets, "randbits", lambda bits: 987)
     runs = [procedural_run(client) for _ in range(2)]
     for run_id in runs:
         put_at_depth(procedural_world, run_id, 5)
         update_rules(procedural_world, run_id, lives_remaining=1, reroll_tokens=1)
     results = [client.post(f"/api/runs/{run_id}/rabbit-hole/reroll") for run_id in runs]
-    assert all(response.status_code == 200 for response in results), [response.text for response in results]
+    assert all(response.status_code == 200 for response in results), [
+        response.text for response in results
+    ]
     rules = results[0].json()["rules_config"]
     assert rules["tier_override"] == results[1].json()["rules_config"]["tier_override"]
     assert rules["lives_remaining"] == 1 and rules["reroll_tokens"] == 0
     tier = tier_for_depth(5, rules)
     with Session(procedural_world) as session:
-        valid_id = next(movie_id for movie_id, row in feasibility.evidence_for(session).movies.items()
-                        if movie_id != ANCHOR and rabbit_hole.compliance(session, tier, row) is True)
+        valid_id = next(
+            movie_id
+            for movie_id, row in feasibility.evidence_for(session).movies.items()
+            if movie_id != ANCHOR and rabbit_hole.compliance(session, tier, row) is True
+        )
     step = log(client, runs[0], valid_id).json()
     assert "tier_override" not in run_detail(client, runs[0])["rules_config"]
     assert client.delete(f"/api/runs/{runs[0]}/steps/{step['id']}").status_code == 204
@@ -962,8 +1038,10 @@ def test_empty_frontier_reroll_spends_nothing(client, procedural_world, monkeypa
     run_id = procedural_run(client)
     put_at_depth(procedural_world, run_id, 5)
     update_rules(procedural_world, run_id, reroll_tokens=1)
+
     async def no_candidates(self, *args, **kwargs):
         return []
+
     monkeypatch.setattr(RabbitHoleEngine, "discover_with_modifiers", no_candidates)
     before = deepcopy(run_detail(client, run_id)["rules_config"])
     response = client.post(f"/api/runs/{run_id}/rabbit-hole/reroll")
@@ -973,26 +1051,36 @@ def test_empty_frontier_reroll_spends_nothing(client, procedural_world, monkeypa
 
 
 def test_reroll_keeps_curses_and_excludes_a_globally_feasible_frontier_dead_end(
-    client, procedural_world, monkeypatch,
+    client,
+    procedural_world,
+    monkeypatch,
 ):
     run_id = procedural_run(client, curses=True)
     rules = run_detail(client, run_id)["rules_config"]
     rules["tier_deck"][3] = {
         **rabbit_hole.predicate_data(predicate("runtime_lt", value=100)),
-        "number": 4, "start_depth": 15,
+        "number": 4,
+        "start_depth": 15,
         "curses": [rabbit_hole.predicate_data(predicate("non_english"))],
     }
     update_rules(procedural_world, run_id, tier_deck=rules["tier_deck"], rh_seed=222)
     put_at_depth(procedural_world, run_id, 15)
+
     # The lone reachable film is French, 78 minutes and from 1962.
     async def reachable(self, *args, **kwargs):
         from app.schemas.discovery import DiscoveryCandidate
+
         return [DiscoveryCandidate(movie_id=1001, title="Film 1001")]
+
     monkeypatch.setattr(RabbitHoleEngine, "discover_with_modifiers", reachable)
-    monkeypatch.setattr(rabbit_hole, "tier_options", lambda: [
-        predicate("runtime_ge", value=150),  # Many cached films pass, but not this frontier.
-        predicate("year_lt", value=1980),
-    ])
+    monkeypatch.setattr(
+        rabbit_hole,
+        "tier_options",
+        lambda: [
+            predicate("runtime_ge", value=150),  # Many cached films pass, but not this frontier.
+            predicate("year_lt", value=1980),
+        ],
+    )
     response = client.post(f"/api/runs/{run_id}/rabbit-hole/reroll")
     assert response.status_code == 200, response.text
     override = response.json()["rules_config"]["tier_override"]
@@ -1009,9 +1097,13 @@ def test_v2_pool_and_validation_use_the_dealt_predicates(client, procedural_worl
     tier = tier_for_depth(depth, rules)
     pool = discover(client, run_id)
     with Session(procedural_world) as session:
-        expected = {movie_id for movie_id, row in feasibility.evidence_for(session).movies.items()
-                    if movie_id != ANCHOR and is_reality_eligible(row)
-                    and rabbit_hole.compliance(session, tier, row) is True}
+        expected = {
+            movie_id
+            for movie_id, row in feasibility.evidence_for(session).movies.items()
+            if movie_id != ANCHOR
+            and is_reality_eligible(row)
+            and rabbit_hole.compliance(session, tier, row) is True
+        }
         assert set(pool) == expected
         for film_id in (1000, 1001, 1034):
             assert validate(client, run_id, film_id)["valid"] is (
@@ -1028,7 +1120,8 @@ def test_skip_curse_is_explicit_one_hop_and_keeps_other_rules(client, procedural
     # Two compatible constraints, but this film breaks only the newest curse.
     rules["tier_deck"][3] = {
         **rabbit_hole.predicate_data(predicate("runtime_lt", value=100)),
-        "number": 4, "start_depth": 15,
+        "number": 4,
+        "start_depth": 15,
         "curses": [rabbit_hole.predicate_data(predicate("non_english"))],
     }
     update_rules(procedural_world, run_id, tier_deck=rules["tier_deck"], relics={"skip_curse": 1})
@@ -1039,7 +1132,9 @@ def test_skip_curse_is_explicit_one_hop_and_keeps_other_rules(client, procedural
     assert after["relics"] == {"skip_curse": 0} and after["curse_skip"] == 15
     assert client.post(f"/api/runs/{run_id}/rabbit-hole/skip-curse").status_code == 409
     assert validate(client, run_id, 1000)["valid"] is True
-    assert validate(client, run_id, 1010)["valid"] is False  # The primary runtime rule still applies.
+    assert (
+        validate(client, run_id, 1010)["valid"] is False
+    )  # The primary runtime rule still applies.
     step = log(client, run_id, 1000).json()
     assert "curse_skip" not in run_detail(client, run_id)["rules_config"]
     assert client.delete(f"/api/runs/{run_id}/steps/{step['id']}").status_code == 204
@@ -1047,9 +1142,14 @@ def test_skip_curse_is_explicit_one_hop_and_keeps_other_rules(client, procedural
     assert tier_state(16, run_detail(client, run_id)["rules_config"]).curses
 
 
-def test_deleting_boundary_after_spending_its_reward_cannot_keep_the_token(client, procedural_world):
-    seed = next(seed for seed in range(100)
-                if random.Random(f"{seed}:relic:5").choice(["life", "reroll"]) == "reroll")
+def test_deleting_boundary_after_spending_its_reward_cannot_keep_the_token(
+    client, procedural_world
+):
+    seed = next(
+        seed
+        for seed in range(100)
+        if random.Random(f"{seed}:relic:5").choice(["life", "reroll"]) == "reroll"
+    )
     run_id = procedural_run(client)
     update_rules(procedural_world, run_id, rh_seed=seed)
     put_at_depth(procedural_world, run_id, 4)

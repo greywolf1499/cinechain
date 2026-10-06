@@ -195,13 +195,17 @@ class AestheticGradientEngine(FeatureEngine):
         ["Choose a film with a nearby dominant poster colour; shared cast is optional."],
         ["Colour distance must be at most {color_threshold}. {win_goal}"],
         ["A measured colour gap above the threshold blocks the hop.", "{fail_goal}"],
-        ["Use intermediate colours instead of jumping across the palette.",
-         "Inspect the swatches, not just the artwork's subject."], ["seed"],
+        [
+            "Use intermediate colours instead of jumping across the palette.",
+            "Inspect the swatches, not just the artwork's subject.",
+        ],
+        ["seed"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict:
         return {**super().rulebook_values(rules), "color_threshold": COLOR_DISTANCE_THRESHOLD}
+
     display_name = "Aesthetic Gradient"
     description = (
         "Fade from poster to poster: every film's dominant colour must be close to the last "
@@ -315,18 +319,27 @@ class SemanticTropeEngine(FeatureEngine):
     tags: ClassVar[list[str]] = ["Any film", "Plot similarity"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Connect films by plot similarity or a shared extracted trope.",
-        ["Pick a film sharing a trope or exceeding {similarity_threshold}% normalized plot similarity."],
-        ["{win_goal}"], ["A measured weak match with no shared trope blocks the hop.", "{fail_goal}"],
-        ["Broad themes give more onward routes than a single narrow premise.",
-         "Shared tags must pass genre compatibility and at least {trope_threshold}% normalized overview-to-concept confidence.",
-         "Inspect the shared trope and synopsis rather than treating model tags as certainty."], ["seed"],
+        [
+            "Pick a film sharing a trope or exceeding {similarity_threshold}% normalized plot similarity."
+        ],
+        ["{win_goal}"],
+        ["A measured weak match with no shared trope blocks the hop.", "{fail_goal}"],
+        [
+            "Broad themes give more onward routes than a single narrow premise.",
+            "Shared tags must pass genre compatibility and at least {trope_threshold}% normalized overview-to-concept confidence.",
+            "Inspect the shared trope and synopsis rather than treating model tags as certainty.",
+        ],
+        ["seed"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict:
-        return {**super().rulebook_values(rules),
-                "similarity_threshold": _percent(SEMANTIC_SIMILARITY_THRESHOLD),
-                "trope_threshold": _percent(movie_features.TROPE_CONFIDENCE_THRESHOLD)}
+        return {
+            **super().rulebook_values(rules),
+            "similarity_threshold": _percent(SEMANTIC_SIMILARITY_THRESHOLD),
+            "trope_threshold": _percent(movie_features.TROPE_CONFIDENCE_THRESHOLD),
+        }
+
     display_name = "Semantic Trope Web"
     description = (
         "Follow the plot: every film must be a close semantic match to the last, judged by a "
@@ -377,9 +390,13 @@ class SemanticTropeEngine(FeatureEngine):
         if not hasattr(self, "_verified_tropes"):
             self._verified_tropes: dict[int, list[str]] = {}
             self._trope_sources: dict[int, tuple] = {}
+
         def source(movie: CachedMovie) -> tuple:
             return movie.overview, tuple(movie.genre_ids or []), tuple(movie.extracted_tropes or [])
-        pending = [movie for movie in movies if self._trope_sources.get(movie.tmdb_id) != source(movie)]
+
+        pending = [
+            movie for movie in movies if self._trope_sources.get(movie.tmdb_id) != source(movie)
+        ]
         verified = await movie_features.ensure_tropes(self.session, pending)
         self._verified_tropes.update(verified)
         self._trope_sources.update({movie.tmdb_id: source(movie) for movie in pending})
@@ -500,8 +517,10 @@ class SemanticTropeEngine(FeatureEngine):
         # Films sharing one of the frontier's tropes qualify even without a close plot match.
         if frontier.extracted_tropes:
             tagged = self.session.exec(
-                select(CachedMovie).where(col(CachedMovie.extracted_tropes).is_not(None))
-                .order_by(col(CachedMovie.popularity).desc()).limit(POOL_FEATURE_BUDGET)
+                select(CachedMovie)
+                .where(col(CachedMovie.extracted_tropes).is_not(None))
+                .order_by(col(CachedMovie.popularity).desc())
+                .limit(POOL_FEATURE_BUDGET)
             ).all()
             await self.prepare_tropes(tagged)
             pool.update({r.tmdb_id: r for r in tagged if self._shared_trope(frontier, r)})

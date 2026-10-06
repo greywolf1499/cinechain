@@ -76,19 +76,27 @@ class MeetInTheMiddleEngine(CineChainEngine):
     tags: ClassVar[list[str]] = ["Shared cast", "Co-op", "Two seeds"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Connect two seed films until the chains collide.",
-        ["Choose which end to extend and link a film to that frontier.",
-         "Use a hint to inspect the route between the frontiers; {hints_remaining} hints remain."],
+        [
+            "Choose which end to extend and link a film to that frontier.",
+            "Use a hint to inspect the route between the frontiers; {hints_remaining} hints remain.",
+        ],
         ["A valid film that connects both ends wins immediately.", "{win_goal}"],
         ["{fail_goal}"],
-        ["Work towards actors appearing near both frontiers, not just your own.",
-         "Save hints for when the gap is hard to estimate."], ["seed", "wildcard"],
+        [
+            "Work towards actors appearing near both frontiers, not just your own.",
+            "Save hints for when the gap is hard to estimate.",
+        ],
+        ["seed", "wildcard"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict:
         config = rules or {}
-        return {**super().rulebook_values(rules),
-                "hints_remaining": config.get("tunnel_hints_remaining", config.get("tunnel_hints", 2))}
+        return {
+            **super().rulebook_values(rules),
+            "hints_remaining": config.get("tunnel_hints_remaining", config.get("tunnel_hints", 2)),
+        }
+
     seed_policy = "pair"
     game_type = MEET_IN_THE_MIDDLE
     display_name = "Meet in the Middle"

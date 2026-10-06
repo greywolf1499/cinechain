@@ -48,28 +48,32 @@ RULEBOOK = {
         ["Each next film must be released {chrono_word} the previous film."],
         ["The release-year direction applies on every hop."],
         ["Equal, missing or wrong-direction years block a hop; wildcards cannot bypass it."],
-        ["Use small year changes to keep your remaining catalogue broad."], ["wildcard"],
+        ["Use small year changes to keep your remaining catalogue broad."],
+        ["wildcard"],
     ),
     STAIRCASE_KEY: RuleSection(
         "Build a runtime staircase.",
         ["Each next film must be {runtime_word} than the previous film."],
         ["Known runtimes must move strictly in the configured direction."],
         ["Equal or wrong-direction known runtimes are blocked; wildcards cannot bypass it."],
-        ["Leave runtime headroom instead of jumping straight to an extreme."], ["wildcard"],
+        ["Leave runtime headroom instead of jumping straight to an extreme."],
+        ["wildcard"],
     ),
     COOLDOWN_KEY: RuleSection(
         "Avoid recently visited countries.",
         ["Do not reuse a primary country from the last {country_cooldown} logged films."],
         ["Each new film rolls the country window forward; unknown countries do not block."],
         ["A country in the cooldown window is blocked; wildcards cannot bypass it."],
-        ["Keep more than two countries in your route so you do not yo-yo into a lockout."], ["wildcard"],
+        ["Keep more than two countries in your route so you do not yo-yo into a lockout."],
+        ["wildcard"],
     ),
     CAST_LINK_KEY: RuleSection(
         "Combine this mode's rule with shared cast links.",
         ["Also connect each film by a shared credited actor or an eligible same-character hop."],
         ["Both the primary mode and the cast link are checked."],
         ["A wildcard can override a soft cast-link violation, but not a hard mode rule."],
-        ["Choose connectors satisfying both restrictions instead of planning two separate routes."], ["wildcard"],
+        ["Choose connectors satisfying both restrictions instead of planning two separate routes."],
+        ["wildcard"],
     ),
 }
 
@@ -90,8 +94,11 @@ def merge_modifiers(defaults: dict[str, Any], rules: dict | None) -> dict[str, A
         from app.engines.modifier_registry import registry
 
         values = registry()[key].params.model_validate(params).model_dump()
-        active[key] = values.get("steps", values.get("enabled", values.get("direction", values))) \
-            if key in (*PAIR_MODIFIER_KEYS, CAST_LINK_KEY) else values
+        active[key] = (
+            values.get("steps", values.get("enabled", values.get("direction", values)))
+            if key in (*PAIR_MODIFIER_KEYS, CAST_LINK_KEY)
+            else values
+        )
     return {
         key: value
         for key, value in active.items()
@@ -113,8 +120,11 @@ def modifier_problems(rules: dict | None) -> list[str]:
         entries = []
     seen = set()
     for entry in entries:
-        if (not isinstance(entry, dict) or not isinstance(entry.get("key"), str)
-                or entry["key"] not in registry()):
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("key"), str)
+            or entry["key"] not in registry()
+        ):
             problems.append("Unknown modifier key")
             continue
         key = entry["key"]
@@ -144,11 +154,16 @@ def modifiers_requested(rules: dict | None) -> list[str]:
     entries = (rules or {}).get("modifiers") or []
     if not isinstance(entries, list):
         entries = []
-    return list(dict.fromkeys(
-        [key for key in (*PAIR_MODIFIER_KEYS, CAST_LINK_KEY) if (rules or {}).get(key)]
-        + [entry["key"] for entry in entries
-           if isinstance(entry, dict) and isinstance(entry.get("key"), str)]
-    ))
+    return list(
+        dict.fromkeys(
+            [key for key in (*PAIR_MODIFIER_KEYS, CAST_LINK_KEY) if (rules or {}).get(key)]
+            + [
+                entry["key"]
+                for entry in entries
+                if isinstance(entry, dict) and isinstance(entry.get("key"), str)
+            ]
+        )
+    )
 
 
 def primary_country(movie: CachedMovie) -> str | None:
@@ -290,5 +305,8 @@ def legacy_modifier_notes(active: dict[str, Any], tail: CachedMovie | None) -> l
 def modifier_notes(active: dict[str, Any], tail: CachedMovie | None) -> list[str]:
     from app.engines.modifier_registry import contexts
 
-    return [progress["label"] for spec, ctx in contexts(active, earlier=tail)
-            if (progress := spec.progress(ctx)) is not None]
+    return [
+        progress["label"]
+        for spec, ctx in contexts(active, earlier=tail)
+        if (progress := spec.progress(ctx)) is not None
+    ]

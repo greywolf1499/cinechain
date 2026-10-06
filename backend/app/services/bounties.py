@@ -22,12 +22,18 @@ from app.engines.rulebook import RuleSection
 
 RULEBOOK = RuleSection(
     "Earn rewards by completing film side quests.",
-    ["Match a film to an active bounty while obeying your mode's rules.",
-     "Discard one quest for free per run; impossible quests expire and are replaced for free."],
-    ["At most one bounty completes per logged step. Reward: {bounty_reward}; a feasible quest replaces it when available."],
+    [
+        "Match a film to an active bounty while obeying your mode's rules.",
+        "Discard one quest for free per run; impossible quests expire and are replaced for free.",
+    ],
+    [
+        "At most one bounty completes per logged step. Reward: {bounty_reward}; a feasible quest replaces it when available."
+    ],
     ["A bounty does not waive the main mode's restrictions."],
-    ["Choose a film satisfying both a bounty and a useful onward route.",
-     "A rewarded wildcard only buys soft violations; hard-only modes still keep their restrictions."],
+    [
+        "Choose a film satisfying both a bounty and a useful onward route.",
+        "A rewarded wildcard only buys soft violations; hard-only modes still keep their restrictions.",
+    ],
     ["bounty", "wildcard", "life", "hint", "star"],
 )
 
@@ -93,15 +99,29 @@ BOUNTIES: dict[str, Bounty] = {
     b.id: b
     for b in (
         Bounty(
-            "short_king", "Short King", "⏱️", f"Runtime under {SHORT_RUNTIME} minutes", _short_king,
+            "short_king",
+            "Short King",
+            "⏱️",
+            f"Runtime under {SHORT_RUNTIME} minutes",
+            _short_king,
             predicate=predicate("runtime_lt", value=SHORT_RUNTIME),
         ),
         Bounty(
-            "time_capsule", "Time Capsule", "📼", f"Released before {CAPSULE_YEAR}", _time_capsule,
+            "time_capsule",
+            "Time Capsule",
+            "📼",
+            f"Released before {CAPSULE_YEAR}",
+            _time_capsule,
             predicate=predicate("year_lt", value=CAPSULE_YEAR),
         ),
-        Bounty("hidden_gem", "Hidden Gem", "💎", "Obscure: TMDB popularity under 12", _hidden_gem,
-               predicate=predicate("popularity_lt", value=HIDDEN_GEM_POPULARITY)),
+        Bounty(
+            "hidden_gem",
+            "Hidden Gem",
+            "💎",
+            "Obscure: TMDB popularity under 12",
+            _hidden_gem,
+            predicate=predicate("popularity_lt", value=HIDDEN_GEM_POPULARITY),
+        ),
         Bounty(
             "foreign_horizon",
             "Foreign Horizon",
@@ -148,7 +168,9 @@ def active_bounties(rules: dict | None) -> list[str]:
 
 
 def draw_replacement(
-    active: list[str], completed: list[str], rng: random.Random,
+    active: list[str],
+    completed: list[str],
+    rng: random.Random,
     feasible: Callable[[str], bool] | None = None,
 ) -> str | None:
     """A bounty not on the board: from the never-completed ones first, else any other."""
@@ -159,7 +181,8 @@ def draw_replacement(
 
 
 def prepare_board(
-    rules: dict, rng: random.Random | None = None,
+    rules: dict,
+    rng: random.Random | None = None,
     feasible: Callable[[str], bool] | None = None,
 ) -> dict:
     """Start with up to three feasible, nontrivial quests and one free discard."""
@@ -233,10 +256,15 @@ async def evaluate(
         custom = await _try_generate(session, rules, feasible, context)
         if custom is not None:
             return BountyAward(done, custom["id"], custom)
-    return BountyAward(done, draw_replacement(
-        remaining, completed, rng,
-        (lambda bounty_id: feasible(BOUNTIES[bounty_id])) if feasible else None,
-    ))
+    return BountyAward(
+        done,
+        draw_replacement(
+            remaining,
+            completed,
+            rng,
+            (lambda bounty_id: feasible(BOUNTIES[bounty_id])) if feasible else None,
+        ),
+    )
 
 
 async def _directors_with_gender(
@@ -443,8 +471,12 @@ class CustomPredicate:
         results: list[bool | None] = []
         for condition in self.conditions:
             kind = condition["type"]
-            value = {"runtime": facts.runtime, "year": facts.year,
-                     "genre": facts.genre_ids, "keyword": facts.text}[kind]
+            value = {
+                "runtime": facts.runtime,
+                "year": facts.year,
+                "genre": facts.genre_ids,
+                "keyword": facts.text,
+            }[kind]
             results.append(_holds(condition, facts) if value else None)
         return False if False in results else None if None in results else True
 
@@ -461,7 +493,9 @@ def custom_bounty(definition: dict) -> Bounty | None:
         description=str(definition.get("description") or describe_rule(rule)),
         check=lambda facts: all(_holds(c, facts) for c in rule),
         ai=True,
-        predicate=CustomPredicate(definition["id"], str(definition.get("title", "AI Bounty")), "✨", rule),
+        predicate=CustomPredicate(
+            definition["id"], str(definition.get("title", "AI Bounty")), "✨", rule
+        ),
     )
 
 
@@ -515,14 +549,19 @@ def parse_custom_bounty(text: str, taken_titles: list[str] | None = None) -> dic
 
 
 async def generate_custom_bounty(
-    config: llm.LlmConfig, taken_titles: list[str] | None = None,
-    feasible: Callable[[Bounty], bool] | None = None, context: str = "",
+    config: llm.LlmConfig,
+    taken_titles: list[str] | None = None,
+    feasible: Callable[[Bounty], bool] | None = None,
+    context: str = "",
 ) -> dict:
     """Asks the model for a new bounty (one retry). Raises `LlmUnavailable` if it can't produce one."""
     avoid = f" Do not reuse these titles: {', '.join(taken_titles)}." if taken_titles else ""
     for _ in range(2):
         text = await llm.generate(
-            config, BOUNTY_SYSTEM, f"Invent a new bounty.{avoid}\nMode context: {context}", max_tokens=260
+            config,
+            BOUNTY_SYSTEM,
+            f"Invent a new bounty.{avoid}\nMode context: {context}",
+            max_tokens=260,
         )
         bounty = parse_custom_bounty(text, taken_titles)
         runnable = custom_bounty(bounty) if bounty else None
@@ -538,8 +577,10 @@ def _taken_titles(rules: dict | None) -> list[str]:
 
 
 async def _try_generate(
-    session: Session, rules: dict | None,
-    feasible: Callable[[Bounty], bool] | None = None, context: str = "",
+    session: Session,
+    rules: dict | None,
+    feasible: Callable[[Bounty], bool] | None = None,
+    context: str = "",
 ) -> dict | None:
     config = llm.load_config(session)
     if not config.enabled:
@@ -557,8 +598,10 @@ class BountyError(Exception):
 
 
 async def roll_custom(
-    session: Session, rules: dict | None,
-    feasible: Callable[[Bounty], bool] | None = None, context: str = "",
+    session: Session,
+    rules: dict | None,
+    feasible: Callable[[Bounty], bool] | None = None,
+    context: str = "",
 ) -> dict:
     """The rules after the player's "✨ Roll Custom Bounty": the oldest bounty on the board is
     swapped for a freshly generated AI one (it returns to the pool, uncompleted)."""
@@ -577,14 +620,23 @@ async def roll_custom(
     try:
         custom = await generate_custom_bounty(config, _taken_titles(rules), feasible, context)
     except llm.LlmUnavailable as exc:
-        replacement = draw_replacement(
-            active, rules.get(COMPLETED_KEY) or [], random.Random(),
-            (lambda bounty_id: feasible(BOUNTIES[bounty_id])) if feasible else None,
-        ) if feasible else None
+        replacement = (
+            draw_replacement(
+                active,
+                rules.get(COMPLETED_KEY) or [],
+                random.Random(),
+                (lambda bounty_id: feasible(BOUNTIES[bounty_id])) if feasible else None,
+            )
+            if feasible
+            else None
+        )
         if replacement is None:
             raise BountyError(f"{exc}; no fair static fallback is available", 503) from exc
-        return {**rules, ACTIVE_KEY: [*active[1:], replacement],
-                "bounty_roll_note": "AI quest unavailable or unfair; dealt a feasible static quest instead."}
+        return {
+            **rules,
+            ACTIVE_KEY: [*active[1:], replacement],
+            "bounty_roll_note": "AI quest unavailable or unfair; dealt a feasible static quest instead.",
+        }
     board = [*active[1:], custom["id"]] if active else [custom["id"]]
     return {
         **rules,

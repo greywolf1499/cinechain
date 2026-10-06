@@ -70,8 +70,10 @@ VILLAIN_EVIDENCE_SECONDS = 10.0
 
 
 def _copy_films(films: Sequence[dict]) -> list[dict]:
-    return [{**f, "milestones": list(f.get("milestones", [])),
-             "evidence": dict(f.get("evidence", {}))} for f in films]
+    return [
+        {**f, "milestones": list(f.get("milestones", [])), "evidence": dict(f.get("evidence", {}))}
+        for f in films
+    ]
 
 
 def _flag(film: dict, milestone: str, evidence: str) -> None:
@@ -84,7 +86,11 @@ def flag_first_lead(films: Sequence[dict]) -> list[dict]:
     result = _copy_films(films)
     first = next((f for f in result if f.get("order") == 0), None)
     if first is not None:
-        _flag(first, "first_lead", f"First top-billed credit (TMDB order 0): {first.get('character') or 'unnamed role'}.")
+        _flag(
+            first,
+            "first_lead",
+            f"First top-billed credit (TMDB order 0): {first.get('character') or 'unnamed role'}.",
+        )
     return result
 
 
@@ -95,30 +101,46 @@ def _genre_distance(a: set[int], b: set[int]) -> float:
 def flag_genre_pivots(films: Sequence[dict]) -> list[dict]:
     result = _copy_films(films)
     for index in range(4, len(result) - 2):
-        previous = result[index - 4:index]
-        following = result[index + 1:index + 3]
+        previous = result[index - 4 : index]
+        following = result[index + 1 : index + 3]
         if not all(f.get("genre_ids") for f in [*previous, result[index], *following]):
             continue
         old = set().union(*(set(f["genre_ids"]) for f in previous))
         new = set(result[index]["genre_ids"])
         if _genre_distance(old, new) < 0.75:
             continue
-        if all(_genre_distance(set(f["genre_ids"]), new) < _genre_distance(set(f["genre_ids"]), old)
-               for f in following):
+        if all(
+            _genre_distance(set(f["genre_ids"]), new) < _genre_distance(set(f["genre_ids"]), old)
+            for f in following
+        ):
+
             def names(ids: set[int]) -> str:
                 return "/".join(_GENRE_NAMES.get(g, f"genre {g}") for g in sorted(ids))
-            _flag(result[index], "genre_pivot",
-                  f"{names(new)} after four {names(old)} credits; the next two films confirm the shift.")
+
+            _flag(
+                result[index],
+                "genre_pivot",
+                f"{names(new)} after four {names(old)} credits; the next two films confirm the shift.",
+            )
     return result
 
 
 def flag_comebacks(films: Sequence[dict]) -> list[dict]:
     result = _copy_films(films)
     for previous, film in pairwise(result):
-        earlier, later = date.fromisoformat(previous["release_date"]), date.fromisoformat(film["release_date"])
-        years = later.year - earlier.year - ((later.month, later.day) < (earlier.month, earlier.day))
+        earlier, later = (
+            date.fromisoformat(previous["release_date"]),
+            date.fromisoformat(film["release_date"]),
+        )
+        years = (
+            later.year - earlier.year - ((later.month, later.day) < (earlier.month, earlier.day))
+        )
         if years >= 4:
-            _flag(film, "comeback", f"First qualifying credit in {years} years: {earlier.isoformat()} to {later.isoformat()}.")
+            _flag(
+                film,
+                "comeback",
+                f"First qualifying credit in {years} years: {earlier.isoformat()} to {later.isoformat()}.",
+            )
     return result
 
 
@@ -127,22 +149,33 @@ def flag_language_crossover(films: Sequence[dict]) -> list[dict]:
     languages = Counter(f["original_language"] for f in result if f.get("original_language"))
     if languages:
         mode = languages.most_common(1)[0][0]
-        first = next((f for f in result if f.get("original_language") and f["original_language"] != mode), None)
+        first = next(
+            (f for f in result if f.get("original_language") and f["original_language"] != mode),
+            None,
+        )
         if first is not None:
-            _flag(first, "language_crossover",
-                  f"First {first['original_language']}-language credit; career modal language is {mode} (TMDB).")
+            _flag(
+                first,
+                "language_crossover",
+                f"First {first['original_language']}-language credit; career modal language is {mode} (TMDB).",
+            )
     return result
 
 
 def flag_against_type(films: Sequence[dict], vectors: dict[int, np.ndarray]) -> list[dict]:
     result = _copy_films(films)
     shapes = {vector.shape for vector in vectors.values()}
-    if len(shapes) != 1 or any(vector.ndim != 1 or vector.size == 0 or not np.all(np.isfinite(vector))
-                               or np.linalg.norm(vector) == 0 for vector in vectors.values()):
+    if len(shapes) != 1 or any(
+        vector.ndim != 1
+        or vector.size == 0
+        or not np.all(np.isfinite(vector))
+        or np.linalg.norm(vector) == 0
+        for vector in vectors.values()
+    ):
         return result
     distances: list[tuple[int, float]] = []
     for index, film in enumerate(result):
-        history = result[max(0, index - 5):index]
+        history = result[max(0, index - 5) : index]
         current = vectors.get(film["movie_id"])
         previous = [vectors[f["movie_id"]] for f in history if f["movie_id"] in vectors]
         if current is None or len(previous) != len(history) or not previous:
@@ -160,8 +193,11 @@ def flag_against_type(films: Sequence[dict], vectors: dict[int, np.ndarray]) -> 
     threshold = float(np.mean(values)) + 2 * spread
     for index, distance in distances:
         if distance >= threshold:
-            _flag(result[index], "against_type",
-                  f"Overview distance {distance:.3f} from the previous up-to-five credits; career mean + 2 SD is {threshold:.3f}.")
+            _flag(
+                result[index],
+                "against_type",
+                f"Overview distance {distance:.3f} from the previous up-to-five credits; career mean + 2 SD is {threshold:.3f}.",
+            )
     return result
 
 
@@ -185,24 +221,33 @@ def flag_first_theatrical(films: Sequence[dict], releases: dict[int, list[dict]]
     result = _copy_films(films)
     if not result:
         return result
+
     def dates(film: dict) -> list[tuple[str, int]]:
-        return sorted((r["release_date"][:10], r["type"])
-                      for country in releases.get(film["movie_id"], [])
-                      for r in country.get("release_dates", [])
-                      if r.get("type") in {1, 2, 3, 4, 5, 6}
-                      and re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", r.get("release_date", "")))
+        return sorted(
+            (r["release_date"][:10], r["type"])
+            for country in releases.get(film["movie_id"], [])
+            for r in country.get("release_dates", [])
+            if r.get("type") in {1, 2, 3, 4, 5, 6}
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", r.get("release_date", ""))
+        )
+
     debut = dates(result[0])
     if not debut or debut[0][1] not in {1, 4, 6}:
         return result
     theatrical = [(day, film) for film in result[:3] for day, kind in dates(film) if kind in {2, 3}]
     if theatrical:
         day, film = min(theatrical, key=lambda item: (item[0], item[1]["movie_id"]))
-        _flag(film, "first_theatrical",
-              f"Earliest debut release: {debut[0][0]} (TMDB type {debut[0][1]}); first recorded cinema release among the first three track films: {day}.")
+        _flag(
+            film,
+            "first_theatrical",
+            f"Earliest debut release: {debut[0][0]} (TMDB type {debut[0][1]}); first recorded cinema release among the first three track films: {day}.",
+        )
     return result
 
 
-async def enrich_career_track(films: Sequence[dict], tmdb: TMDBClient, session: Session) -> list[dict]:
+async def enrich_career_track(
+    films: Sequence[dict], tmdb: TMDBClient, session: Session
+) -> list[dict]:
     result = _copy_films(films)
     releases: dict[int, list[dict]] = {}
     try:
@@ -223,13 +268,22 @@ async def enrich_career_track(films: Sequence[dict], tmdb: TMDBClient, session: 
             pass
         else:
             if batch.fingerprint == local.fingerprint and len(batch.vectors) == len(pending):
-                result = flag_against_type(result, {f["movie_id"]: v for f, v in zip(pending, batch.vectors, strict=True)})
-    candidates = [f for f in result if f.get("character") and f.get("overview")
-                  and re.search(rf"(?<!\w){re.escape(f['character'])}(?!\w)", f["overview"], re.IGNORECASE)]
+                result = flag_against_type(
+                    result, {f["movie_id"]: v for f, v in zip(pending, batch.vectors, strict=True)}
+                )
+    candidates = [
+        f
+        for f in result
+        if f.get("character")
+        and f.get("overview")
+        and re.search(rf"(?<!\w){re.escape(f['character'])}(?!\w)", f["overview"], re.IGNORECASE)
+    ]
     try:
         async with asyncio.timeout(VILLAIN_EVIDENCE_SECONDS):
             for film in candidates[:5]:
-                keywords = {keyword.lower() for keyword in await tmdb.get_movie_keywords(film["movie_id"])}
+                keywords = {
+                    keyword.lower() for keyword in await tmdb.get_movie_keywords(film["movie_id"])
+                }
                 if keywords & VILLAIN_KEYWORDS:
                     film["suggestions"] = ["villain"]
                     film["suggestion_evidence"] = (
@@ -251,10 +305,19 @@ def career_era_problems(eras: Any, track: Sequence[dict]) -> list[str]:
             return ["Each career era needs start_movie_id, end_movie_id and label"]
         label = era["label"]
         start, end = era["start_movie_id"], era["end_movie_id"]
-        if (type(start) is not int or type(end) is not int or start not in positions or end not in positions
-                or positions[start] > positions[end] or not isinstance(label, str) or not label.strip()
-                or len(label) > 80):
-            return ["Career eras need an ordered on-track span and a nonblank label of at most 80 characters"]
+        if (
+            type(start) is not int
+            or type(end) is not int
+            or start not in positions
+            or end not in positions
+            or positions[start] > positions[end]
+            or not isinstance(label, str)
+            or not label.strip()
+            or len(label) > 80
+        ):
+            return [
+                "Career eras need an ordered on-track span and a nonblank label of at most 80 characters"
+            ]
         span = set(range(positions[start], positions[end] + 1))
         if occupied & span:
             return ["Player-tagged career eras cannot overlap"]
@@ -271,14 +334,18 @@ def marathon_skip(rules: dict | None, default: int = DEFAULT_MAX_SKIP) -> int | 
 
 def marathon_order_rule(rules: dict | None, default: int = DEFAULT_MAX_SKIP) -> str:
     skip = marathon_skip(rules, default)
-    return "Pick any unwatched on-track film in any order." if skip is None else (
-        f"Advance along the track; skip at most {skip} entries between picks."
+    return (
+        "Pick any unwatched on-track film in any order."
+        if skip is None
+        else (f"Advance along the track; skip at most {skip} entries between picks.")
     )
 
 
 def marathon_completion_rule(rules: dict | None) -> str:
     if (rules or {}).get("track_length") == "endless":
-        return "Use Wrap the marathon when you are done; completion records your watched percentage."
+        return (
+            "Use Wrap the marathon when you are done; completion records your watched percentage."
+        )
     if marathon_skip(rules) is None:
         return "Watch every track film to complete the marathon."
     return "Reaching the last track entry completes the marathon."
@@ -327,8 +394,12 @@ def age_at(birthday: str | None, release_date: str) -> int | None:
 
 
 def build_career_track(
-    credits: Sequence[dict[str, Any]], birthday: str | None, today: date | None = None,
-    *, length: str | None = "full", acting: bool = True,
+    credits: Sequence[dict[str, Any]],
+    birthday: str | None,
+    today: date | None = None,
+    *,
+    length: str | None = "full",
+    acting: bool = True,
 ) -> list[dict[str, Any]]:
     """Curates TMDB acting credits into the career track (see the module docstring)."""
     today = today or datetime.now(UTC).date()
@@ -366,14 +437,22 @@ def build_career_track(
         lambda eligible: eligible[0],
     )
     if breakout is not None and acting:
-        _flag(breakout, "breakout", f"First qualifying top-three billed credit: order {breakout['order']}, {breakout['vote_count']} TMDB votes.")
+        _flag(
+            breakout,
+            "breakout",
+            f"First qualifying top-three billed credit: order {breakout['order']}, {breakout['vote_count']} TMDB votes.",
+        )
     peak = _first_with_tier(
         films,
         PRESTIGE_VOTE_TIERS,
         lambda eligible: max(eligible, key=lambda f: (f["vote_average"], f["vote_count"])),
     )
     if peak is not None:
-        _flag(peak, "prestige_peak", f"Highest TMDB rating in the qualifying vote tier: {peak['vote_average']:.1f}/10 from {peak['vote_count']} votes.")
+        _flag(
+            peak,
+            "prestige_peak",
+            f"Highest TMDB rating in the qualifying vote tier: {peak['vote_average']:.1f}/10 from {peak['vote_count']} votes.",
+        )
     recent = _first_with_tier(
         [
             f
@@ -384,7 +463,11 @@ def build_career_track(
         lambda eligible: max(eligible, key=lambda f: f["vote_count"]),
     )
     if recent is not None and acting:
-        _flag(recent, "modern_resurgence", f"Most-voted top-five billed credit in the last {RESURGENCE_YEARS} years: {recent['vote_count']} votes.")
+        _flag(
+            recent,
+            "modern_resurgence",
+            f"Most-voted top-five billed credit in the last {RESURGENCE_YEARS} years: {recent['vote_count']} votes.",
+        )
 
     if acting:
         films = flag_first_lead(films)
@@ -405,12 +488,14 @@ def build_career_track(
     elif length == "milestones":
         selected = [f for f in chosen if f["milestones"]]
         # Several milestones can belong to one film; pad with ranked features.
-        selected += [f for f in chosen if not f["milestones"]][:max(0, MIN_TRACK_FILMS - len(selected))]
+        selected += [f for f in chosen if not f["milestones"]][
+            : max(0, MIN_TRACK_FILMS - len(selected))
+        ]
     elif length == "endless":
-        selected = chosen[:TRACK_LENGTHS[length]]
+        selected = chosen[: TRACK_LENGTHS[length]]
     else:
         selected = solid if len(solid) >= MIN_TRACK_FILMS else chosen[:MIN_TRACK_FILMS]
-        selected = selected[:TRACK_LENGTHS[length]]
+        selected = selected[: TRACK_LENGTHS[length]]
     track = sorted(selected, key=lambda f: (f["release_date"], f["movie_id"]))
     for film in track:
         film["age"] = age_at(birthday, film["release_date"])
@@ -421,20 +506,42 @@ class MethodActorEngine(TrackerEngine):
     modifier_scopes = frozenset({"film"})
     rule_fields: ClassVar[list[RuleField]] = [
         *TrackerEngine.rule_fields,
-        RuleField(key="track_length", kind="enum", label="Marathon length",
-                  options=list(TRACK_LENGTHS), default="feature",
-                  help="Milestones (at least 3 when available), short (6), feature (12), full (25), endless (up to 60; wrap manually)."),
-        RuleField(key="order", kind="segmented", label="Strictness",
-                  options=list(ORDER_SKIPS), default="relaxed",
-                  help="Strict: skip 0. Relaxed: skip 2. Free: any order, still on-track."),
+        RuleField(
+            key="track_length",
+            kind="enum",
+            label="Marathon length",
+            options=list(TRACK_LENGTHS),
+            default="feature",
+            help="Milestones (at least 3 when available), short (6), feature (12), full (25), endless (up to 60; wrap manually).",
+        ),
+        RuleField(
+            key="order",
+            kind="segmented",
+            label="Strictness",
+            options=list(ORDER_SKIPS),
+            default="relaxed",
+            help="Strict: skip 0. Relaxed: skip 2. Free: any order, still on-track.",
+        ),
     ]
     presets: ClassVar[list[Preset]] = [
-        Preset(id="taster", label="Taster", blurb="Career milestones in any order.",
-               values={"track_length": "milestones", "order": "free"}),
-        Preset(id="biopic", label="Biopic", blurb="Twelve features; skip up to two.",
-               values={"track_length": "feature", "order": "relaxed"}),
-        Preset(id="completist", label="Completist", blurb="Up to 25 features in strict order.",
-               values={"track_length": "full", "order": "strict"}),
+        Preset(
+            id="taster",
+            label="Taster",
+            blurb="Career milestones in any order.",
+            values={"track_length": "milestones", "order": "free"},
+        ),
+        Preset(
+            id="biopic",
+            label="Biopic",
+            blurb="Twelve features; skip up to two.",
+            values={"track_length": "feature", "order": "relaxed"},
+        ),
+        Preset(
+            id="completist",
+            label="Completist",
+            blurb="Up to 25 features in strict order.",
+            values={"track_length": "full", "order": "strict"},
+        ),
     ]
     default_preset = "biopic"
     tagline = "One career, in order"
@@ -444,18 +551,24 @@ class MethodActorEngine(TrackerEngine):
         ["{order_rule}"],
         ["{completion_rule}"],
         ["Off-track films are blocked; order violations require a soft-rule override."],
-        ["Use skips to avoid an unavailable film without jumping past a milestone.",
-         "Compare early and late roles to notice how the actor's craft changes."], ["track", "seed", "wildcard"],
+        [
+            "Use skips to avoid an unavailable film without jumping past a milestone.",
+            "Compare early and late roles to notice how the actor's craft changes.",
+        ],
+        ["track", "seed", "wildcard"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
         config = rules or {}
-        return {**super().rulebook_values(rules),
-                "person_name": (config.get("actor") or {}).get("name", "your chosen actor"),
-                "max_skip": marathon_skip(config),
-                "order_rule": marathon_order_rule(config),
-                "completion_rule": marathon_completion_rule(config)}
+        return {
+            **super().rulebook_values(rules),
+            "person_name": (config.get("actor") or {}).get("name", "your chosen actor"),
+            "max_skip": marathon_skip(config),
+            "order_rule": marathon_order_rule(config),
+            "completion_rule": marathon_completion_rule(config),
+        }
+
     seed_policy = "none"
     game_type = METHOD_ACTOR
     display_name = "The Method Actor Marathon"
@@ -490,7 +603,9 @@ class MethodActorEngine(TrackerEngine):
             if exc.status_code == 404:
                 raise RunSetupError(f"No person with TMDB id {actor_id}") from exc
             raise RunSetupError(f"TMDB lookup failed: {exc}", 502) from exc
-        track = build_career_track(credits, person.get("birthday"), length=rules.get("track_length", "feature"))
+        track = build_career_track(
+            credits, person.get("birthday"), length=rules.get("track_length", "feature")
+        )
         track = await enrich_career_track(track, self.tmdb, self.session)
         era_problems = career_era_problems(rules.get("career_eras", []), track)
         if era_problems:

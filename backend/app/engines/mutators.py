@@ -100,7 +100,9 @@ class MutatorEngine(CineChainEngine):
         """Why `later` may not directly follow `earlier`; None = allowed."""
         return None
 
-    def bounty_pool_allowed(self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]) -> bool:
+    def bounty_pool_allowed(
+        self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]
+    ) -> bool:
         tail = self.session.get(CachedMovie, history[-1].movie_id) if history else None
         return super().bounty_pool_allowed(movie, rules, history) and (
             tail is None or self.pair_violation(tail, movie, rules) is None
@@ -122,11 +124,21 @@ class MutatorEngine(CineChainEngine):
         """Why `later` may not follow `earlier`: this mode's own rule, then the run's modifiers."""
         from app.engines.modifier_registry import contexts
 
-        active = {spec.key: self.active_modifiers(rules)[spec.key]
-                  for spec, _ in contexts(self.active_modifiers(rules)) if spec.scope == "pair"}
-        return self.pair_violation(earlier, later, rules) or modifiers.pair_modifier_violation(
-            active, earlier, later, history,
-        ) or chaos.violation(self.session, later, rules)
+        active = {
+            spec.key: self.active_modifiers(rules)[spec.key]
+            for spec, _ in contexts(self.active_modifiers(rules))
+            if spec.scope == "pair"
+        }
+        return (
+            self.pair_violation(earlier, later, rules)
+            or modifiers.pair_modifier_violation(
+                active,
+                earlier,
+                later,
+                history,
+            )
+            or chaos.violation(self.session, later, rules)
+        )
 
     def _bridge_needs_detail(self, rules: dict | None) -> bool:
         active = self.active_modifiers(rules)
@@ -234,22 +246,23 @@ class MutatorEngine(CineChainEngine):
                 params["with_origin_country"] = filters.country
             if filters.decade is not None:
                 params["primary_release_date.gte"] = f"{filters.decade}-01-01"
-                params["primary_release_date.lte"] = min(
-                    today_iso(), f"{filters.decade + 9}-12-31"
-                )
+                params["primary_release_date.lte"] = min(today_iso(), f"{filters.decade + 9}-12-31")
             if filters.genre_id is not None:
                 params["with_genres"] = str(filters.genre_id)
             rows = await cache_repo.discover_movies(self.session, self.tmdb, pages=1, **params)
             if filters.country:
                 rows = [
                     await cache_repo.get_movie(
-                        self.session, self.tmdb, row.tmdb_id,
+                        self.session,
+                        self.tmdb,
+                        row.tmdb_id,
                         refresh=row.origin_country is None,
                     )
                     for row in rows
                 ]
             pool = [
-                candidate_from_row(row) for row in rows
+                candidate_from_row(row)
+                for row in rows
                 if row.tmdb_id not in exclude_movie_ids and passes_filters(row, filters)
             ]
             frontier = await self._load(current_movie_id, hydrate=True, rules=rules)
@@ -314,8 +327,13 @@ class MutatorEngine(CineChainEngine):
 
 class ChronoClimbEngine(MutatorEngine):
     discovery_filters: ClassVar[list[FilterSpec]] = [
-        FilterSpec(key="release_year", kind="range", label="Release year", source="release_year",
-                   help="Narrow the release years beyond the frontier. Unknown years stay visible."),
+        FilterSpec(
+            key="release_year",
+            kind="range",
+            label="Release year",
+            source="release_year",
+            help="Narrow the release years beyond the frontier. Unknown years stay visible.",
+        ),
     ]
     """Chrono Climb / Descent: every hop must move strictly forward (climb) or
     backward (descent) in time. Any film qualifies; shared cast is optional."""
@@ -326,9 +344,13 @@ class ChronoClimbEngine(MutatorEngine):
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Move strictly through release years.",
         ["Choose a film released {chrono_word} the previous one; shared cast is optional."],
-        ["{win_goal}"], ["Equal or wrong-direction years are blocked.", "{fail_goal}"],
-        ["Take small year jumps to leave more room for future moves.",
-         "Check the release year, not the story's setting."], ["seed"],
+        ["{win_goal}"],
+        ["Equal or wrong-direction years are blocked.", "{fail_goal}"],
+        [
+            "Take small year jumps to leave more room for future moves.",
+            "Check the release year, not the story's setting.",
+        ],
+        ["seed"],
     )
 
     @classmethod
@@ -336,6 +358,7 @@ class ChronoClimbEngine(MutatorEngine):
         values = super().rulebook_values(rules)
         direction = modifiers.merge_modifiers(cls.default_modifiers, rules)[modifiers.CHRONO_KEY]
         return {**values, "chrono_word": "before" if direction == "descent" else "after"}
+
     display_name = "Chrono Climb"
     description = (
         "March through time: every film must be released after the last (Climb) or before it "
@@ -472,10 +495,21 @@ PASSPORT_FILMS_PER_COUNTRY = 4
 
 class WorldPassportEngine(MutatorEngine):
     discovery_filters: ClassVar[list[FilterSpec]] = [
-        FilterSpec(key="country", kind="select", label="Country", source="origin_country",
-                   help="Pool countries and counts; primary countries on cooldown cannot be picked."),
-        FilterSpec(key="new_country", kind="toggle", label="New stamps only", source="new_country",
-                   default="after_three_stamps", help="On by default after three countries are stamped."),
+        FilterSpec(
+            key="country",
+            kind="select",
+            label="Country",
+            source="origin_country",
+            help="Pool countries and counts; primary countries on cooldown cannot be picked.",
+        ),
+        FilterSpec(
+            key="new_country",
+            kind="toggle",
+            label="New stamps only",
+            source="new_country",
+            default="after_three_stamps",
+            help="On by default after three countries are stamped.",
+        ),
     ]
     """Every film's primary country must differ from the previous film's. Any
     film qualifies; shared cast is optional."""
@@ -486,9 +520,13 @@ class WorldPassportEngine(MutatorEngine):
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Collect stamps by changing the primary production country each film.",
         ["Choose a film whose first country differs from the frontier; obey the active cooldown."],
-        ["{win_goal}"], ["Same-country hops are blocked when both countries are known.", "{fail_goal}"],
-        ["Choose a country with several onward options instead of bouncing between two hubs.",
-         "Unknown country data is unverified, not a reason to hide a film."], ["seed"],
+        ["{win_goal}"],
+        ["Same-country hops are blocked when both countries are known.", "{fail_goal}"],
+        [
+            "Choose a country with several onward options instead of bouncing between two hubs.",
+            "Unknown country data is unverified, not a reason to hide a film.",
+        ],
+        ["seed"],
     )
     display_name = "World Cinema Passport"
     description = (
@@ -626,9 +664,13 @@ class AuteurRelayEngine(MutatorEngine):
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Build a chain alternating shared actors and shared directors.",
         ["The first hop may use either; each subsequent hop must use the other link type."],
-        ["{win_goal}"], ["{fail_goal}"],
-        ["After an actor hop, pick a film whose director gives you several next choices.",
-         "Plan two hops ahead: the current connector determines the next link type."], ["seed", "wildcard"],
+        ["{win_goal}"],
+        ["{fail_goal}"],
+        [
+            "After an actor hop, pick a film whose director gives you several next choices.",
+            "Plan two hops ahead: the current connector determines the next link type.",
+        ],
+        ["seed", "wildcard"],
     )
     display_name = "Auteur Relay"
     character_hop_links = False  # links must be a real actor or director, strictly alternating

@@ -49,23 +49,37 @@ def format_year(year: int) -> str:
 
 class HistoricalTimeTravelEngine(MutatorEngine):
     discovery_filters: ClassVar[list[FilterSpec]] = [
-        FilterSpec(key="narrative_year", kind="range", label="Story-setting year",
-                   source="narrative_year", help="Narrow story years beyond the frontier, not release dates. Negative years are BCE."),
+        FilterSpec(
+            key="narrative_year",
+            kind="range",
+            label="Story-setting year",
+            source="narrative_year",
+            help="Narrow story years beyond the frontier, not release dates. Negative years are BCE.",
+        ),
     ]
     tagline = "Travel through the eras stories are set in"
     tags: ClassVar[list[str]] = ["Any film", "Setting year", "Forward / Backward"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Travel through story settings, not release dates.",
-        ["Pick a film set strictly {setting_direction} the current film; inspect or edit uncertain setting years."],
-        ["{win_goal}"], ["Equal or wrong-direction settings block the hop.", "{fail_goal}"],
-        ["Small era jumps leave more history available for future moves.",
-         "Check inferred settings before making a large leap."], ["seed"],
+        [
+            "Pick a film set strictly {setting_direction} the current film; inspect or edit uncertain setting years."
+        ],
+        ["{win_goal}"],
+        ["Equal or wrong-direction settings block the hop.", "{fail_goal}"],
+        [
+            "Small era jumps leave more history available for future moves.",
+            "Check inferred settings before making a large leap.",
+        ],
+        ["seed"],
     )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
-        return {**super().rulebook_values(rules),
-                "setting_direction": "before" if cls.direction(rules) == "descent" else "after"}
+        return {
+            **super().rulebook_values(rules),
+            "setting_direction": "before" if cls.direction(rules) == "descent" else "after",
+        }
+
     game_type = HISTORICAL_TIME_TRAVEL
     display_name = "Historical Time-Travel"
     description = (

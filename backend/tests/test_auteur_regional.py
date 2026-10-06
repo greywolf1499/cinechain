@@ -53,7 +53,10 @@ RUNTIMES = {i: (110, []) for i in (1, 2, 3, 4, 5)} | {14: (12, [])}
 def test_the_filmography_is_the_chronological_feature_films_only():
     films = build_filmography(CREDITS, RUNTIMES, TODAY)
     assert [f["movie_id"] for f in films] == [1, 2, 3, 4, 5]
-    assert {key: films[0][key] for key in ("movie_id", "title", "release_date", "year", "poster_path", "runtime")} == {
+    assert {
+        key: films[0][key]
+        for key in ("movie_id", "title", "release_date", "year", "poster_path", "runtime")
+    } == {
         "movie_id": 1,
         "title": "Film 1",
         "release_date": "1970-06-01",
@@ -62,18 +65,25 @@ def test_the_filmography_is_the_chronological_feature_films_only():
         "runtime": 110,
     }
 
+
 def test_auteur_context_uses_directing_facts_not_synthetic_actor_billing():
     credits = [crew(i, 2000 + i, genres=[35, 10749], original_language="en") for i in range(1, 5)]
-    credits += [crew(i, 2000 + i, genres=[18, 36], original_language="hi" if i == 7 else "en")
-                for i in range(5, 8)]
+    credits += [
+        crew(i, 2000 + i, genres=[18, 36], original_language="hi" if i == 7 else "en")
+        for i in range(5, 8)
+    ]
     films = build_filmography(credits, today=TODAY)
     assert "genre_pivot" in films[4]["milestones"]
     assert "language_crossover" in films[-1]["milestones"]
-    assert all(not {"first_lead", "breakout", "modern_resurgence"} & set(f["milestones"]) for f in films)
+    assert all(
+        not {"first_lead", "breakout", "modern_resurgence"} & set(f["milestones"]) for f in films
+    )
     assert all(f["evidence"].get(mark) for f in films for mark in f["milestones"])
 
 
-@pytest.mark.parametrize("length,size", [("milestones", 3), ("short", 6), ("feature", 12), ("full", 25), ("endless", 60)])
+@pytest.mark.parametrize(
+    "length,size", [("milestones", 3), ("short", 6), ("feature", 12), ("full", 25), ("endless", 60)]
+)
 def test_director_length_caps_preserve_feature_checks(length, size):
     credits = [crew(i, 1900 + i, votes=1000 + i) for i in range(1, 81)]
     films = build_filmography(credits, {1: (10, [])}, TODAY, length=length)

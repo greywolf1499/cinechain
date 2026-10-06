@@ -149,8 +149,11 @@ class MarchMadnessEngine(TrackerEngine):
         ["Compare each matchup and advance your winner, round by round; there is no seed chain."],
         ["Each decision eliminates one film; the final winner is the champion."],
         ["Eliminated films leave the tournament; there is no points-based loss."],
-        ["Agree on what makes a winner before voting.",
-         "Compare the pair in front of you, not a favourite from another branch."], [],
+        [
+            "Agree on what makes a winner before voting.",
+            "Compare the pair in front of you, not a favourite from another branch.",
+        ],
+        [],
     )
     seed_policy = "none"
     game_type = MARCH_MADNESS

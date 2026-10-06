@@ -84,32 +84,76 @@ def cast_credits(cast: Sequence[dict]) -> list[CastCredit]:
 class CineChainEngine(BaseChallengeEngine):
     rule_fields: ClassVar[list[RuleField]] = [
         *BaseChallengeEngine.rule_fields,
-        RuleField(key="no_consecutive_actor", kind="bool", label="No consecutive actor reuse",
-                  default=True, group="advanced"),
-        RuleField(key="max_cast_order", kind="int", label="Max cast depth",
-                  min=1, max=30, default=15, group="advanced"),
+        RuleField(
+            key="no_consecutive_actor",
+            kind="bool",
+            label="No consecutive actor reuse",
+            default=True,
+            group="advanced",
+        ),
+        RuleField(
+            key="max_cast_order",
+            kind="int",
+            label="Max cast depth",
+            min=1,
+            max=30,
+            default=15,
+            group="advanced",
+        ),
     ]
     presets: ClassVar[list[Preset]] = [
-        Preset(id="standard", label="Standard", blurb="Balanced cast depth and two wildcards.",
-               values={"allow_repeats": "strict", "no_consecutive_actor": True,
-                       "max_cast_order": 15, "min_runtime": 40, "wildcards_budget": 2}),
-        Preset(id="purist", label="Purist", blurb="Top-billed cast, no wildcards.",
-               values={"allow_repeats": "strict", "no_consecutive_actor": True,
-                       "max_cast_order": 5, "min_runtime": 60, "wildcards_budget": 0}),
-        Preset(id="casual", label="Casual", blurb="Wide cast, repeat penalties and unlimited wildcards.",
-               values={"allow_repeats": "penalty", "no_consecutive_actor": False,
-                       "max_cast_order": 25, "min_runtime": 0, "wildcards_budget": -1}),
+        Preset(
+            id="standard",
+            label="Standard",
+            blurb="Balanced cast depth and two wildcards.",
+            values={
+                "allow_repeats": "strict",
+                "no_consecutive_actor": True,
+                "max_cast_order": 15,
+                "min_runtime": 40,
+                "wildcards_budget": 2,
+            },
+        ),
+        Preset(
+            id="purist",
+            label="Purist",
+            blurb="Top-billed cast, no wildcards.",
+            values={
+                "allow_repeats": "strict",
+                "no_consecutive_actor": True,
+                "max_cast_order": 5,
+                "min_runtime": 60,
+                "wildcards_budget": 0,
+            },
+        ),
+        Preset(
+            id="casual",
+            label="Casual",
+            blurb="Wide cast, repeat penalties and unlimited wildcards.",
+            values={
+                "allow_repeats": "penalty",
+                "no_consecutive_actor": False,
+                "max_cast_order": 25,
+                "min_runtime": 0,
+                "wildcards_budget": -1,
+            },
+        ),
     ]
     default_preset = "standard"
     tagline = "Six Degrees of Kevin Bacon"
     tags: ClassVar[list[str]] = ["Shared cast"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Build a connected movie chain.",
-        ["Start with a seed, then link by a shared credited actor or the same character played by different actors.",
-         "Actor links use the configured cast depth: {cast_depth}."],
-        ["{win_goal}"], ["{fail_goal}"],
-        ["Choose a connector with a broad filmography to keep your next move open.",
-         "Save wildcards for scarce links rather than spending them on easy detours."],
+        [
+            "Start with a seed, then link by a shared credited actor or the same character played by different actors.",
+            "Actor links use the configured cast depth: {cast_depth}.",
+        ],
+        ["{win_goal}"],
+        ["{fail_goal}"],
+        [
+            "Choose a connector with a broad filmography to keep your next move open.",
+            "Save wildcards for scarce links rather than spending them on easy detours.",
+        ],
         ["seed", "wildcard"],
     )
     game_type = "cinechain"

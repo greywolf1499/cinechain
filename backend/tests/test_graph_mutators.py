@@ -166,15 +166,29 @@ def test_passport_search_further_fetches_selected_country_and_checks_cooldown(cl
     with respx.mock:
         mock_universe(universe)
         discovery = respx.get(f"{TMDB_BASE}/discover/movie").mock(
-            return_value=httpx.Response(200, json={"results": [
-                {"id": i, "title": m["title"], "release_date": f"{m['year']}-06-01",
-                 "popularity": 10, "genre_ids": []}
-                for i, m in universe.items() if i != 1
-            ], "total_pages": 1}),
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "id": i,
+                            "title": m["title"],
+                            "release_date": f"{m['year']}-06-01",
+                            "popularity": 10,
+                            "genre_ids": [],
+                        }
+                        for i, m in universe.items()
+                        if i != 1
+                    ],
+                    "total_pages": 1,
+                },
+            ),
         )
         run_id = create_run(client, "world_passport")
         assert log(client, run_id, 1).status_code == 201
-        response = client.get(f"/api/runs/{run_id}/suggestions", params={"country": "JP", "decade": 1970})
+        response = client.get(
+            f"/api/runs/{run_id}/suggestions", params={"country": "JP", "decade": 1970}
+        )
         assert response.status_code == 200, response.text
         assert [c["movie_id"] for c in response.json()] == [2]
         assert response.json()[0]["origin_countries"] == ["JP"]
@@ -183,8 +197,13 @@ def test_passport_search_further_fetches_selected_country_and_checks_cooldown(cl
         assert discovery.calls[-1].request.url.params["primary_release_date.gte"] == "1970-01-01"
         assert log(client, run_id, 2).status_code == 201
         assert client.get(f"/api/runs/{run_id}/suggestions", params={"country": "US"}).json() == []
-        assert client.get(f"/api/runs/{run_id}/suggestions",
-                          params={"frontier_movie_id": 999, "country": "JP"}).status_code == 422
+        assert (
+            client.get(
+                f"/api/runs/{run_id}/suggestions",
+                params={"frontier_movie_id": 999, "country": "JP"},
+            ).status_code
+            == 422
+        )
 
 
 def test_search_further_timeout_is_explicit_and_filters_are_validated(client, monkeypatch):
@@ -201,8 +220,14 @@ def test_search_further_timeout_is_explicit_and_filters_are_validated(client, mo
         response = client.get(f"/api/runs/{run_id}/suggestions", params={"country": "JP"})
         assert response.status_code == 504
         assert "Search took too long" in response.json()["detail"]
-        assert client.get(f"/api/runs/{run_id}/suggestions", params={"country": "Japan"}).status_code == 422
-        assert client.get(f"/api/runs/{run_id}/suggestions", params={"decade": 1975}).status_code == 422
+        assert (
+            client.get(f"/api/runs/{run_id}/suggestions", params={"country": "Japan"}).status_code
+            == 422
+        )
+        assert (
+            client.get(f"/api/runs/{run_id}/suggestions", params={"decade": 1975}).status_code
+            == 422
+        )
 
 
 # --- registry ---

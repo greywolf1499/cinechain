@@ -6,10 +6,13 @@ from app.engines.rulebook import RuleSection
 
 RULEBOOK = RuleSection(
     "Overrule a partner's latest decision.",
-    ["Spend an available Golden Veto to undo their latest contested step or cancel their pending fork."],
+    [
+        "Spend an available Golden Veto to undo their latest contested step or cancel their pending fork."
+    ],
     ["Your account holds one token, refilled every 30 days; undo rebuilds derived progress."],
     ["You cannot veto your own step or a seed; co-op tunnel steps use Undo instead."],
-    ["Save the token for a decision that closes valuable future options."], ["veto", "fork"],
+    ["Save the token for a decision that closes valuable future options."],
+    ["veto", "fork"],
 )
 
 from sqlalchemy import update

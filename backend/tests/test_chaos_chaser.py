@@ -186,10 +186,28 @@ def test_unknown_data_never_blocks_and_imdb_beats_the_tmdb_score(db_engine):
 
 def test_rolling_stores_one_handicap_and_it_cannot_be_rerolled(client, db_engine):
     with Session(db_engine) as session:
-        session.add(CachedMovie(tmdb_id=1, title="Old", release_date="1950-01-01", runtime=70,
-                                original_language="fr", vote_average=5, vote_count=100))
-        session.add(CachedMovie(tmdb_id=2, title="New", release_date="2000-01-01", runtime=160,
-                                original_language="en", vote_average=7, vote_count=100))
+        session.add(
+            CachedMovie(
+                tmdb_id=1,
+                title="Old",
+                release_date="1950-01-01",
+                runtime=70,
+                original_language="fr",
+                vote_average=5,
+                vote_count=100,
+            )
+        )
+        session.add(
+            CachedMovie(
+                tmdb_id=2,
+                title="New",
+                release_date="2000-01-01",
+                runtime=160,
+                original_language="en",
+                vote_average=7,
+                vote_count=100,
+            )
+        )
         session.commit()
     run_id = make_run(client)
     rolled = client.post(f"/api/runs/{run_id}/chaos")

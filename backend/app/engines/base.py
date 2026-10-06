@@ -63,12 +63,31 @@ class BaseChallengeEngine(ABC):
     seed_policy: ClassVar[Literal["none", "free", "derived", "pair"]] = "free"
     discovery_filters: ClassVar[list[FilterSpec]] = []
     rule_fields: ClassVar[list[RuleField]] = [
-        RuleField(key="allow_repeats", kind="enum", label="Repeat policy",
-                  options=["strict", "penalty", "allowed"], default="strict", group="advanced"),
-        RuleField(key="min_runtime", kind="int", label="Minimum runtime (minutes)",
-                  min=0, default=0, group="advanced"),
-        RuleField(key="wildcards_budget", kind="int", label="Wildcards allowance",
-                  min=-1, default=0, help="-1 means unlimited.", group="advanced"),
+        RuleField(
+            key="allow_repeats",
+            kind="enum",
+            label="Repeat policy",
+            options=["strict", "penalty", "allowed"],
+            default="strict",
+            group="advanced",
+        ),
+        RuleField(
+            key="min_runtime",
+            kind="int",
+            label="Minimum runtime (minutes)",
+            min=0,
+            default=0,
+            group="advanced",
+        ),
+        RuleField(
+            key="wildcards_budget",
+            kind="int",
+            label="Wildcards allowance",
+            min=-1,
+            default=0,
+            help="-1 means unlimited.",
+            group="advanced",
+        ),
     ]
     presets: ClassVar[list[Preset]] = []
     default_preset: ClassVar[str] = "custom"
@@ -119,9 +138,11 @@ class BaseChallengeEngine(ABC):
 
         return {
             **config,
-            "win_goal": conditions(wins, "reach") if cls.supports_json_rules and wins
+            "win_goal": conditions(wins, "reach")
+            if cls.supports_json_rules and wins
             else "Keep exploring; complete the run manually when you are done.",
-            "fail_goal": conditions(failures, "exceed") if cls.supports_json_rules and failures
+            "fail_goal": conditions(failures, "exceed")
+            if cls.supports_json_rules and failures
             else "There is no automatic loss unless a mode-specific rule says otherwise.",
             "cast_depth": config.get("max_cast_order") or "all credited actors",
         }
@@ -154,8 +175,12 @@ class BaseChallengeEngine(ABC):
             if field.kind == "int":
                 if type(value) is not int:
                     problems.append(f"{field.key} must be a whole number")
-                elif (field.min is not None and value < field.min
-                      or field.max is not None and value > field.max):
+                elif (
+                    field.min is not None
+                    and value < field.min
+                    or field.max is not None
+                    and value > field.max
+                ):
                     problems.append(f"{field.key} is outside its allowed range")
             elif field.kind == "bool":
                 if type(value) is not bool:
@@ -199,7 +224,9 @@ class BaseChallengeEngine(ABC):
             return True
         from app.engines.modifier_registry import contexts
 
-        return any(getattr(row, field) is None for spec, _ in contexts(active) for field in spec.needs)
+        return any(
+            getattr(row, field) is None for spec, _ in contexts(active) for field in spec.needs
+        )
 
     def _needs_hydration(self, row: CachedMovie, rules: dict | None = None) -> bool:
         """Does this film still need its full TMDB detail before it can be judged?"""
@@ -218,8 +245,11 @@ class BaseChallengeEngine(ABC):
         return row
 
     async def _hydrate_pool(
-        self, candidates: list[DiscoveryCandidate], rules: dict | None = None,
-        *, needs: frozenset[str] = frozenset(),
+        self,
+        candidates: list[DiscoveryCandidate],
+        rules: dict | None = None,
+        *,
+        needs: frozenset[str] = frozenset(),
     ) -> dict[int, CachedMovie]:
         """Cached rows for the pool, fetching full detail for the most popular films
         that need it (bounded by HYDRATE_BUDGET / HYDRATE_SECONDS)."""
@@ -231,7 +261,9 @@ class BaseChallengeEngine(ABC):
             row = self.session.get(CachedMovie, candidate.movie_id)
             if row is None:
                 continue
-            missing = self._needs_hydration(row, rules) or any(getattr(row, field) is None for field in needs)
+            missing = self._needs_hydration(row, rules) or any(
+                getattr(row, field) is None for field in needs
+            )
             if missing and self._hydration_left > 0:
                 self._hydration_left -= 1
                 try:
@@ -270,12 +302,18 @@ class BaseChallengeEngine(ABC):
                 continue
             from app.engines.modifier_registry import contexts
 
-            verdicts = [(spec, spec.check(ctx, row))
-                        for spec, ctx in contexts(self.active_modifiers(rules), history, frontier)]
-            candidate.overlay_ok = {spec.key: verdict.ok for spec, verdict in verdicts
-                                    if spec.needs == frozenset({"title"})}
-            if any(verdict.ok is False for spec, verdict in verdicts if spec.scope != "sequence") \
-                    or chaos.violation(self.session, row, rules):
+            verdicts = [
+                (spec, spec.check(ctx, row))
+                for spec, ctx in contexts(self.active_modifiers(rules), history, frontier)
+            ]
+            candidate.overlay_ok = {
+                spec.key: verdict.ok
+                for spec, verdict in verdicts
+                if spec.needs == frozenset({"title"})
+            }
+            if any(
+                verdict.ok is False for spec, verdict in verdicts if spec.scope != "sequence"
+            ) or chaos.violation(self.session, row, rules):
                 continue
             if self._modifiers_need_detail(row, rules):
                 candidate.constraint_unverified = True
@@ -326,15 +364,24 @@ class BaseChallengeEngine(ABC):
                 if locked
                 else "Run modifiers shape the next film",
             )
-        return info.model_copy(update={"cooldown_countries": locked, "modifier_notes": notes,
-                                       "overlay_progress": overlays})
+        return info.model_copy(
+            update={
+                "cooldown_countries": locked,
+                "modifier_notes": notes,
+                "overlay_progress": overlays,
+            }
+        )
 
-    def overlay_checks(self, movie: CachedMovie, rules: dict,
-                       history: Sequence[RunStep]) -> dict[str, Any]:
+    def overlay_checks(
+        self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]
+    ) -> dict[str, Any]:
         from app.engines.modifier_registry import contexts
 
-        return {spec.key: spec.check(ctx, movie) for spec, ctx in contexts(self.active_modifiers(rules), history)
-                if spec.needs == frozenset({"title"})}
+        return {
+            spec.key: spec.check(ctx, movie)
+            for spec, ctx in contexts(self.active_modifiers(rules), history)
+            if spec.needs == frozenset({"title"})
+        }
 
     def overlay_outcome(self, run: Run, steps: Sequence[RunStep]) -> RunOutcome | None:
         from app.engines.modifier_registry import contexts
@@ -359,8 +406,11 @@ class BaseChallengeEngine(ABC):
         from app.engines.modifier_registry import TitleCoveragePredicate, TitleModifier, contexts
         from app.utils.title_tokens import first_letter, title_numbers
 
-        overlays = [(spec, ctx) for spec, ctx in contexts(self.active_modifiers(rules), history)
-                    if isinstance(spec, TitleModifier)]
+        overlays = [
+            (spec, ctx)
+            for spec, ctx in contexts(self.active_modifiers(rules), history)
+            if isinstance(spec, TitleModifier)
+        ]
         if not overlays:
             return rules
         track = rules.get("filmography")
@@ -372,8 +422,11 @@ class BaseChallengeEngine(ABC):
         else:
             evidence = feasibility.evidence_for(self.session)
             bounds = self.bounty_bounds(rules, [])
-            rows = [row for movie_id, row in evidence.movies.items()
-                    if feasibility.within(evidence.facts[movie_id], bounds) and is_reality_eligible(row)]
+            rows = [
+                row
+                for movie_id, row in evidence.movies.items()
+                if feasibility.within(evidence.facts[movie_id], bounds) and is_reality_eligible(row)
+            ]
         for spec, ctx in overlays:
             if spec.scope == "film":
                 rows = [row for row in rows if spec.check(ctx, row).ok is True]
@@ -384,39 +437,70 @@ class BaseChallengeEngine(ABC):
             if spec.key == "number_in_title":
                 rows = [row for row in rows if spec.check(ctx, row).ok is True]
                 if track is not None and len(rows) < 3:
-                    raise RunSetupError("Number in title needs at least 3 qualifying checklist films")
+                    raise RunSetupError(
+                        "Number in title needs at least 3 qualifying checklist films"
+                    )
                 if exact and not rows:
                     raise RunSetupError("Number in title has no qualifying checklist films")
             elif rows:
                 choices: dict[Any, list[int]]
                 if spec.key == "alphabet_run":
-                    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if params["direction"] == "az" else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+                    letters = (
+                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                        if params["direction"] == "az"
+                        else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+                    )
                     position, _ = spec.state(ctx)
                     required = list(letters[position:]) if params["strict"] else [letters[-1]]
                     choices = {
-                        token: [row.tmdb_id for row in rows if token in params["wild_letters"]
-                                or first_letter(row.title, params["ignore_articles"]) in (token, "#")]
+                        token: [
+                            row.tmdb_id
+                            for row in rows
+                            if token in params["wild_letters"]
+                            or first_letter(row.title, params["ignore_articles"]) in (token, "#")
+                        ]
                         for token in required
                     }
                 else:
                     position, _ = spec.state(ctx)
-                    required = list(range(position + 1, params["target"] + 1)) if params["mode"] == "count_up" else [position + 1]
+                    required = (
+                        list(range(position + 1, params["target"] + 1))
+                        if params["mode"] == "count_up"
+                        else [position + 1]
+                    )
                     choices = {
-                        token: [row.tmdb_id for row in rows
-                                if token in title_numbers(row.title, params["allow_years"])
-                                or (params["mode"] == "increasing" and any(
-                                    n >= token for n in title_numbers(row.title, params["allow_years"])))]
+                        token: [
+                            row.tmdb_id
+                            for row in rows
+                            if token in title_numbers(row.title, params["allow_years"])
+                            or (
+                                params["mode"] == "increasing"
+                                and any(
+                                    n >= token
+                                    for n in title_numbers(row.title, params["allow_years"])
+                                )
+                            )
+                        ]
                         for token in required
                     }
                 # Match distinct films to requirements: a single numbered/digit-leading title
                 # cannot prove that a repeat-strict checklist covers the entire sequence.
                 if not exact:
                     ids = [row.tmdb_id for row in rows]
-                    missing = [token for token in required if feasibility.pass_rate(
-                        self.session, TitleCoveragePredicate(spec, ctx, token), ids,
-                    ) == 0]
+                    missing = [
+                        token
+                        for token in required
+                        if feasibility.pass_rate(
+                            self.session,
+                            TitleCoveragePredicate(spec, ctx, token),
+                            ids,
+                        )
+                        == 0
+                    ]
                     if missing:
-                        raise RunSetupError(f"{spec.label} has zero pass-rate in the cached mode pool for: {', '.join(map(str, missing[:12]))}")
+                        raise RunSetupError(
+                            f"{spec.label} has zero pass-rate in the cached mode pool for: {', '.join(map(str, missing[:12]))}"
+                        )
                     continue
                 assigned: dict[int, Any] = {}
                 occupied: dict[Any, int] = {}
@@ -445,17 +529,30 @@ class BaseChallengeEngine(ABC):
                             occupied[current] = free
                             free = old
                 if missing:
-                    raise RunSetupError(f"{spec.label} is infeasible in the {'checklist' if exact else 'cached mode pool'}: missing {', '.join(map(str, missing[:12]))}")
+                    raise RunSetupError(
+                        f"{spec.label} is infeasible in the {'checklist' if exact else 'cached mode pool'}: missing {', '.join(map(str, missing[:12]))}"
+                    )
             elif exact:
                 raise RunSetupError(f"{spec.label} has no eligible checklist films")
         if exact and any(spec.key == "number_in_title" for spec, _ in overlays):
             ids = {row.tmdb_id for row in rows}
             if track is not None:
-                rules = {**rules, "filmography": [film for film in track if film["movie_id"] in ids]}
+                rules = {
+                    **rules,
+                    "filmography": [film for film in track if film["movie_id"] in ids],
+                }
             else:
                 assert expedition is not None
-                rules = {**rules, "expedition": {**expedition, "films": [film for film in films if film["movie_id"] in ids],
-                                                "movie_ids": [film["movie_id"] for film in films if film["movie_id"] in ids]}}
+                rules = {
+                    **rules,
+                    "expedition": {
+                        **expedition,
+                        "films": [film for film in films if film["movie_id"] in ids],
+                        "movie_ids": [
+                            film["movie_id"] for film in films if film["movie_id"] in ids
+                        ],
+                    },
+                }
         return rules
 
     def award_bounty(
@@ -486,16 +583,24 @@ class BaseChallengeEngine(ABC):
         """None means an open universe; a list means an exact finite track."""
         return None
 
-    def bounty_pool_allowed(self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]) -> bool:
-        if any(verdict.ok is False for verdict in self.overlay_checks(movie, rules, history).values()):
+    def bounty_pool_allowed(
+        self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]
+    ) -> bool:
+        if any(
+            verdict.ok is False for verdict in self.overlay_checks(movie, rules, history).values()
+        ):
             return False
         tail = self.session.get(CachedMovie, history[-1].movie_id) if history else None
         return tail is None or self.modifier_violation(tail, movie, rules, history) is None
 
     def bounty_bounds(
-        self, rules: dict, history: Sequence[RunStep],
+        self,
+        rules: dict,
+        history: Sequence[RunStep],
     ) -> dict[str, tuple[float | None, float | None]]:
-        bounds: dict[str, tuple[float | None, float | None]] = {"runtime": (rules.get("min_runtime", 0), None)}
+        bounds: dict[str, tuple[float | None, float | None]] = {
+            "runtime": (rules.get("min_runtime", 0), None)
+        }
         if history:
             tail = self.session.get(CachedMovie, history[-1].movie_id)
             active = self.active_modifiers(rules)
@@ -503,19 +608,28 @@ class BaseChallengeEngine(ABC):
 
             year = parse_release_year(tail.release_date) if tail else None
             if year is not None and active.get("chrono_direction"):
-                bounds["year"] = (year + 1, None) if active["chrono_direction"] == "climb" else (None, year - 1)
+                bounds["year"] = (
+                    (year + 1, None) if active["chrono_direction"] == "climb" else (None, year - 1)
+                )
             if tail and tail.runtime is not None and active.get("runtime_staircase"):
-                bounds["runtime"] = (max(rules.get("min_runtime", 0), tail.runtime + 1), None) \
-                    if active["runtime_staircase"] == "ascending" else (rules.get("min_runtime", 0), tail.runtime - 1)
+                bounds["runtime"] = (
+                    (max(rules.get("min_runtime", 0), tail.runtime + 1), None)
+                    if active["runtime_staircase"] == "ascending"
+                    else (rules.get("min_runtime", 0), tail.runtime - 1)
+                )
         return bounds
 
-    def bounty_feasible(self, rules: dict, history: Sequence[RunStep], bounty: bounties.Bounty) -> feasibility.Feasibility:
+    def bounty_feasible(
+        self, rules: dict, history: Sequence[RunStep], bounty: bounties.Bounty
+    ) -> feasibility.Feasibility:
         test = bounty.predicate
         if test is None:
             return feasibility.Feasibility(False, "Quest has no supported predicate", None)
         bounds = self.bounty_bounds(rules, history)
         if feasibility.contradicts(test, bounds):
-            return feasibility.Feasibility(False, "Quest conflicts with the mode's current bounds", 0)
+            return feasibility.Feasibility(
+                False, "Quest conflicts with the mode's current bounds", 0
+            )
         if self._bounty_evidence is None:
             self._bounty_evidence = feasibility.Evidence(self.session)
         evidence = self._bounty_evidence
@@ -523,13 +637,20 @@ class BaseChallengeEngine(ABC):
         watched = {step.movie_id for step in history}
         exclude_watched = exact_ids is not None or rules.get("allow_repeats", "strict") != "allowed"
         ids = [
-            movie_id for movie_id in (exact_ids if exact_ids is not None else evidence.movies)
+            movie_id
+            for movie_id in (exact_ids if exact_ids is not None else evidence.movies)
             if (not exclude_watched or movie_id not in watched)
-            and (movie_id not in evidence.movies or (
-                feasibility.within(evidence.facts[movie_id], bounds)
-                and (not evidence.movies[movie_id].release_date or is_reality_eligible(evidence.movies[movie_id]))
-                and self.bounty_pool_allowed(evidence.movies[movie_id], rules, history)
-            ))
+            and (
+                movie_id not in evidence.movies
+                or (
+                    feasibility.within(evidence.facts[movie_id], bounds)
+                    and (
+                        not evidence.movies[movie_id].release_date
+                        or is_reality_eligible(evidence.movies[movie_id])
+                    )
+                    and self.bounty_pool_allowed(evidence.movies[movie_id], rules, history)
+                )
+            )
         ]
         return evidence.check(test, ids, exact=exact_ids is not None)
 
@@ -543,10 +664,7 @@ class BaseChallengeEngine(ABC):
         Legacy (engine_version 1) runs never evaluate: the strict V2 rules must
         not retroactively end a run that was started under the old ones.
         """
-        if (
-            run.engine_version <= LEGACY_ENGINE_VERSION
-            or run.status != RUN_STATUS_ACTIVE
-        ):
+        if run.engine_version <= LEGACY_ENGINE_VERSION or run.status != RUN_STATUS_ACTIVE:
             return None
         own = evaluate_conditions(run.rules_config, steps) if self.supports_json_rules else None
         return own or self.overlay_outcome(run, steps)

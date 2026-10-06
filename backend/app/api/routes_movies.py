@@ -77,7 +77,8 @@ async def _seed_options(
     rules = blind_fork.strip_server_rules(payload.rules_config)
     if engine.seed_policy == "none":
         return SeedOptions(
-            seed_policy="none", reason=f"{engine.display_name} starts on its board, without a seed film"
+            seed_policy="none",
+            reason=f"{engine.display_name} starts on its board, without a seed film",
         ), rules
     problems = engine.validate_rules_config(rules)
     minimum = rules.get("min_runtime")
@@ -257,7 +258,9 @@ async def list_genres(
 async def get_seed_suggestion(
     exclude: str = Query(default="", description="Comma-separated TMDB ids already offered"),
     game_type: str | None = Query(default=None),
-    rules_config: str | None = Query(default=None, description="JSON rules for derived seed bounds"),
+    rules_config: str | None = Query(
+        default=None, description="JSON rules for derived seed bounds"
+    ),
     session: Session = Depends(get_session),
     tmdb: TMDBClient = Depends(get_tmdb_client),
     _current_user: User = Depends(get_current_user),
@@ -296,7 +299,9 @@ async def get_movie(
         # NULL overview marks a stub cached from a lightweight TMDB payload; NULL
         # tagline marks a detail row cached before taglines were stored (JIT backfill).
         movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=True)
-    rating_row = await cache_repo.get_movie_ratings(session, tmdb, omdb, tmdb_id, force=refresh_ratings)
+    rating_row = await cache_repo.get_movie_ratings(
+        session, tmdb, omdb, tmdb_id, force=refresh_ratings
+    )
     ratings = (
         MovieRatings(
             imdb_rating=rating_row.imdb_rating,
@@ -324,7 +329,9 @@ async def extract_movie_tropes(
         movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=True)
     if movie.extracted_tropes is not None:
         try:
-            tropes = (await movie_features.guard_tropes(session, [(movie, movie.extracted_tropes)]))[tmdb_id]
+            tropes = (
+                await movie_features.guard_tropes(session, [(movie, movie.extracted_tropes)])
+            )[tmdb_id]
         except embeddings.EmbeddingUnavailable as exc:
             raise HTTPException(503, detail=str(exc)) from exc
         return TropeExtraction(tmdb_id=tmdb_id, tropes=tropes, cached=True)

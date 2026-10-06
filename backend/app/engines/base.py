@@ -268,7 +268,14 @@ class BaseChallengeEngine(ABC):
             row = rows.get(candidate.movie_id)
             if row is None:
                 continue
-            if self.modifier_violation(frontier, row, rules, history):
+            from app.engines.modifier_registry import contexts
+
+            verdicts = [(spec, spec.check(ctx, row))
+                        for spec, ctx in contexts(self.active_modifiers(rules), history, frontier)]
+            candidate.overlay_ok = {spec.key: verdict.ok for spec, verdict in verdicts
+                                    if spec.needs == frozenset({"title"})}
+            if any(verdict.ok is False for spec, verdict in verdicts if spec.scope != "sequence") \
+                    or chaos.violation(self.session, row, rules):
                 continue
             if self._modifiers_need_detail(row, rules):
                 candidate.constraint_unverified = True
@@ -305,8 +312,12 @@ class BaseChallengeEngine(ABC):
         tail = await self._load(tail_movie_id) if tail_movie_id is not None else None
         locked = modifiers.cooldown_countries(active, history, tail)
         shown = {key: value for key, value in active.items() if key not in self.default_modifiers}
-        notes = modifiers.modifier_notes(shown, tail)
-        if not locked and not notes:
+        from app.engines.modifier_registry import contexts
+
+        progress = [p for spec, ctx in contexts(shown, history, tail) if (p := spec.progress(ctx))]
+        notes = [p["label"] for p in progress if "key" not in p]
+        overlays = [p for p in progress if "key" in p]
+        if not locked and not notes and not overlays:
             return info
         if info is None:
             info = ConstraintInfo(
@@ -315,7 +326,25 @@ class BaseChallengeEngine(ABC):
                 if locked
                 else "Run modifiers shape the next film",
             )
-        return info.model_copy(update={"cooldown_countries": locked, "modifier_notes": notes})
+        return info.model_copy(update={"cooldown_countries": locked, "modifier_notes": notes,
+                                       "overlay_progress": overlays})
+
+    def overlay_checks(self, movie: CachedMovie, rules: dict,
+                       history: Sequence[RunStep]) -> dict[str, Any]:
+        from app.engines.modifier_registry import contexts
+
+        return {spec.key: spec.check(ctx, movie) for spec, ctx in contexts(self.active_modifiers(rules), history)
+                if spec.needs == frozenset({"title"})}
+
+    def overlay_outcome(self, run: Run, steps: Sequence[RunStep]) -> RunOutcome | None:
+        from app.engines.modifier_registry import contexts
+
+        if run.engine_version <= LEGACY_ENGINE_VERSION or run.status != RUN_STATUS_ACTIVE:
+            return None
+        for spec, ctx in contexts(self.active_modifiers(run.rules_config), steps):
+            if outcome := spec.outcome(ctx):
+                return outcome
+        return None
 
     def prepare_rules_config(self, rules: dict) -> dict:
         """The `rules_config` a new run is stored with (engines fill in their own defaults)."""
@@ -324,6 +353,109 @@ class BaseChallengeEngine(ABC):
     async def prepare_run(self, rules: dict, user_id: str) -> dict:
         """Async, I/O-capable counterpart of `prepare_rules_config`, run once when a run is created
         (e.g. fetching an actor's filmography). Raises `RunSetupError` when the run can't start."""
+        return rules
+
+    def prepare_overlays(self, rules: dict, history: Sequence[RunStep] = ()) -> dict:
+        from app.engines.modifier_registry import TitleCoveragePredicate, TitleModifier, contexts
+        from app.utils.title_tokens import first_letter, title_numbers
+
+        overlays = [(spec, ctx) for spec, ctx in contexts(self.active_modifiers(rules), history)
+                    if isinstance(spec, TitleModifier)]
+        if not overlays:
+            return rules
+        track = rules.get("filmography")
+        expedition = rules.get("expedition")
+        films = track if track is not None else (expedition or {}).get("films")
+        exact = films is not None
+        if exact:
+            rows = [CachedMovie(tmdb_id=film["movie_id"], title=film["title"]) for film in films]
+        else:
+            evidence = feasibility.evidence_for(self.session)
+            bounds = self.bounty_bounds(rules, [])
+            rows = [row for movie_id, row in evidence.movies.items()
+                    if feasibility.within(evidence.facts[movie_id], bounds) and is_reality_eligible(row)]
+        for spec, ctx in overlays:
+            if spec.scope == "film":
+                rows = [row for row in rows if spec.check(ctx, row).ok is True]
+        if not exact and evidence.movies and not rows:
+            raise RunSetupError("Title overlays have no qualifying films in the cached mode pool")
+        for spec, ctx in overlays:
+            params = ctx.params.model_dump()
+            if spec.key == "number_in_title":
+                rows = [row for row in rows if spec.check(ctx, row).ok is True]
+                if track is not None and len(rows) < 3:
+                    raise RunSetupError("Number in title needs at least 3 qualifying checklist films")
+                if exact and not rows:
+                    raise RunSetupError("Number in title has no qualifying checklist films")
+            elif rows:
+                choices: dict[Any, list[int]]
+                if spec.key == "alphabet_run":
+                    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if params["direction"] == "az" else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
+                    position, _ = spec.state(ctx)
+                    required = list(letters[position:]) if params["strict"] else [letters[-1]]
+                    choices = {
+                        token: [row.tmdb_id for row in rows if token in params["wild_letters"]
+                                or first_letter(row.title, params["ignore_articles"]) in (token, "#")]
+                        for token in required
+                    }
+                else:
+                    position, _ = spec.state(ctx)
+                    required = list(range(position + 1, params["target"] + 1)) if params["mode"] == "count_up" else [position + 1]
+                    choices = {
+                        token: [row.tmdb_id for row in rows
+                                if token in title_numbers(row.title, params["allow_years"])
+                                or (params["mode"] == "increasing" and any(
+                                    n >= token for n in title_numbers(row.title, params["allow_years"])))]
+                        for token in required
+                    }
+                # Match distinct films to requirements: a single numbered/digit-leading title
+                # cannot prove that a repeat-strict checklist covers the entire sequence.
+                if not exact:
+                    ids = [row.tmdb_id for row in rows]
+                    missing = [token for token in required if feasibility.pass_rate(
+                        self.session, TitleCoveragePredicate(spec, ctx, token), ids,
+                    ) == 0]
+                    if missing:
+                        raise RunSetupError(f"{spec.label} has zero pass-rate in the cached mode pool for: {', '.join(map(str, missing[:12]))}")
+                    continue
+                assigned: dict[int, Any] = {}
+                occupied: dict[Any, int] = {}
+                missing = []
+                for token in required:
+                    queue = [token]
+                    parents = {}
+                    free = None
+                    while queue and free is None:
+                        current = queue.pop()
+                        for movie_id in choices[current]:
+                            if movie_id in parents:
+                                continue
+                            parents[movie_id] = current
+                            if movie_id not in assigned:
+                                free = movie_id
+                                break
+                            queue.append(assigned[movie_id])
+                    if free is None:
+                        missing.append(token)
+                    else:
+                        while free is not None:
+                            current = parents[free]
+                            old = occupied.get(current)
+                            assigned[free] = current
+                            occupied[current] = free
+                            free = old
+                if missing:
+                    raise RunSetupError(f"{spec.label} is infeasible in the {'checklist' if exact else 'cached mode pool'}: missing {', '.join(map(str, missing[:12]))}")
+            elif exact:
+                raise RunSetupError(f"{spec.label} has no eligible checklist films")
+        if exact and any(spec.key == "number_in_title" for spec, _ in overlays):
+            ids = {row.tmdb_id for row in rows}
+            if track is not None:
+                rules = {**rules, "filmography": [film for film in track if film["movie_id"] in ids]}
+            else:
+                assert expedition is not None
+                rules = {**rules, "expedition": {**expedition, "films": [film for film in films if film["movie_id"] in ids],
+                                                "movie_ids": [film["movie_id"] for film in films if film["movie_id"] in ids]}}
         return rules
 
     def award_bounty(
@@ -355,6 +487,8 @@ class BaseChallengeEngine(ABC):
         return None
 
     def bounty_pool_allowed(self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]) -> bool:
+        if any(verdict.ok is False for verdict in self.overlay_checks(movie, rules, history).values()):
+            return False
         tail = self.session.get(CachedMovie, history[-1].movie_id) if history else None
         return tail is None or self.modifier_violation(tail, movie, rules, history) is None
 
@@ -410,12 +544,12 @@ class BaseChallengeEngine(ABC):
         not retroactively end a run that was started under the old ones.
         """
         if (
-            not self.supports_json_rules
-            or run.engine_version <= LEGACY_ENGINE_VERSION
+            run.engine_version <= LEGACY_ENGINE_VERSION
             or run.status != RUN_STATUS_ACTIVE
         ):
             return None
-        return evaluate_conditions(run.rules_config, steps)
+        own = evaluate_conditions(run.rules_config, steps) if self.supports_json_rules else None
+        return own or self.overlay_outcome(run, steps)
 
     @classmethod
     def forfeit_outcome(cls, run: Run, steps: Sequence[RunStep]) -> RunOutcome | None:

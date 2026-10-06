@@ -58,7 +58,8 @@ def _movies_watched(steps: Sequence[RunStep]) -> int:
 
 # Wildcards/penalties are spent when a step is logged (even a planned one).
 def _wildcards_used(steps: Sequence[RunStep]) -> int:
-    return sum(1 for s in steps if _metadata(s).get("wildcard_used"))
+    return sum(int(bool(_metadata(s).get("wildcard_used"))) + _metadata(s).get("overlay_wildcard_spent", 0)
+               for s in steps)
 
 
 def _repeats_used(steps: Sequence[RunStep]) -> int:

@@ -18,7 +18,6 @@ export default function Step2RunSetup({
   owner,
   curatedLists,
   canBounty,
-  isTracker,
   castLinked,
   rawEnabled,
   rawParseError,
@@ -149,14 +148,12 @@ export default function Step2RunSetup({
                 {rawParseError && <p className="sr-only" role="alert">{rawParseError}</p>}
               </div>
             ) : (
-              !isTracker && (
                   <ModeOptions
                     gameType={draft.gameType}
                     value={draft.rules}
-                    capabilities={mode?.capabilities}
+                    engine={mode}
                     onChange={(rules) => update({ rules: { ...draft.rules, ...rules } })}
                   />
-              )
             )}
           </div>
         </details>

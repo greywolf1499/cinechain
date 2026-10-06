@@ -105,6 +105,7 @@ export default function RunDetailPage() {
   const { data: engines } = useEngines();
   const { data: curatedLists } = useCuratedLists();
   const rulebook = useRunRulebook(id);
+  const overlayConstraint = useRunConstraint(id);
   const [showRulebook, setShowRulebook] = useState(false);
   const [introType, setIntroType] = useState<string | null>(null);
   useEffect(() => {
@@ -246,6 +247,7 @@ export default function RunDetailPage() {
         </section>
       )}
       <HowToPlayDrawer runId={run.id} engine={engine} open={showRulebook} onClose={() => setShowRulebook(false)} />
+      {overlayConstraint.data?.overlay_progress?.length ? <ModifierChips constraint={overlayConstraint.data} /> : null}
 
       {locked && (
         <RunOutcomeBanner
@@ -1124,9 +1126,11 @@ function RulesSummaryCard({
   castLinked: boolean;
 }) {
   const [showEdit, setShowEdit] = useState(false);
-  const wildcardsConsumed = steps.filter(
-    (step) => (step.transition_metadata as { wildcard_used?: boolean } | null)?.wildcard_used,
-  ).length;
+  const wildcardsConsumed = steps.reduce((count, step) => {
+    const metadata = step.transition_metadata;
+    return count + Number(!!metadata?.wildcard_used)
+      + (typeof metadata?.overlay_wildcard_spent === "number" ? metadata.overlay_wildcard_spent : 0);
+  }, 0);
 
   return (
     <div className="rounded-xl border border-app-border bg-app-surface p-4">
@@ -1189,7 +1193,7 @@ function RulesSummaryCard({
           <span className="text-zinc-200">
             {rules.wildcards_budget === -1
               ? `${wildcardsConsumed} used / Unlimited`
-              : `${wildcardsConsumed} used / ${rules.wildcards_budget} total`}
+              : `${wildcardsConsumed} used / ${rules.wildcards_budget + wildcardsConsumed} total`}
           </span>
         </div>
         <div className="flex items-center justify-between">

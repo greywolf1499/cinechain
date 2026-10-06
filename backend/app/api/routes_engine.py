@@ -1,7 +1,7 @@
 import json
 import time
 from dataclasses import replace
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -12,7 +12,8 @@ from sqlmodel import Session, select
 from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
 from app.config import get_settings
 from app.db import get_session
-from app.engines import chaos, modifiers
+from app.engines import chaos
+from app.engines.modifier_registry import ModifierSpec
 from app.engines.registry import ENGINE_REGISTRY, get_engine
 from app.engines.rulebook import GLOSSARY, RuleSection, render
 from app.engines.trackers import RouletteEngine, SpinFilters
@@ -79,6 +80,7 @@ class EngineMeta(BaseModel):
     presets: list[Preset]
     default_preset: str
     bounty_reward: Literal["wildcard", "life", "hint", "star"]
+    modifiers: list[dict[str, Any]]
 
 
 class RulebookOverlay(BaseModel):
@@ -108,6 +110,13 @@ class BridgeRequest(BaseModel):
     to_movie_id: int
 
 
+def _modifier_schema(spec: ModifierSpec) -> dict[str, Any]:
+    schema = spec.params.model_json_schema()
+    for key, value in spec.params().model_dump().items():
+        schema["properties"][key].setdefault("default", value)
+    return schema
+
+
 @router.get("/engines", response_model=list[EngineMeta])
 def list_engines(
     session: Session = Depends(get_session),
@@ -115,6 +124,8 @@ def list_engines(
 ) -> list[EngineMeta]:
     base = get_settings()
     overrides = settings_repo.get_overrides(session)
+    from app.engines.modifier_registry import param_values, registry
+
     return [
         EngineMeta(
             game_type=cls.game_type,
@@ -128,6 +139,14 @@ def list_engines(
             presets=cls.presets,
             default_preset=cls.default_preset,
             bounty_reward=cls.bounty_reward,
+            modifiers=[{
+                "key": spec.key, "label": spec.label, "emoji": spec.emoji, "blurb": spec.blurb,
+                "scope": spec.scope, "params_schema": _modifier_schema(spec),
+                "compatible": spec.compatible(cls) is None,
+                "incompatible_reason": spec.compatible(cls),
+                "default_params": param_values(spec.key, cls.default_modifiers[spec.key])
+                if spec.key in cls.default_modifiers else None,
+            } for spec in registry().values()],
             tagline=cls.tagline,
             tags=cls.tags,
             rulebook=render(cls.rulebook, cls.rulebook_values({
@@ -188,7 +207,9 @@ def run_rulebook(
     if handicap:
         add("chaos", "Chaos handicap", chaos.RULEBOOK, {"chaos_label": handicap.label})
     for key, value in active.items():
-        add(key, key.replace("_", " ").title(), modifiers.RULEBOOK[key], {
+        from app.engines.modifier_registry import registry
+
+        add(key, registry()[key].label, registry()[key].rulebook, {
             key: value, "chrono_word": "before" if value == "descent" else "after",
             "runtime_word": "shorter" if value == "descending" else "longer",
         })

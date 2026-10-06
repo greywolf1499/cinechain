@@ -23,6 +23,9 @@ BLIND_FORK_KEY = "blind_fork"
 PENDING_FORK_KEY = "pending_fork"
 OFFER_SIZE = 3
 SERVER_OWNED_RULES = (
+    "overlay_progress",
+    "alphabet_next",
+    "ascending_next",
     PENDING_FORK_KEY,
     "tug_scores",
     "tug_players",

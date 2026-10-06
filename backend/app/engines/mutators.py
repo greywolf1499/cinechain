@@ -26,7 +26,7 @@ from typing import Any, ClassVar
 import httpx
 from sqlmodel import select
 
-from app.engines import modifiers
+from app.engines import chaos, modifiers
 from app.engines.cinechain import CineChainEngine
 from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
@@ -120,9 +120,13 @@ class MutatorEngine(CineChainEngine):
         history: Sequence[RunStep] | None = None,
     ) -> str | None:
         """Why `later` may not follow `earlier`: this mode's own rule, then the run's modifiers."""
-        return self.pair_violation(earlier, later, rules) or self.modifier_violation(
-            earlier, later, rules, history
-        )
+        from app.engines.modifier_registry import contexts
+
+        active = {spec.key: self.active_modifiers(rules)[spec.key]
+                  for spec, _ in contexts(self.active_modifiers(rules)) if spec.scope == "pair"}
+        return self.pair_violation(earlier, later, rules) or modifiers.pair_modifier_violation(
+            active, earlier, later, history,
+        ) or chaos.violation(self.session, later, rules)
 
     def _bridge_needs_detail(self, rules: dict | None) -> bool:
         active = self.active_modifiers(rules)

@@ -8,10 +8,17 @@ import type { ConstraintInfo } from "../types/api";
 export default function ModifierChips({ constraint }: { constraint: ConstraintInfo | null | undefined }) {
   const locked = constraint?.cooldown_countries ?? [];
   const notes = constraint?.modifier_notes ?? [];
-  if (locked.length === 0 && notes.length === 0) return null;
+  const overlays = constraint?.overlay_progress ?? [];
+  if (locked.length === 0 && notes.length === 0 && overlays.length === 0) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
+      {overlays.map((overlay) => (
+        <span key={overlay.key} className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[11px] text-violet-200"
+          title={overlay.can_skip ? `No ${overlay.next} films within reach: use a wildcard when logging a substitute.` : undefined}>
+          {overlay.label}{overlay.can_skip ? " · Wildcard skip available" : ""}
+        </span>
+      ))}
       {locked.length > 0 && (
         <span
           className="inline-flex items-center gap-1.5 rounded-full border border-teal-400/30 bg-teal-500/10 px-2.5 py-1 text-[11px] font-medium text-teal-200"

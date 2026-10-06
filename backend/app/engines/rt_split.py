@@ -166,7 +166,7 @@ class RottenTomatoesSplitEngine(TrackerEngine):
         return split_scores(self.session.get(CachedMovieRating, movie_id))
 
     def split_pool(
-        self, exclude_ids: Sequence[int] = (), limit: int = 30
+        self, exclude_ids: Sequence[int] = (), limit: int | None = 30
     ) -> list[tuple[CachedMovie, SplitScores]]:
         """Cached films whose critic and audience scores diverge enough, biggest split first."""
         pool: list[tuple[CachedMovie, SplitScores]] = []

@@ -227,6 +227,11 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
 
 # Metadata keys only the server may set: a client-supplied `collision` would be a free win.
 SERVER_OWNED_METADATA = (
+    "overlay_wildcard_spent",
+    "overlay_skips",
+    "overlay_progress",
+    "alphabet_next",
+    "ascending_next",
     "acting_participant_id",
     "tunnel_side",
     "collision",
@@ -302,7 +307,8 @@ def _step_actor_id(step: RunStep) -> str | None:
 
 def _count_wildcards_consumed(session: Session, run_id: str) -> int:
     steps = session.exec(select(RunStep).where(RunStep.run_id == run_id)).all()
-    return sum(1 for step in steps if (step.transition_metadata or {}).get("wildcard_used"))
+    return sum(int(bool((step.transition_metadata or {}).get("wildcard_used")))
+               + (step.transition_metadata or {}).get("overlay_wildcard_spent", 0) for step in steps)
 
 
 def _ensure_run_open(run: Run) -> None:
@@ -325,7 +331,7 @@ def _apply_run_outcome(session: Session, tmdb: TMDBClient, run: Run) -> None:
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if engine_class is None:
         return
-    steps = session.exec(select(RunStep).where(RunStep.run_id == run.id)).all()
+    steps = session.exec(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.logged_at)).all()
     engine = engine_class(session, tmdb)
     engine.sync_run_state(run, steps)
     outcome = engine.evaluate_run_outcome(run, list(steps))
@@ -349,7 +355,7 @@ async def _enforce_run_rules(
     payload: RunStepCreate,
     user: User,
     fork_team: str | None = None,
-) -> dict:
+) -> tuple[dict, dict | None]:
     """Validates a candidate step against the run's rules_config.
 
     Returns (extra transition_metadata fields to merge in - repeat_penalty,
@@ -362,6 +368,28 @@ async def _enforce_run_rules(
     extra_metadata: dict = {}
     linked_metadata: dict | None = None
     broke_a_rule = False
+    overlay_engine = get_engine(run.game_type, session, tmdb)
+    overlay_history = _run_history(session, run.id)
+    checks = overlay_engine.overlay_checks(movie, rules, overlay_history)
+    skipping = set(payload.skip_overlays)
+    if skipping:
+        if not force or payload.status != "watched":
+            raise HTTPException(422, detail="Overlay skips require a watched film and explicit wildcard confirmation")
+        options = await _overlay_skip_options(session, overlay_engine, run)
+        if not skipping <= {item["key"] for item in options if item["can_skip"]}:
+            raise HTTPException(409, detail="An overlay can only be skipped when no reachable film satisfies it")
+        if any(checks.get(key) is None or checks[key].ok is not False for key in skipping):
+            raise HTTPException(409, detail="Only an unmet overlay requirement can be skipped")
+        budget = rules.get("wildcards_budget", 0)
+        if budget != -1 and budget < len(skipping):
+            raise HTTPException(409, detail="No wildcards remaining for this overlay skip")
+        extra_metadata["overlay_skips"] = sorted(skipping)
+        extra_metadata["overlay_wildcard_spent"] = len(skipping) if budget != -1 else 0
+        rules = {**rules, "modifiers": [entry for entry in rules.get("modifiers", [])
+                                      if entry["key"] not in skipping]}
+    for key, verdict in checks.items():
+        if key not in skipping and verdict.ok is False:
+            raise HTTPException(409, detail={"valid": False, "blocked": True, "reason": verdict.reason, "connections": []})
     if run.game_type == TUG_OF_WAR:
         tug_engine = TugOfWarEngine(session, tmdb)
         players = tug_engine.team_players(run)
@@ -475,12 +503,16 @@ async def _enforce_run_rules(
         if not result.valid and result.blocked:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
         if not result.valid:
+            if skipping:
+                raise HTTPException(409, detail=result.model_dump())
             if not force:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT, detail=result.model_dump()
                 )
             broke_a_rule = True
         linked_metadata = engine.link_metadata(result, payload.transition_metadata)
+        if skipping and result.connections and linked_metadata is None and not payload.transition_metadata:
+            linked_metadata = result.connections[0].model_dump()
         if result.valid:
             for key in BONUS_LINK_KEYS:
                 if result.mechanic and key in result.mechanic:
@@ -501,7 +533,7 @@ async def _enforce_run_rules(
             # Crew & Craft links name a person (any role); the classic ones an actor.
             chosen = (
                 linked_metadata
-                if linked_metadata and "person_id" in linked_metadata
+                if linked_metadata and ("person_id" in linked_metadata or "actor_id" in linked_metadata)
                 else payload.transition_metadata
             ) or {}
             chosen_actor_id = chosen.get("person_id", chosen.get("actor_id"))
@@ -524,6 +556,8 @@ async def _enforce_run_rules(
                 broke_a_rule = True
 
     engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if skipping and broke_a_rule:
+        raise HTTPException(409, detail="An overlay substitute must satisfy every other run rule")
     if force and broke_a_rule and engine_class is not None and engine_class.uses_lives:
         # Survival modes: a forced step costs a life, never a wildcard.
         lives, _ = rabbit_hole.lives_of(rules)
@@ -552,6 +586,14 @@ async def _enforce_run_rules(
             session.add(run)
         extra_metadata["wildcard_used"] = True
 
+    if skipping:
+        current = run.rules_config or {}
+        budget = current.get("wildcards_budget", 0)
+        spent = extra_metadata["overlay_wildcard_spent"]
+        if budget != -1 and budget < spent:
+            raise HTTPException(409, detail="Not enough wildcards for both the overlay skip and other violations")
+        run.rules_config = {**current, "wildcards_budget": budget - spent if budget != -1 else -1}
+        session.add(run)
     return extra_metadata, linked_metadata
 
 
@@ -712,6 +754,7 @@ async def create_run(
             rules_config = await engine.prepare_run(rules_config, current_user.id)
         except RunSetupError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        overlay_seed_history = []
         for seed_id in (payload.seed_movie_id, payload.tail_seed_movie_id):
             if seed_id is None:
                 continue
@@ -721,6 +764,17 @@ async def create_run(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=f"Seed movie rejected: {seed.reason}",
                 )
+            movie = await engine._load(seed_id)
+            checks = engine.overlay_checks(movie, rules_config, [])
+            number_check = checks.get("number_in_title")
+            if number_check and number_check.ok is False:
+                raise HTTPException(422, detail=f"Seed movie rejected: {number_check.reason}")
+            overlay_seed_history.append(RunStep(run_id="", movie_id=seed_id, movie_title=movie.title,
+                                               transition_metadata={SEED_KEY: True}, status="watched"))
+        try:
+            rules_config = engine.prepare_overlays(rules_config, overlay_seed_history)
+        except RunSetupError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     run = Run(
         name=payload.name,
@@ -876,13 +930,22 @@ def update_run_rules(
     if update.get(blind_fork.BLIND_FORK_KEY) is False:
         merged = blind_fork.with_fork(merged, None)
     if engine_class is not None:
-        problems = engine_class(session, tmdb).validate_rules_config(merged)
+        engine = engine_class(session, tmdb)
+        problems = engine.validate_rules_config(merged)
         if update.get(blind_fork.BLIND_FORK_KEY):
             problems += _blind_fork_problems(engine_class)
         if problems:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems)
             )
+        if engine.bounty_ids(merged, []) is not None and (
+            engine.active_modifiers(run.rules_config).get("number_in_title") != engine.active_modifiers(merged).get("number_in_title")
+        ):
+            raise HTTPException(422, detail="Number in title on a filtered checklist can only be chosen at creation")
+        try:
+            merged = engine.prepare_overlays(merged, _run_history(session, run.id))
+        except RunSetupError as exc:
+            raise HTTPException(exc.status_code, detail=str(exc)) from exc
     if run.game_type in ("method_actor", "auteur_marathon") and "order" in update:
         from app.engines.method_actor import marathon_skip
         merged["max_skip"] = marathon_skip(merged)
@@ -1086,6 +1149,7 @@ def mark_step_watched(
     actor = _acting_user(session, run, current_user, payload.acting_participant_id)
     if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
         raise HTTPException(403, detail="Switch to the participant who queued this film")
+    _check_watched_overlays(session, tmdb, run, step)
     if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3):
         players = TugOfWarEngine(session, tmdb).team_players(run)
         team = step_turn_team(step, players)
@@ -1128,6 +1192,7 @@ def update_step(
     became_watched = payload.watched_at is not None and step.status == "planned"
     if became_watched:
         _ensure_run_open(run)
+        _check_watched_overlays(session, tmdb, run, step)
         if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
             raise HTTPException(403, detail="Switch to the participant who queued this film")
         if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3):
@@ -1184,6 +1249,9 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
     session.flush()
     rules_before_revoke = dict(run.rules_config or {})
     rules = dict(run.rules_config or {})
+    if metadata.get("overlay_wildcard_spent"):
+        rules["wildcards_budget"] = rules.get("wildcards_budget", 0) + metadata["overlay_wildcard_spent"]
+        run.rules_config = rules
     board = bounties.active_bounties(rules)
     for change in reversed(metadata.get("bounty_expiry_changes") or []):
         board = [b for b in board if b != change["replacement"]]
@@ -1219,6 +1287,13 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if engine_class is not None:
         engine_class(session, tmdb).sync_run_state(run, remaining)
+        if run.status == RUN_STATUS_COMPLETED and run.status_reason and (
+            "conquered in" in run.status_reason
+        ):
+            candidate = Run.model_validate(run.model_dump())
+            candidate.status = RUN_STATUS_ACTIVE
+            if engine_class(session, tmdb).overlay_outcome(candidate, remaining) is None:
+                reopen = True
     if (
         run.game_type == TUG_OF_WAR
         and run.status == RUN_STATUS_COMPLETED
@@ -1567,6 +1642,30 @@ async def validate_step(
         previous = side_steps[-1] if side_steps else None
     else:
         previous = _last_step(session, run.id)
+    movie = await engine._load(payload.movie_id)
+    failed = [key for key, verdict in engine.overlay_checks(movie, rules, _run_history(session, run.id)).items()
+              if verdict.ok is False]
+    if failed:
+        connections = []
+        options = await _overlay_skip_options(session, engine, run)
+        skippable = [item["key"] for item in options if item["can_skip"] and item["key"] in failed]
+        if set(skippable) == set(failed):
+            skip_rules = {**rules, "modifiers": [entry for entry in rules.get("modifiers", [])
+                                               if entry["key"] not in skippable]}
+            other = await engine.validate_candidate(payload.movie_id, skip_rules) if previous is None else await engine.validate_next_step(
+                previous.movie_id, payload.movie_id, cast_limit=rules.get("max_cast_order"),
+                rules=skip_rules, previous_transition=previous.transition_metadata,
+                history=_run_history(session, run.id),
+            )
+            if not other.valid:
+                return other.model_copy(update={"blocked": True})
+            connections = other.connections
+            if movie.runtime is not None and movie.runtime < rules.get("min_runtime", 0):
+                return ValidationResult(valid=False, blocked=True, reason="Overlay substitute is under the runtime minimum")
+        return ValidationResult(valid=False, blocked=set(skippable) != set(failed),
+                                reason="Overlay requirement does not match this title",
+                                connections=connections,
+                                overlay_skippable=skippable)
     if previous is None:
         return await engine.validate_candidate(payload.movie_id, rules)
     result = await engine.validate_next_step(
@@ -1787,6 +1886,10 @@ async def get_run_constraint(
         rules,
         history,
     )
+    if constraint and constraint.overlay_progress:
+        constraint = constraint.model_copy(update={
+            "overlay_progress": await _overlay_skip_options(session, engine, run),
+        })
     if (
         isinstance(engine, RabbitHoleEngine)
         and constraint is not None
@@ -2081,6 +2184,7 @@ def discard_bounty(
 
 async def _reachable_pool(
     session: Session, engine: BaseChallengeEngine, run: Run, *, off_tier: bool = False,
+    include_overlay_failures: bool = False,
 ) -> list[int]:
     history = _run_history(session, run.id)
     rules = _run_rules(run)
@@ -2089,7 +2193,8 @@ async def _reachable_pool(
         return [row.tmdb_id for row in session.exec(select(CachedMovie)).all()
                 if (seeds is None or row.tmdb_id in seeds)
                 and is_reality_eligible(row)
-                and (row.runtime is None or row.runtime >= rules.get("min_runtime", 0))]
+                and (row.runtime is None or row.runtime >= rules.get("min_runtime", 0))
+                and (include_overlay_failures or all(verdict.ok is not False for verdict in engine.overlay_checks(row, rules, history).values()))]
     tail = history[-1]
     candidates = await engine.discover_with_modifiers(
         frontier_movie_id=tail.movie_id, mode="or", cast_limit=rules.get("max_cast_order"),
@@ -2106,7 +2211,74 @@ async def _reachable_pool(
         and (row := session.get(CachedMovie, candidate.movie_id)) is not None
         and is_reality_eligible(row)
         and (row.runtime is None or row.runtime >= rules.get("min_runtime", 0))
+        and (include_overlay_failures or all(ok is not False for ok in candidate.overlay_ok.values()))
     ]
+
+
+async def _overlay_skip_options(session: Session, engine: BaseChallengeEngine, run: Run) -> list[dict]:
+    from app.engines.modifier_registry import contexts
+
+    history = _run_history(session, run.id)
+    rules = _run_rules(run)
+    specs = [(spec, ctx) for spec, ctx in contexts(engine.active_modifiers(rules), history)
+             if spec.needs == frozenset({"title"})]
+    if not specs:
+        return []
+    if "discover_candidates" in engine.capabilities:
+        ids = await _reachable_pool(session, engine, run, include_overlay_failures=True)
+        exact = None
+    else:
+        exact = engine.bounty_ids(rules, history)
+        ids = exact if exact is not None else list(session.exec(select(CachedMovie.tmdb_id)).all())
+    used = {step.movie_id for step in history}
+    bounds = engine.bounty_bounds(rules, history)
+    evidence = feasibility.evidence_for(session)
+    checklist = {film["movie_id"]: film for film in (
+        rules.get("filmography") or (rules.get("expedition") or {}).get("films") or []
+    )}
+    rows = []
+    unknown = False
+    for movie_id in ids:
+        if movie_id in used and rules.get("allow_repeats") != "allowed":
+            continue
+        row = session.get(CachedMovie, movie_id)
+        if row is None:
+            if exact is not None and movie_id in checklist:
+                rows.append(CachedMovie(tmdb_id=movie_id, title=checklist[movie_id]["title"]))
+            else:
+                unknown = True
+        elif is_reality_eligible(row) and feasibility.within(evidence.facts[movie_id], bounds):
+            rows.append(row)
+    budget = rules.get("wildcards_budget", 0)
+    result = []
+    for spec, ctx in specs:
+        progress = spec.progress(ctx)
+        assert progress is not None
+        available = unknown or any(spec.check(ctx, row).ok is not False for row in rows)
+        result.append({**progress, "available": available,
+                       "can_skip": spec.scope == "sequence" and bool(rows) and not available
+                       and (budget == -1 or budget > 0) and run.status == RUN_STATUS_ACTIVE})
+    return result
+
+
+def _check_watched_overlays(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) -> None:
+    if step.status == "watched":
+        return
+    if not any(entry.get("key") in ("alphabet_run", "number_in_title", "ascending_numbers")
+               for entry in _run_rules(run).get("modifiers", [])):
+        return
+    engine = get_engine(run.game_type, session, tmdb)
+    history = [other for other in _run_history(session, run.id) if other.id != step.id]
+    movie = session.get(CachedMovie, step.movie_id)
+    if movie is None:
+        raise HTTPException(409, detail="Film details are missing; reload the film before marking watched")
+    skips = (step.transition_metadata or {}).get("overlay_skips") or []
+    for key, verdict in engine.overlay_checks(movie, _run_rules(run), history).items():
+        if key not in skips and verdict.ok is False:
+            raise HTTPException(409, detail=verdict.reason)
+    if step.status == "planned" and any(entry.get("key") in ("alphabet_run", "ascending_numbers")
+                                      for entry in _run_rules(run).get("modifiers", [])):
+        step.logged_at = utcnow()
 
 
 @router.post("/{run_id}/chaos", response_model=RunDetail)

@@ -427,12 +427,12 @@ function DiscoveryGrid({
   }, [candidates, furtherPool, filterContext]);
   const targetGenreId = genres?.find((genre) => genre.name === pendulumState(rulesConfig, steps.length).target)?.id;
   const cooldown = useMemo(() => {
-    const window = effectiveCooldown(gameType, rulesConfig);
+    const window = effectiveCooldown(gameType, rulesConfig, engine);
     return new Map((constraint?.cooldown_countries ?? []).map((code) => {
       const age = [...steps].reverse().findIndex((step) => (step.movie_origin_countries ?? parseOriginCountries(step.movie_origin_country))[0] === code);
       return [code, Math.max(1, window - Math.max(0, age))];
     }));
-  }, [constraint, steps, gameType, rulesConfig]);
+  }, [constraint, steps, gameType, rulesConfig, engine]);
   const selectedCountry = specs.find((spec) => spec.source === "origin_country");
   const countryFilter = selectedCountry && typeof modeValues[selectedCountry.key] === "string" ? modeValues[selectedCountry.key] as string : undefined;
   const furtherDecade = decadeKey !== "all" && decadeKey !== "early" ? Number(decadeKey) : undefined;
@@ -571,6 +571,10 @@ function DiscoveryGrid({
   }
 
   async function handleAdd(candidate: DiscoveryCandidate, watched: boolean) {
+    if (Object.values(candidate.overlay_ok ?? {}).some((ok) => ok === false)) {
+      openCandidate(candidate);
+      return;
+    }
     setPendingMovieId(candidate.movie_id);
     const connection = candidate.connections[0];
     try {
@@ -598,7 +602,8 @@ function DiscoveryGrid({
     onOpenMovie({
       kind: "movie", label: candidate.title, movieId: candidate.movie_id,
       posterPath: candidate.poster_path,
-      guaranteedConnected: candidate.tier_compliant !== false && !candidate.constraint_unverified,
+      guaranteedConnected: candidate.tier_compliant !== false && !candidate.constraint_unverified
+        && Object.values(candidate.overlay_ok ?? {}).every((ok) => ok === true),
       safeActorIds: new Set(candidate.connections.map((connection) => connection.actor_id)),
       directConnection: candidate.connections[0],
     });
@@ -637,6 +642,12 @@ function DiscoveryGrid({
   return (
     <div className="flex flex-col gap-4">
       <ModifierChips constraint={constraint} />
+      {constraint?.overlay_progress?.filter((overlay) => overlay.can_skip).map((overlay) => (
+        <p key={overlay.key} role="status" className="rounded border border-amber-800/50 p-3 text-xs text-amber-300">
+          No {overlay.next} films within reach: spend a wildcard to skip {overlay.next}.
+          Open a substitute film, check it, then log watched to confirm. Queueing cannot spend a skip.
+        </p>
+      ))}
 
       {constraint?.rabbit_hole?.upcoming_tier_warning && (
         <div
@@ -1209,6 +1220,12 @@ function CandidateCard({
 
         {castLinked && <ConnectionBadge connections={candidate.connections} />}
         <MechanicBadge candidate={candidate} gameType={gameType} />
+        {Object.entries(candidate.overlay_ok ?? {}).map(([key, ok]) => (
+          <span key={key} className={cn("w-fit rounded-full px-2 py-0.5 text-[10px]",
+            ok === true ? "bg-emerald-950 text-emerald-300" : "bg-amber-950 text-amber-300")}>
+            {ok === true ? "✓" : "!"} {key.replaceAll("_", " ")}{ok === false ? " · Needs unreachable-rule skip" : ""}
+          </span>
+        ))}
         {gameType === "tug_of_war" && candidate.tug_effect && candidate.tug_points != null && (
           <GlossaryChip
             term={candidate.tug_effect === "invasion" ? "raid" : candidate.tug_effect === "neutral" ? "bank" : candidate.tug_effect === "home" ? "build" : "sudden_death"}
@@ -1559,7 +1576,8 @@ function MovieScreenView({
   const [guard, setGuard] = useState<GuardStatus | null>(null);
 
   const allowRepeats = allowsMovieRepeats(rulesConfig);
-  const pricing = forcePricing(rulesConfig);
+  const skips = guard?.state === "no-connect" ? guard.result.overlay_skippable ?? [] : [];
+  const pricing = forcePricing(skips.length ? { ...rulesConfig, lives_remaining: undefined } : rulesConfig);
   const wildcardsRemaining = pricing.remaining;
   const wildcardsExhausted = pricing.exhausted;
   const existingStepNumber = findExistingStepNumber(steps, screen.movieId);
@@ -1573,6 +1591,7 @@ function MovieScreenView({
     await createStep.mutateAsync({
       movie_id: screen.movieId,
       force: true,
+      ...(skips.length ? { skip_overlays: skips } : {}),
       ...([2, 3].includes(rulesConfig.tug_rules_version ?? 1)
         ? { tug_team: tugNextTeam(rulesConfig) }
         : {}),
@@ -1696,12 +1715,13 @@ function MovieScreenView({
           !screen.guaranteedConnected &&
           guard?.state === "no-connect" &&
           (wildcardsExhausted || !!guard.result.blocked);
-        const disabled = createStep.isPending || guard?.state === "checking" || lockedByWildcards;
+        const disabled = createStep.isPending || guard?.state === "checking" || lockedByWildcards
+          || (skips.length > 0 && wildcardsRemaining !== -1 && wildcardsRemaining < skips.length);
         return (
           <div className="flex gap-2">
             <button
               type="button"
-              disabled={disabled}
+              disabled={disabled || skips.length > 0}
               onClick={() => checkAndAdd(false)}
               className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-app-border px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -1719,7 +1739,7 @@ function MovieScreenView({
               {(createStep.isPending || guard?.state === "checking") && (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               )}
-              Log Watched
+              {skips.length ? `Spend ${skips.length} wildcard${skips.length === 1 ? "" : "s"} & log watched` : "Log Watched"}
             </button>
           </div>
         );

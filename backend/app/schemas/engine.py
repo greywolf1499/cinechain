@@ -61,6 +61,7 @@ class SharedActorConnection(BaseModel):
 
 
 class ValidationResult(BaseModel):
+    overlay_skippable: list[str] = []
     valid: bool
     reason: str | None = None
     connections: list[SharedActorConnection] = []
@@ -167,6 +168,7 @@ class ConstraintInfo(BaseModel):
     # (most recently visited first) and one-line notes for other active modifiers.
     cooldown_countries: list[str] = []
     modifier_notes: list[str] = []
+    overlay_progress: list[dict[str, Any]] = []
     rabbit_hole: RabbitHoleState | None = None
 
 

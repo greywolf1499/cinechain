@@ -268,8 +268,11 @@ export const TRACKER_MODES = new Set([
 /** Does this run link films through shared cast/directors? Drives the Pick Next layout. */
 export function usesCastLinks(
   gameType: string,
-  rules: Pick<RulesConfig, "require_cast_link"> | null | undefined,
+  rules: Pick<RulesConfig, "require_cast_link" | "modifiers"> | null | undefined,
 ): boolean {
-  if (STANDALONE_MODES.has(gameType)) return !!rules?.require_cast_link;
+  if (STANDALONE_MODES.has(gameType)) {
+    const nested = rules?.modifiers?.find((entry) => entry.key === "require_cast_link");
+    return nested ? nested.params.enabled !== false : !!rules?.require_cast_link;
+  }
   return !TRACKER_MODES.has(gameType);
 }

@@ -72,6 +72,7 @@ MODIFIER_UPDATE_KEYS = ("chrono_direction", "runtime_staircase", "country_cooldo
 
 
 class RunStepCreate(BaseModel):
+    skip_overlays: list[str] = Field(default_factory=list, max_length=2)
     acting_participant_id: str | None = None
     movie_id: int
     transition_metadata: dict[str, Any] | None = None

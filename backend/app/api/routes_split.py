@@ -24,6 +24,7 @@ POOL_SIZE = 30
 
 
 class SplitCandidate(BaseModel):
+    overlay_ok: dict[str, bool | None] = {}
     movie_id: int
     title: str
     year: int | None = None
@@ -80,6 +81,9 @@ async def retry_split_ratings(
     movie = session.get(CachedMovie, movie_id)
     scores = engine.scores_of(movie_id)
     assert movie is not None and scores is not None
+    for verdict in engine.overlay_checks(movie, run.rules_config or {}, []).values():
+        if verdict.ok is False:
+            return SplitUnqualified(reason=verdict.reason or "This title does not qualify")
     return _candidate(movie, scores)
 
 
@@ -118,12 +122,16 @@ async def get_split_pool(
 
     watched = set(session.exec(select(RunStep.movie_id).where(RunStep.run_id == run.id)).all())
     engine = RottenTomatoesSplitEngine(session, tmdb)
+    history = session.exec(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.logged_at)).all()
     return SplitPool(
         omdb_enabled=omdb.enabled,
         min_divergence=MIN_DIVERGENCE,
         scanned=scanned,
         candidates=[
-            _candidate(movie, scores)
-            for movie, scores in engine.split_pool(exclude_ids=list(watched), limit=POOL_SIZE)
-        ],
+            _candidate(movie, scores).model_copy(update={
+                "overlay_ok": {key: verdict.ok for key, verdict in engine.overlay_checks(movie, run.rules_config or {}, history).items()},
+            })
+            for movie, scores in engine.split_pool(exclude_ids=list(watched), limit=None)
+            if all(verdict.ok is not False for verdict in engine.overlay_checks(movie, run.rules_config or {}, history).values())
+        ][:POOL_SIZE],
     )

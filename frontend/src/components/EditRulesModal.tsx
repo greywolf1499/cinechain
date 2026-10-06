@@ -39,7 +39,8 @@ export default function EditRulesModal({
   return (
     <Modal open={open} onClose={onClose} title="Edit Rules" widthClassName="max-w-md">
       <div className="flex flex-col gap-4">
-        <ModeOptions gameType={gameType} value={rules} onChange={setRules} />
+        <ModeOptions gameType={gameType} value={rules} onChange={setRules}
+          engine={engines.data?.find((engine) => engine.game_type === gameType)} editing />
         <RulesetFields
           value={rules}
           onChange={(next) => setRules({ ...rules, ...next })}

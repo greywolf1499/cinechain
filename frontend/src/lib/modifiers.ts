@@ -1,52 +1,64 @@
-import { STANDALONE_MODES, TRACKER_MODES, usesCastLinks } from "./gameModes";
-import type { RulesConfig } from "../types/api";
+import { usesCastLinks } from "./gameModes";
+import type { EngineMeta, ModifierMeta, ModifierParamValue, RulesConfig } from "../types/api";
 
-/** Pair rules (Engine V3) that can be layered on any graph engine. `require_cast_link` is the
- * fourth modifier but is already part of the standalone modes' own options. */
-export const MODIFIER_KEYS = [
-  "require_cast_link",
-  "chrono_direction",
-  "runtime_staircase",
-  "country_cooldown",
-] as const;
-
-export const MAX_COUNTRY_COOLDOWN = 10;
-/** Modes whose own rule already is one of the modifiers, and the value it defaults to. */
-export const DEFAULT_COOLDOWN: Record<string, number> = { world_passport: 3 };
-
-export function supportsModifiers(gameType: string, capabilities?: string[]): boolean {
-  return capabilities ? capabilities.includes("modifiers") : !TRACKER_MODES.has(gameType);
+export function supportsModifiers(engine?: EngineMeta): boolean {
+  return !!engine?.modifiers.some((spec) => spec.compatible);
 }
 
-/** Which modifier controls a mode offers (Chrono's direction is its own mode option). */
-export function availableModifiers(gameType: string): {
-  castLink: boolean;
-  chrono: boolean;
-  staircase: boolean;
-  cooldown: boolean;
-} {
-  return {
-    castLink: STANDALONE_MODES.has(gameType),
-    // Chrono is Chrono Climb's own rule; Historical Time-Travel has its own (setting-year) direction.
-    chrono: gameType !== "chrono_climb" && gameType !== "historical_time_travel",
-    staircase: true,
-    cooldown: true,
-  };
+export function modifierParams(spec: ModifierMeta, rules: RulesConfig): Record<string, ModifierParamValue> | null {
+  const entry = rules.modifiers?.find((item) => item.key === spec.key);
+  if (entry) return entry.params;
+  // Legacy aliases remain readable; all new selections use registry entries.
+  if (spec.key === "chrono_direction" && (rules.chrono_direction ?? rules.direction)) {
+    return { direction: rules.chrono_direction ?? rules.direction ?? "climb" };
+  }
+  if (spec.key === "runtime_staircase" && rules.runtime_staircase) return { direction: rules.runtime_staircase };
+  if (spec.key === "country_cooldown" && rules.country_cooldown != null) {
+    return rules.country_cooldown > 0 ? { steps: rules.country_cooldown } : { steps: 0 };
+  }
+  if (spec.key === "require_cast_link" && rules.require_cast_link != null) return { enabled: rules.require_cast_link };
+  return spec.default_params;
 }
 
-export function effectiveCooldown(gameType: string, rules: RulesConfig): number {
-  return rules.country_cooldown ?? DEFAULT_COOLDOWN[gameType] ?? 0;
+export function defaultModifierParams(spec: ModifierMeta): Record<string, ModifierParamValue> {
+  return Object.fromEntries(Object.entries(spec.params_schema.properties)
+    .filter(([, schema]) => schema.default !== undefined)
+    .map(([key, schema]) => [key, schema.default!]));
 }
 
-/** How many optional modifiers are switched on beyond the mode's own rule. */
-export function activeModifierCount(gameType: string, rules: RulesConfig): number {
-  const have = availableModifiers(gameType);
-  let count = 0;
-  if (have.castLink && rules.require_cast_link) count++;
-  if (have.chrono && rules.chrono_direction) count++;
-  if (rules.runtime_staircase) count++;
-  if (effectiveCooldown(gameType, rules) !== (DEFAULT_COOLDOWN[gameType] ?? 0)) count++;
-  return count;
+export function setModifier(
+  rules: RulesConfig, spec: ModifierMeta, params: Record<string, ModifierParamValue> | null,
+): RulesConfig {
+  const modifiers = (rules.modifiers ?? []).filter((entry) => entry.key !== spec.key);
+  // Empty params would re-enable the schema default, so explicit false/zero overrides mode defaults.
+  if (params) modifiers.push({ key: spec.key, params });
+  else if (spec.default_params) {
+    const inactive: Record<string, ModifierParamValue> = spec.key === "country_cooldown"
+      ? { steps: 0 } : spec.key === "chrono_direction" ? spec.default_params : { enabled: false };
+    modifiers.push({ key: spec.key, params: inactive });
+  }
+  const next = { ...rules, modifiers };
+  if (spec.key === "chrono_direction") { delete next.chrono_direction; delete next.direction; }
+  if (spec.key === "runtime_staircase") delete next.runtime_staircase;
+  if (spec.key === "country_cooldown") delete next.country_cooldown;
+  if (spec.key === "require_cast_link") delete next.require_cast_link;
+  return next;
+}
+
+export function modifierEnabled(params: Record<string, ModifierParamValue> | null): boolean {
+  return !!params && params.enabled !== false && params.steps !== 0;
+}
+
+export function effectiveCooldown(_gameType: string, rules: RulesConfig, engine?: EngineMeta): number {
+  const nested = rules.modifiers?.find((entry) => entry.key === "country_cooldown")?.params.steps;
+  if (typeof nested === "number") return nested;
+  const fallback = engine?.modifiers.find((spec) => spec.key === "country_cooldown")?.default_params?.steps;
+  return rules.country_cooldown ?? (typeof fallback === "number" ? fallback : 0);
+}
+
+export function activeModifierCount(engine: EngineMeta, rules: RulesConfig): number {
+  return engine.modifiers.filter((spec) => spec.compatible && modifierEnabled(modifierParams(spec, rules))
+    && !spec.default_params).length;
 }
 
 /** The rules with every modifier cleared (switching mode must not leak the old mode's tweaks). */
@@ -57,28 +69,25 @@ export function clearModifiers(rules: RulesConfig): RulesConfig {
   delete next.runtime_staircase;
   delete next.country_cooldown;
   delete next.direction;
+  delete next.modifiers;
   return next;
 }
 
 /** The modifier keys to send when creating a run: only what's on, only where supported. */
 export function modifierPayload(
-  gameType: string,
+  engine: EngineMeta | undefined,
   rules: RulesConfig,
-  capabilities?: string[],
 ): Partial<RulesConfig> {
-  if (!supportsModifiers(gameType, capabilities)) return {};
-  const have = availableModifiers(gameType);
+  if (!supportsModifiers(engine) || !engine) return {};
   const payload: Partial<RulesConfig> = {};
-  if (have.castLink) payload.require_cast_link = !!rules.require_cast_link;
-  if (gameType === "historical_time_travel") {
+  if (engine.game_type === "historical_time_travel") {
     payload.direction = rules.direction ?? "climb";
-  } else if (gameType === "chrono_climb") {
-    payload.chrono_direction = rules.chrono_direction ?? rules.direction ?? "climb";
-  } else if (rules.chrono_direction) {
-    payload.chrono_direction = rules.chrono_direction;
   }
-  if (rules.runtime_staircase) payload.runtime_staircase = rules.runtime_staircase;
-  if (rules.country_cooldown != null) payload.country_cooldown = rules.country_cooldown;
+  payload.modifiers = engine.modifiers.filter((spec) => spec.compatible)
+    .flatMap((spec) => {
+      const params = modifierParams(spec, rules);
+      return params ? [{ key: spec.key, params }] : [];
+    });
   return payload;
 }
 
@@ -96,8 +105,8 @@ export interface ModifierWarning {
 export function modifierWarnings(gameType: string, rules: RulesConfig): ModifierWarning[] {
   const warnings: ModifierWarning[] = [];
   const castLinked = usesCastLinks(gameType, rules);
-  const chrono = gameType === "chrono_climb" || !!rules.chrono_direction;
-  const staircase = !!rules.runtime_staircase;
+  const chrono = gameType === "chrono_climb" || !!rules.chrono_direction || !!rules.modifiers?.some((m) => m.key === "chrono_direction");
+  const staircase = !!rules.runtime_staircase || !!rules.modifiers?.some((m) => m.key === "runtime_staircase");
   const cooldown = effectiveCooldown(gameType, rules);
   const orderingRules = Number(chrono) + Number(staircase);
   const chronoName = gameType === "chrono_climb" ? "Chrono Climb" : "Chrono";

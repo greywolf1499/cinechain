@@ -90,7 +90,8 @@ def merge_modifiers(defaults: dict[str, Any], rules: dict | None) -> dict[str, A
         from app.engines.modifier_registry import registry
 
         values = registry()[key].params.model_validate(params).model_dump()
-        active[key] = values.get("steps", values.get("enabled", values.get("direction", values)))
+        active[key] = values.get("steps", values.get("enabled", values.get("direction", values))) \
+            if key in (*PAIR_MODIFIER_KEYS, CAST_LINK_KEY) else values
     return {
         key: value
         for key, value in active.items()

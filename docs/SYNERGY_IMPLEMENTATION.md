@@ -403,6 +403,12 @@ and mobile bounds. No live provider or configured-service calls were made.
 
 **Commits:** `refactor(modifiers): registry-driven composable modifiers`, then `feat(modifiers): A-Z, number-in-title and ascending-number overlays`
 
+**S9 implementation clarifications**
+- Finite checklist coverage uses distinct-film matching after film filters; one title cannot prove coverage of several required letters/numbers. Graph coverage uses bounded cached evidence through `feasibility.pass_rate`, not exhaustive online reachability. An empty open cache is unknown, not proof of impossibility.
+- A skip is explicitly confirmed on the next **watched substitute**, costs one wildcard per unreachable sequence requirement, and is rechecked against the current server-side pool before spending. Reachable requirements, Number in Title and other run rules cannot be bypassed. Queueing never spends; server-owned skip metadata advances folded progress, and deleting the substitute restores progress and refunds actual finite spending.
+- Number in Title can filter a finite career checklist at creation; changing that filter afterward requires a new run because discarded track entries are no longer present.
+- Modifier JSON schemas expose actual Pydantic defaults, including factory-generated Q/X/Z wild letters. Preset switches preserve selected add-ons.
+
 ---
 
 ## Phase S10: Career context milestones & semantic tagging quality

@@ -570,6 +570,7 @@ export function useCreateStep(runId: string) {
 			/** Rotten Tomatoes Split: the household's joint rating (1-100). */
 			household_score?: number;
 			no_contest?: boolean;
+			skip_overlays?: string[];
 		}) => api.post<RunStep>(`/runs/${runId}/steps`, { ...payload, ...actingFields(runId) }),
 		onSuccess: (step) => {
 			notifyTableLog(step);

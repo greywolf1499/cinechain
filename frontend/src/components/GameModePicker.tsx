@@ -60,7 +60,7 @@ export default function GameModePicker({
   const [openDrawer, setOpenDrawer] = useState<string | null>(null);
   const modes: EngineMeta[] = [
     ...(engines ?? [
-      { game_type: "cinechain", display_name: "CineChain", description: "", capabilities: [], seed_policy: "free", discovery_filters: [], rule_fields: [], presets: [], default_preset: "custom", bounty_reward: "wildcard" },
+      { game_type: "cinechain", display_name: "CineChain", description: "", capabilities: [], seed_policy: "free", discovery_filters: [], rule_fields: [], presets: [], default_preset: "custom", bounty_reward: "wildcard", modifiers: [] },
     ]),
   ].sort((a, b) => orderOf(a.game_type) - orderOf(b.game_type));
 
@@ -72,10 +72,9 @@ export default function GameModePicker({
         const tags = mode.tags ?? copy?.tags ?? [];
         const Icon = style.icon;
         const selected = mode.game_type === value;
-        const capabilities = engines ? mode.capabilities : undefined;
-        const customizable = showModifierDrawer && supportsModifiers(mode.game_type, capabilities);
+        const customizable = showModifierDrawer && supportsModifiers(mode);
         const modeRules = selected ? rules : clearModifiers(rules);
-        const activeCount = selected ? activeModifierCount(mode.game_type, rules) : 0;
+        const activeCount = selected ? activeModifierCount(mode, rules) : 0;
         const drawerOpen = customizable && openDrawer === mode.game_type;
         return (
           <div
@@ -178,7 +177,7 @@ export default function GameModePicker({
                     <ModeOptions
                       gameType={mode.game_type}
                       value={modeRules}
-                      capabilities={capabilities}
+                      engine={mode}
                       onChange={(next) => onRulesChange(mode.game_type, next)}
                     />
                   </div>

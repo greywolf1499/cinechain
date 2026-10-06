@@ -86,6 +86,7 @@ export default function MovieSearchAutocomplete({
         movie_id: movie.tmdb_id,
       });
       setValidation(result);
+      if (result.overlay_skippable?.length) setWatchStatus("watched");
     } catch {
       setValidation({ valid: false, reason: "Could not validate this pick.", connections: [], blocked: false });
     } finally {
@@ -99,6 +100,7 @@ export default function MovieSearchAutocomplete({
     await createStep.mutateAsync({
       movie_id: picked.tmdb_id,
       force,
+      ...(validation?.overlay_skippable?.length ? { skip_overlays: validation.overlay_skippable } : {}),
       status: watchStatus,
       watched_at: watchStatus === "watched" ? new Date(watchedDate).toISOString() : null,
       ...([2, 3].includes(rulesConfig?.tug_rules_version ?? 1) && rulesConfig
@@ -126,9 +128,11 @@ export default function MovieSearchAutocomplete({
     const existingStepNumber = findExistingStepNumber(steps, picked.tmdb_id);
     const allowRepeats = rulesConfig ? allowsMovieRepeats(rulesConfig) : true;
     const isLockedDuplicate = existingStepNumber !== null && !allowRepeats;
-    const pricing = forcePricing(rulesConfig ?? { wildcards_budget: -1 });
+    const skips = validation?.overlay_skippable ?? [];
+    const pricing = forcePricing(skips.length ? { wildcards_budget: rulesConfig?.wildcards_budget ?? 0 }
+      : rulesConfig ?? { wildcards_budget: -1 });
     const wildcardsRemaining = pricing.remaining;
-    const wildcardsExhausted = pricing.exhausted;
+    const wildcardsExhausted = pricing.exhausted || (wildcardsRemaining !== -1 && wildcardsRemaining < skips.length);
 
     return (
       <div className="rounded-lg border border-app-border bg-app-bg p-3">
@@ -196,7 +200,7 @@ export default function MovieSearchAutocomplete({
                 ) : (
                   <div className="flex items-center gap-1.5 text-xs font-medium text-amber-400">
                     <AlertTriangle className="h-3 w-3" />
-                    {validation.reason ?? "No shared cast found"} - using this will consume 1 of{" "}
+                    {validation.reason ?? "No shared cast found"} - using this will consume {skips.length || 1} of{" "}
                     {wildcardsRemaining === -1 ? "unlimited" : wildcardsRemaining} remaining {pricing.plural}.
                   </div>
                 )}
@@ -214,6 +218,7 @@ export default function MovieSearchAutocomplete({
                   <label className="flex items-center gap-1.5">
                     <input
                       type="radio"
+                      disabled={skips.length > 0}
                       checked={watchStatus === "planned"}
                       onChange={() => setWatchStatus("planned")}
                       className="accent-accent"
@@ -238,9 +243,9 @@ export default function MovieSearchAutocomplete({
                     </LogButton>
                   ) : (
                     !validation.blocked &&
-                    !wildcardsExhausted && (
+                    !wildcardsExhausted && (skips.length === 0 || watchStatus === "watched") && (
                       <LogButton pending={createStep.isPending} onClick={() => handleLog(true)}>
-                        {pricing.confirmLabel}
+                        {skips.length ? `Spend ${skips.length} wildcard${skips.length === 1 ? "" : "s"} & log watched` : pricing.confirmLabel}
                       </LogButton>
                     )
                   )}

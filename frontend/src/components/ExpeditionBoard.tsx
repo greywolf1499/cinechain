@@ -4,13 +4,13 @@ import CanonBadge from "./CanonBadge";
 import LogFilmButtons from "./LogFilmButtons";
 import MarathonProgressBar from "./MarathonProgressBar";
 import MoviePoster from "./MoviePoster";
-import { ApiError } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { checklistProgress, formatRuntime } from "../lib/auteurTrack";
 import CountryFlags from "./CountryFlags";
 import { cn } from "../lib/cn";
 import { sliceLabel } from "../lib/expedition";
 import { useCreateStep } from "../lib/queries";
-import type { ExpeditionFilm, RunDetail } from "../types/api";
+import type { ExpeditionFilm, RunDetail, ValidationResult } from "../types/api";
 
 /** The expedition checklist: every canon film in the slice, in list order, with its badge,
  * country flag and rank; watched titles are ticked off. */
@@ -20,22 +20,35 @@ export default function ExpeditionBoard({ run }: { run: RunDetail }) {
   const createStep = useCreateStep(run.id);
   const [pendingId, setPendingId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [skipPick, setSkipPick] = useState<{ film: ExpeditionFilm; keys: string[] } | null>(null);
   if (!expedition) return null;
 
   const progress = checklistProgress(expedition.movie_ids, run.steps);
   const stepFor = (movieId: number) => run.steps.find((s) => s.movie_id === movieId);
   const flag = expedition.country ? <CountryFlags codes={[expedition.country]} /> : "🧭";
 
-  async function log(film: ExpeditionFilm, watchedNow: boolean) {
+  async function log(film: ExpeditionFilm, watchedNow: boolean, skips: string[] = []) {
     setPendingId(film.movie_id);
     setMessage(null);
     try {
+      if (run.rules_config.modifiers?.length && !skips.length) {
+        const validation = await api.post<ValidationResult>(`/runs/${run.id}/validate`, { movie_id: film.movie_id });
+        if (!validation.valid) {
+          if (watchedNow && validation.overlay_skippable?.length && !validation.blocked) {
+            setSkipPick({ film, keys: validation.overlay_skippable });
+          }
+          setMessage(validation.reason);
+          return;
+        }
+      }
       await createStep.mutateAsync({
         movie_id: film.movie_id,
         status: watchedNow ? "watched" : "planned",
         watched_at: watchedNow ? new Date().toISOString() : null,
-        force: false,
+        force: skips.length > 0,
+        ...(skips.length ? { skip_overlays: skips } : {}),
       });
+      setSkipPick(null);
     } catch (err) {
       setMessage(err instanceof ApiError ? err.message : "Could not log that film.");
     } finally {
@@ -56,6 +69,17 @@ export default function ExpeditionBoard({ run }: { run: RunDetail }) {
         <p role="alert" className="rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
           {message}
         </p>
+      )}
+      {skipPick && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-amber-800/50 p-3 text-xs text-amber-300">
+          <span>Log {skipPick.film.title} as a substitute for the unreachable requirement?</span>
+          <button type="button" disabled={pendingId !== null}
+            onClick={() => void log(skipPick.film, true, skipPick.keys)}
+            className="rounded border border-amber-500/50 px-3 py-2">
+            Spend {skipPick.keys.length} wildcard{skipPick.keys.length === 1 ? "" : "s"} & log watched
+          </button>
+          <button type="button" onClick={() => setSkipPick(null)} className="px-3 py-2">Cancel</button>
+        </div>
       )}
       <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {expedition.films.map((film) => {

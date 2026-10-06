@@ -19,6 +19,7 @@ class DiscoveryConnection(BaseModel):
 
 
 class DiscoveryCandidate(BaseModel):
+    overlay_ok: dict[str, bool | None] = {}
     movie_id: int
     title: str
     poster_path: str | None = None

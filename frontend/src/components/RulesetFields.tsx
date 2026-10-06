@@ -1,4 +1,5 @@
 import { cn } from "../lib/cn";
+import { defaultModifierParams, modifierEnabled, modifierParams, setModifier } from "../lib/modifiers";
 import type { EngineMeta, Preset, RuleField, RulesConfig, RuleValue } from "../types/api";
 
 export function engineDefaultRules(engine: EngineMeta): RulesConfig {
@@ -100,6 +101,21 @@ export default function RulesetFields({
         ))}
       </div>
       {active && <p className="text-xs text-zinc-400">{active.blurb}</p>}
+      {!editing && (
+        <div className="flex flex-wrap gap-2" aria-label="Preset add-ons">
+          {engine.modifiers.filter((spec) => spec.compatible && spec.scope !== "pair").map((spec) => {
+            const enabled = modifierEnabled(modifierParams(spec, value));
+            return (
+              <button key={spec.key} type="button" aria-pressed={enabled}
+                onClick={() => onChange(setModifier(value, spec, enabled ? null : defaultModifierParams(spec)))}
+                className={cn("rounded-full border px-3 py-1.5 text-xs",
+                  enabled ? "border-accent text-accent" : "border-app-border text-zinc-400")}>
+                {enabled ? "✓" : "+"} {spec.emoji} {spec.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {fields.filter((field) => field.group === "core").map(renderField)}
       {fields.some((field) => field.group === "advanced") && (
         <details>

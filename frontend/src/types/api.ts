@@ -45,6 +45,7 @@ export type ChronoDirection = "climb" | "descent";
 export type RuntimeStaircase = "ascending" | "descending";
 
 export interface RulesConfig {
+	modifiers?: { key: string; params: Record<string, ModifierParamValue> }[];
 	table_mode?: boolean;
 	preset: RulesPreset;
 	allow_repeats: RepeatPolicy;
@@ -405,6 +406,7 @@ export interface GenreOut {
 // --- engine (schemas/engine.py) ---
 
 export interface EngineMeta {
+	modifiers: ModifierMeta[];
 	game_type: string;
 	display_name: string;
 	description: string;
@@ -421,6 +423,28 @@ export interface EngineMeta {
 	presets: Preset[];
 	default_preset: string;
 	bounty_reward: "wildcard" | "life" | "hint" | "star";
+}
+
+export type ModifierParamValue = string | number | boolean | string[];
+export interface ModifierParamSchema {
+	title?: string;
+	type: "string" | "integer" | "boolean" | "array";
+	default?: ModifierParamValue;
+	enum?: string[];
+	minimum?: number;
+	maximum?: number;
+	items?: { enum?: string[] };
+}
+export interface ModifierMeta {
+	key: string;
+	label: string;
+	emoji: string;
+	blurb: string;
+	scope: "film" | "pair" | "sequence";
+	params_schema: { properties: Record<string, ModifierParamSchema> };
+	compatible: boolean;
+	incompatible_reason: string | null;
+	default_params: Record<string, ModifierParamValue> | null;
 }
 
 export type RuleValue = boolean | string | number | null;
@@ -524,6 +548,7 @@ export interface CrewMember {
 
 /** The rule shaping a run's next hop (backend `ConstraintInfo`). */
 export interface ConstraintInfo {
+	overlay_progress?: { key: string; label: string; next: string | null; available?: boolean; can_skip?: boolean }[];
 	kind: "director" | "actor" | "free" | "year" | "country" | "color" | "semantic" | (string & {});
 	title: string;
 	detail: string | null;
@@ -552,6 +577,7 @@ export interface RabbitHoleState {
 }
 
 export interface ValidationResult {
+	overlay_skippable?: string[];
 	connection_type?: ConnectionKind | null;
 	valid: boolean;
 	reason: string | null;
@@ -744,6 +770,7 @@ export interface DiscoveryConnection {
 }
 
 export interface DiscoveryCandidate {
+	overlay_ok?: Record<string, boolean | null>;
 	movie_id: number;
 	title: string;
 	poster_path: string | null;

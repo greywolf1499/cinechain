@@ -145,7 +145,7 @@ export function useRunDraft(
         }
       : {}),
     ...clearModifiers(draft.rules),
-    ...modifierPayload(draft.gameType, draft.rules, engine?.capabilities),
+    ...modifierPayload(engine, draft.rules),
     ...(needsCanonList ? { allowed_curated_list_id: draft.canonListId } : {}),
     ...(needsDecade ? { target_decade: draft.targetDecade } : {}),
     ...(draft.gameType === TUG_OF_WAR

@@ -32,6 +32,17 @@ class TrackerEngine(BaseChallengeEngine):
     supports_json_rules = True
     capabilities: ClassVar[list[str]] = ["validate_next_step", "compute_stats"]
 
+    def bounty_ids(self, rules: dict, history: Sequence[RunStep]) -> list[int] | None:
+        track = rules.get("filmography")
+        if track is None:
+            return super().bounty_ids(rules, history)
+        from app.engines.method_actor import marathon_skip
+
+        positions = {film["movie_id"]: index for index, film in enumerate(track)}
+        previous = positions.get(history[-1].movie_id, -1) if history else -1
+        return [movie_id for movie_id, index in positions.items()
+                if marathon_skip(rules) is None or index > previous]
+
     async def validate_primary(
         self,
         from_movie_id: int,
@@ -66,6 +77,11 @@ class DecadeSieveEngine(TrackerEngine):
     """Every film must be released in the run's `target_decade` (e.g. 1970)."""
 
     game_type = "decade_sieve"
+    bounty_reward = "star"
+
+    def bounty_bounds(self, rules: dict, history: Sequence[RunStep]) -> dict:
+        decade = rules["target_decade"]
+        return {**super().bounty_bounds(rules, history), "year": (decade, decade + 9)}
     tagline = "One decade, no escape"
     tags: ClassVar[list[str]] = ["Any film", "One decade"]
     rulebook: ClassVar[RuleSection] = RuleSection(
@@ -143,6 +159,7 @@ class RouletteEngine(TrackerEngine):
     matches your filters. Any film may be logged - the spin is the "pick"."""
 
     game_type = "roulette"
+    bounty_reward = "star"
     tagline = "Let the wheel decide"
     tags: ClassVar[list[str]] = ["Random pick"]
     rulebook: ClassVar[RuleSection] = RuleSection(

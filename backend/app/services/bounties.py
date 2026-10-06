@@ -1,19 +1,9 @@
-"""The Bounty Board: a wildcard quest system layered over any challenge run.
+"""Mode-aware side quests with feasible draws and server-owned rewards.
 
-A run created with `rules_config["bounty_board"] = True` starts with no wildcards and three
-cinephile bounties in `rules_config["active_bounties"]`. Logging a film that satisfies one completes
-it: the step is stamped `transition_metadata["completed_bounty"]`, the run earns a wildcard
-(`wildcards_budget += 1`) and a fresh bounty is drawn so the board always holds three. Completed
-bounties are remembered in `rules_config["completed_bounties"]`; a replacement comes from the ones
-not yet completed (and, once every bounty has been done, from any not currently on the board).
-At most one bounty completes per step, in board order.
-
-AI bounties: once the six static bounties are all done or on the board, a replacement is generated
-by the LLM instead (when it is on), and a player can also ask for one with `roll_custom`. The model
-proposes a title, icon and description plus a *rule* - 1-3 conditions that must all hold, each a
-runtime / year / decade / genre / keyword test (see `normalize_rule`) - which is validated and then
-evaluated programmatically like any static bounty. Definitions live in `rules_config["custom_bounties"]`
-(id -> definition), the board references them by id (`ai_xxxxxx`).
+Up to three nontrivial quests occupy a board; at most one completes per step.
+The engine awards its usable currency (wildcard, life, hint or victory star).
+AI definitions contain 1-3 normalized AND conditions and must pass the same
+feasibility guard as static quests. Unknown facts never award a bounty.
 """
 
 from __future__ import annotations
@@ -32,12 +22,13 @@ from app.engines.rulebook import RuleSection
 
 RULEBOOK = RuleSection(
     "Earn rewards by completing film side quests.",
-    ["Match a film to one of the three active bounties while obeying your mode's rules."],
-    ["At most one bounty completes per logged step. Reward: {bounty_reward}; then a fresh quest replaces it."],
+    ["Match a film to an active bounty while obeying your mode's rules.",
+     "Discard one quest for free per run; impossible quests expire and are replaced for free."],
+    ["At most one bounty completes per logged step. Reward: {bounty_reward}; a feasible quest replaces it when available."],
     ["A bounty does not waive the main mode's restrictions."],
     ["Choose a film satisfying both a bounty and a useful onward route.",
      "A rewarded wildcard only buys soft violations; hard-only modes still keep their restrictions."],
-    ["bounty", "wildcard", "life"],
+    ["bounty", "wildcard", "life", "hint", "star"],
 )
 
 from sqlmodel import Session
@@ -156,21 +147,31 @@ def active_bounties(rules: dict | None) -> list[str]:
     return [b for b in ((rules or {}).get(ACTIVE_KEY) or []) if resolve(rules, b) is not None]
 
 
-def draw_replacement(active: list[str], completed: list[str], rng: random.Random) -> str | None:
+def draw_replacement(
+    active: list[str], completed: list[str], rng: random.Random,
+    feasible: Callable[[str], bool] | None = None,
+) -> str | None:
     """A bounty not on the board: from the never-completed ones first, else any other."""
-    fresh = [b for b in BOUNTIES if b not in active and b not in completed]
-    pool = fresh or [b for b in BOUNTIES if b not in active]
+    eligible = [b for b in BOUNTIES if b not in active and (feasible is None or feasible(b))]
+    fresh = [b for b in eligible if b not in completed]
+    pool = fresh or eligible
     return rng.choice(pool) if pool else None
 
 
-def prepare_board(rules: dict, rng: random.Random | None = None) -> dict:
-    """The rules a Bounty Board run starts with: no wildcards, three random bounties."""
+def prepare_board(
+    rules: dict, rng: random.Random | None = None,
+    feasible: Callable[[str], bool] | None = None,
+) -> dict:
+    """Start with up to three feasible, nontrivial quests and one free discard."""
     rng = rng or random.Random()
+    pool = [b for b in BOUNTIES if feasible is None or feasible(b)]
     return {
         **rules,
         "wildcards_budget": 0,
-        ACTIVE_KEY: rng.sample(list(BOUNTIES), BOARD_SIZE),
+        ACTIVE_KEY: rng.sample(pool, min(BOARD_SIZE, len(pool))),
         COMPLETED_KEY: [],
+        "bounty_discards_left": 1,
+        "bounty_stars": 0,
     }
 
 
@@ -203,6 +204,8 @@ async def evaluate(
     rules: dict | None,
     movie: CachedMovie,
     rng: random.Random | None = None,
+    feasible: Callable[[Bounty], bool] | None = None,
+    context: str = "",
 ) -> BountyAward | None:
     """The award, if logging `movie` completes a bounty on the board.
 
@@ -227,10 +230,13 @@ async def evaluate(
     remaining = [b.id for b in active if b.id != done]
     completed = [*((rules or {}).get(COMPLETED_KEY) or []), done]
     if not [b for b in BOUNTIES if b not in remaining and b not in completed]:
-        custom = await _try_generate(session, rules)
+        custom = await _try_generate(session, rules, feasible, context)
         if custom is not None:
             return BountyAward(done, custom["id"], custom)
-    return BountyAward(done, draw_replacement(remaining, completed, rng))
+    return BountyAward(done, draw_replacement(
+        remaining, completed, rng,
+        (lambda bounty_id: feasible(BOUNTIES[bounty_id])) if feasible else None,
+    ))
 
 
 async def _directors_with_gender(
@@ -407,6 +413,42 @@ def describe_rule(rule: list[dict[str, Any]]) -> str:
     return "; ".join(parts)
 
 
+@dataclass(frozen=True)
+class CustomPredicate:
+    id: str
+    label: str
+    emoji: str
+    conditions: list[dict[str, Any]]
+    needs: frozenset[str] = frozenset({"runtime", "release_date", "genre_ids", "overview"})
+    difficulty: int = 3
+
+    @property
+    def params(self) -> dict[str, float]:
+        return {}
+
+    @property
+    def ranges(self) -> dict[str, tuple[float | None, float | None]]:
+        bounds: dict[str, tuple[float | None, float | None]] = {}
+        for condition in self.conditions:
+            kind = condition["type"]
+            if kind not in ("runtime", "year"):
+                continue
+            previous_low, previous_high = bounds.get(kind, (None, None))
+            lows = [v for v in (previous_low, condition.get("min")) if v is not None]
+            highs = [v for v in (previous_high, condition.get("max")) if v is not None]
+            bounds[kind] = (max(lows) if lows else None, min(highs) if highs else None)
+        return bounds
+
+    def check(self, movie: CachedMovie | None, facts: MovieFacts) -> bool | None:
+        results: list[bool | None] = []
+        for condition in self.conditions:
+            kind = condition["type"]
+            value = {"runtime": facts.runtime, "year": facts.year,
+                     "genre": facts.genre_ids, "keyword": facts.text}[kind]
+            results.append(_holds(condition, facts) if value else None)
+        return False if False in results else None if None in results else True
+
+
 def custom_bounty(definition: dict) -> Bounty | None:
     """A runnable bounty from a stored AI definition (None if the stored rule is no longer valid)."""
     rule = normalize_rule(definition.get("rule"))
@@ -419,6 +461,7 @@ def custom_bounty(definition: dict) -> Bounty | None:
         description=str(definition.get("description") or describe_rule(rule)),
         check=lambda facts: all(_holds(c, facts) for c in rule),
         ai=True,
+        predicate=CustomPredicate(definition["id"], str(definition.get("title", "AI Bounty")), "✨", rule),
     )
 
 
@@ -472,16 +515,18 @@ def parse_custom_bounty(text: str, taken_titles: list[str] | None = None) -> dic
 
 
 async def generate_custom_bounty(
-    config: llm.LlmConfig, taken_titles: list[str] | None = None
+    config: llm.LlmConfig, taken_titles: list[str] | None = None,
+    feasible: Callable[[Bounty], bool] | None = None, context: str = "",
 ) -> dict:
     """Asks the model for a new bounty (one retry). Raises `LlmUnavailable` if it can't produce one."""
     avoid = f" Do not reuse these titles: {', '.join(taken_titles)}." if taken_titles else ""
     for _ in range(2):
         text = await llm.generate(
-            config, BOUNTY_SYSTEM, f"Invent a new bounty.{avoid}", max_tokens=260
+            config, BOUNTY_SYSTEM, f"Invent a new bounty.{avoid}\nMode context: {context}", max_tokens=260
         )
         bounty = parse_custom_bounty(text, taken_titles)
-        if bounty is not None:
+        runnable = custom_bounty(bounty) if bounty else None
+        if bounty is not None and runnable is not None and (feasible is None or feasible(runnable)):
             return bounty
     raise llm.LlmUnavailable("The model didn't produce a usable bounty")
 
@@ -492,12 +537,15 @@ def _taken_titles(rules: dict | None) -> list[str]:
     return [t for t in titles if t]
 
 
-async def _try_generate(session: Session, rules: dict | None) -> dict | None:
+async def _try_generate(
+    session: Session, rules: dict | None,
+    feasible: Callable[[Bounty], bool] | None = None, context: str = "",
+) -> dict | None:
     config = llm.load_config(session)
     if not config.enabled:
         return None
     try:
-        return await generate_custom_bounty(config, _taken_titles(rules))
+        return await generate_custom_bounty(config, _taken_titles(rules), feasible, context)
     except llm.LlmUnavailable:
         return None
 
@@ -508,7 +556,10 @@ class BountyError(Exception):
         self.status_code = status_code
 
 
-async def roll_custom(session: Session, rules: dict | None) -> dict:
+async def roll_custom(
+    session: Session, rules: dict | None,
+    feasible: Callable[[Bounty], bool] | None = None, context: str = "",
+) -> dict:
     """The rules after the player's "✨ Roll Custom Bounty": the oldest bounty on the board is
     swapped for a freshly generated AI one (it returns to the pool, uncompleted)."""
     rules = rules or {}
@@ -524,12 +575,20 @@ async def roll_custom(session: Session, rules: dict | None) -> dict:
             "Settings > Integrations > AI & Embeddings."
         )
     try:
-        custom = await generate_custom_bounty(config, _taken_titles(rules))
+        custom = await generate_custom_bounty(config, _taken_titles(rules), feasible, context)
     except llm.LlmUnavailable as exc:
-        raise BountyError(str(exc), 503) from exc
+        replacement = draw_replacement(
+            active, rules.get(COMPLETED_KEY) or [], random.Random(),
+            (lambda bounty_id: feasible(BOUNTIES[bounty_id])) if feasible else None,
+        ) if feasible else None
+        if replacement is None:
+            raise BountyError(f"{exc}; no fair static fallback is available", 503) from exc
+        return {**rules, ACTIVE_KEY: [*active[1:], replacement],
+                "bounty_roll_note": "AI quest unavailable or unfair; dealt a feasible static quest instead."}
     board = [*active[1:], custom["id"]] if active else [custom["id"]]
     return {
         **rules,
         ACTIVE_KEY: board,
+        "bounty_roll_note": None,
         CUSTOM_KEY: {**(rules.get(CUSTOM_KEY) or {}), custom["id"]: custom},
     }

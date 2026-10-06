@@ -52,6 +52,11 @@ def rating_of(session, row: CachedMovie) -> float | None:
     """IMDb rating when OMDb has cached one, else TMDB's user score. Cache-only: judging a film
     never costs an OMDb call."""
     rated = session.get(CachedMovieRating, row.tmdb_id)
+    return rating_from_cache(row, rated)
+
+
+def rating_from_cache(row: CachedMovie, rated: CachedMovieRating | None) -> float | None:
+    """Pure counterpart for callers that batch-load cached ratings."""
     if rated is not None and rated.imdb_rating and rated.imdb_rating != "N/A":
         try:
             return float(rated.imdb_rating)

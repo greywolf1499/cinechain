@@ -60,7 +60,7 @@ export default function GameModePicker({
   const [openDrawer, setOpenDrawer] = useState<string | null>(null);
   const modes: EngineMeta[] = [
     ...(engines ?? [
-      { game_type: "cinechain", display_name: "CineChain", description: "", capabilities: [], seed_policy: "free", discovery_filters: [], rule_fields: [], presets: [], default_preset: "custom" },
+      { game_type: "cinechain", display_name: "CineChain", description: "", capabilities: [], seed_policy: "free", discovery_filters: [], rule_fields: [], presets: [], default_preset: "custom", bounty_reward: "wildcard" },
     ]),
   ].sort((a, b) => orderOf(a.game_type) - orderOf(b.game_type));
 

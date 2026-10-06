@@ -29,6 +29,9 @@ export const NO_BOUNTY_MODES = new Set(["march_madness"]);
 
 export const WILDCARD_REWARD = "+1 🎟️ Wildcard";
 export const LIFE_REWARD = "❤️ +1 life";
+export const BOUNTY_REWARDS = {
+  wildcard: WILDCARD_REWARD, life: LIFE_REWARD, hint: "💡 +1 hint", star: "⭐ +1 star",
+};
 
 /** A bounty's display info: the static catalogue, or the run's stored AI definition. */
 export function bountyInfo(id: BountyId, rules: Pick<RulesConfig, "custom_bounties">): BountyInfo | null {

@@ -43,6 +43,9 @@ SERVER_OWNED_RULES = (
     # Bounty Board state and Rotten Tomatoes Split scoreboard.
     "active_bounties",
     "completed_bounties",
+    "bounty_stars",
+    "bounty_discards_left",
+    "bounty_roll_note",
     "split_scores",
     "split_players",
     # The Chaos Button's one-step handicap is only ever rolled by the server.

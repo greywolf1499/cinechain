@@ -424,7 +424,9 @@ def test_rolling_a_custom_bounty_has_preconditions(client, db_engine):
     enable_llm(client)
     with respx.mock:
         mock_reply("no json here")
-        assert client.post(f"/api/runs/{run_id}/bounties/custom").status_code == 503
+        response = client.post(f"/api/runs/{run_id}/bounties/custom")
+        assert response.status_code == 200
+        assert "static quest" in response.json()["rules_config"]["bounty_roll_note"]
     assert not any(b.startswith("ai_") for b in rules_of(client, run_id)["active_bounties"])
 
 

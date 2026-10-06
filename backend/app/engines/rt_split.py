@@ -118,6 +118,7 @@ def winning_team(scores: dict[str, int], rules: dict | None) -> str | None:
 
 
 class RottenTomatoesSplitEngine(TrackerEngine):
+    bounty_reward = "star"
     tagline = "🍅 Critics vs 🍿 Audience"
     tags: ClassVar[list[str]] = ["Tomatometer split", "Head to head", "Household rating"]
     rulebook: ClassVar[RuleSection] = RuleSection(

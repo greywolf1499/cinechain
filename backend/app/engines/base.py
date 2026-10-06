@@ -30,7 +30,8 @@ from app.schemas.engine import (
     SuggestionFilters,
     ValidationResult,
 )
-from app.services import bounties, cache_repo
+from app.services import bounties, cache_repo, feasibility
+from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient
 from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
 
@@ -88,6 +89,7 @@ class BaseChallengeEngine(ABC):
     # May the Bounty Board (earn wildcards by completing bounties) run on top of this mode? Not when
     # steps are logged outside the normal route or wildcards don't exist.
     supports_bounty_board: ClassVar[bool] = True
+    bounty_reward: ClassVar[Literal["wildcard", "life", "hint", "star"]] = "wildcard"
 
     def __init__(self, session: Session, tmdb: TMDBClient) -> None:
         self.session = session
@@ -96,6 +98,7 @@ class BaseChallengeEngine(ABC):
         # engine's own pool filter and the modifier filter.
         self._hydration_left: int | None = None
         self._hydration_deadline = 0.0
+        self._bounty_evidence: feasibility.Evidence | None = None
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
@@ -214,7 +217,8 @@ class BaseChallengeEngine(ABC):
         return row
 
     async def _hydrate_pool(
-        self, candidates: list[DiscoveryCandidate], rules: dict | None = None
+        self, candidates: list[DiscoveryCandidate], rules: dict | None = None,
+        *, needs: frozenset[str] = frozenset(),
     ) -> dict[int, CachedMovie]:
         """Cached rows for the pool, fetching full detail for the most popular films
         that need it (bounded by HYDRATE_BUDGET / HYDRATE_SECONDS)."""
@@ -226,7 +230,8 @@ class BaseChallengeEngine(ABC):
             row = self.session.get(CachedMovie, candidate.movie_id)
             if row is None:
                 continue
-            if self._needs_hydration(row, rules) and self._hydration_left > 0:
+            missing = self._needs_hydration(row, rules) or any(getattr(row, field) is None for field in needs)
+            if missing and self._hydration_left > 0:
                 self._hydration_left -= 1
                 try:
                     fetched = await fetch_with_backoff(
@@ -328,7 +333,70 @@ class BaseChallengeEngine(ABC):
         custom: dict | None = None,
     ) -> dict:
         """Apply a completed Bounty Board reward (wildcard by default)."""
-        return bounties.award(rules, completed_id, replacement_id, custom)
+        updated = bounties.award(rules, completed_id, replacement_id, custom)
+        if self.bounty_reward in ("hint", "star"):
+            key = "tunnel_hints_remaining" if self.bounty_reward == "hint" else "bounty_stars"
+            updated["wildcards_budget"] = rules.get("wildcards_budget", 0)
+            updated[key] = rules.get(key, 2 if self.bounty_reward == "hint" else 0) + 1
+        return updated
+
+    def revoke_bounty(self, rules: dict, completed_id: str, replacement_id: str | None) -> dict:
+        updated = bounties.revoke(rules, completed_id, replacement_id)
+        if self.bounty_reward != "wildcard":
+            updated["wildcards_budget"] = rules.get("wildcards_budget", 0)
+        if self.bounty_reward in ("hint", "star"):
+            key = "tunnel_hints_remaining" if self.bounty_reward == "hint" else "bounty_stars"
+            updated[key] = max(0, rules.get(key, 0) - 1)
+        return updated
+
+    def bounty_ids(self, rules: dict, history: Sequence[RunStep]) -> list[int] | None:
+        """None means an open universe; a list means an exact finite track."""
+        return None
+
+    def bounty_pool_allowed(self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]) -> bool:
+        tail = self.session.get(CachedMovie, history[-1].movie_id) if history else None
+        return tail is None or self.modifier_violation(tail, movie, rules, history) is None
+
+    def bounty_bounds(
+        self, rules: dict, history: Sequence[RunStep],
+    ) -> dict[str, tuple[float | None, float | None]]:
+        bounds: dict[str, tuple[float | None, float | None]] = {"runtime": (rules.get("min_runtime", 0), None)}
+        if history:
+            tail = self.session.get(CachedMovie, history[-1].movie_id)
+            active = self.active_modifiers(rules)
+            from app.utils.dates import parse_release_year
+
+            year = parse_release_year(tail.release_date) if tail else None
+            if year is not None and active.get("chrono_direction"):
+                bounds["year"] = (year + 1, None) if active["chrono_direction"] == "climb" else (None, year - 1)
+            if tail and tail.runtime is not None and active.get("runtime_staircase"):
+                bounds["runtime"] = (max(rules.get("min_runtime", 0), tail.runtime + 1), None) \
+                    if active["runtime_staircase"] == "ascending" else (rules.get("min_runtime", 0), tail.runtime - 1)
+        return bounds
+
+    def bounty_feasible(self, rules: dict, history: Sequence[RunStep], bounty: bounties.Bounty) -> feasibility.Feasibility:
+        test = bounty.predicate
+        if test is None:
+            return feasibility.Feasibility(False, "Quest has no supported predicate", None)
+        bounds = self.bounty_bounds(rules, history)
+        if feasibility.contradicts(test, bounds):
+            return feasibility.Feasibility(False, "Quest conflicts with the mode's current bounds", 0)
+        if self._bounty_evidence is None:
+            self._bounty_evidence = feasibility.Evidence(self.session)
+        evidence = self._bounty_evidence
+        exact_ids = self.bounty_ids(rules, history)
+        watched = {step.movie_id for step in history}
+        exclude_watched = exact_ids is not None or rules.get("allow_repeats", "strict") != "allowed"
+        ids = [
+            movie_id for movie_id in (exact_ids if exact_ids is not None else evidence.movies)
+            if (not exclude_watched or movie_id not in watched)
+            and (movie_id not in evidence.movies or (
+                feasibility.within(evidence.facts[movie_id], bounds)
+                and (not evidence.movies[movie_id].release_date or is_reality_eligible(evidence.movies[movie_id]))
+                and self.bounty_pool_allowed(evidence.movies[movie_id], rules, history)
+            ))
+        ]
+        return evidence.check(test, ids, exact=exact_ids is not None)
 
     def sync_run_state(self, run: Run, steps: Sequence[RunStep]) -> None:
         """Refresh any state the engine derives from the steps and caches on the run (e.g. Tug of

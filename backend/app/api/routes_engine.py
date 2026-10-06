@@ -78,6 +78,7 @@ class EngineMeta(BaseModel):
     rule_fields: list[RuleField]
     presets: list[Preset]
     default_preset: str
+    bounty_reward: Literal["wildcard", "life", "hint", "star"]
 
 
 class RulebookOverlay(BaseModel):
@@ -126,6 +127,7 @@ def list_engines(
             rule_fields=cls.rule_fields,
             presets=cls.presets,
             default_preset=cls.default_preset,
+            bounty_reward=cls.bounty_reward,
             tagline=cls.tagline,
             tags=cls.tags,
             rulebook=render(cls.rulebook, cls.rulebook_values({
@@ -177,7 +179,10 @@ def run_rulebook(
 
     if rules.get(bounties.BOUNTY_BOARD_KEY) and engine.supports_bounty_board:
         add("bounty_board", "Bounty Board", bounties.RULEBOOK, {
-            "bounty_reward": "one life, capped at your maximum" if engine.uses_lives else "one wildcard",
+            "bounty_reward": {
+                "life": "one life, capped at your maximum", "wildcard": "one wildcard",
+                "hint": "one tunnel hint", "star": "one star added to your victory record",
+            }[engine.bounty_reward],
         })
     handicap = chaos.active(rules)
     if handicap:

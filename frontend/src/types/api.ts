@@ -147,6 +147,10 @@ export interface RulesConfig {
 	bounty_board?: boolean;
 	active_bounties?: BountyId[];
 	completed_bounties?: BountyId[];
+	bounty_stars?: number;
+	tunnel_hints_remaining?: number;
+	bounty_discards_left?: number;
+	bounty_roll_note?: string | null;
 	/** AI bounty definitions by id (server-owned). */
 	custom_bounties?: Record<BountyId, CustomBounty>;
 	/** AI "Tale of the Tape" lines by matchup id (server-owned). */
@@ -163,6 +167,7 @@ export interface ActiveChaos {
 	id: string;
 	/** "Time Machine: Pre-1970 only" */
 	label: string;
+	skipped?: string[];
 }
 
 /** A static bounty id ("short_king"...) or an AI bounty's ("ai_3f9a2c"). */
@@ -415,6 +420,7 @@ export interface EngineMeta {
 	rule_fields: RuleField[];
 	presets: Preset[];
 	default_preset: string;
+	bounty_reward: "wildcard" | "life" | "hint" | "star";
 }
 
 export type RuleValue = boolean | string | number | null;

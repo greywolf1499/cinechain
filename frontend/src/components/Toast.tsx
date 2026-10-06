@@ -11,9 +11,11 @@ export interface ToastState {
 export default function Toast({
   toast,
   onDismiss,
+  placement = "bottom",
 }: {
   toast: ToastState | null;
   onDismiss: () => void;
+  placement?: "top" | "bottom";
 }) {
   const dismiss = useRef(onDismiss);
   dismiss.current = onDismiss;
@@ -34,7 +36,7 @@ export default function Toast({
   return (
     <div
       role={toast.type === "error" ? "alert" : "status"}
-      className={`fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-2xl shadow-black/50 sm:max-w-sm ${colorClass}`}
+      className={`fixed ${placement === "top" ? "top-5" : "bottom-5"} right-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-2xl shadow-black/50 sm:max-w-sm ${colorClass}`}
     >
       <Icon className="h-4 w-4 shrink-0" />
       <span className="min-w-0 break-words">{toast.message}</span>

@@ -100,6 +100,12 @@ class MutatorEngine(CineChainEngine):
         """Why `later` may not directly follow `earlier`; None = allowed."""
         return None
 
+    def bounty_pool_allowed(self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]) -> bool:
+        tail = self.session.get(CachedMovie, history[-1].movie_id) if history else None
+        return super().bounty_pool_allowed(movie, rules, history) and (
+            tail is None or self.pair_violation(tail, movie, rules) is None
+        )
+
     def mechanic(
         self, earlier: CachedMovie, later: CachedMovie, rules: dict | None = None
     ) -> dict | None:

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2 } from "lucide-react";
-import { LIFE_REWARD, WILDCARD_REWARD, bountyInfo, completedBountyOf, type BountyInfo } from "../lib/bounties";
+import { BOUNTY_REWARDS, bountyInfo, completedBountyOf, type BountyInfo } from "../lib/bounties";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
-import { useLlmStatus, useRollCustomBounty } from "../lib/queries";
+import { useDiscardBounty, useEngines, useLlmStatus, useRollCustomBounty } from "../lib/queries";
 import type { BountyId, RunDetail } from "../types/api";
+import Toast, { type ToastState } from "./Toast";
 
 const CELEBRATION_MS = 5000;
 
@@ -14,43 +15,84 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
   const [open, setOpen] = useState(true);
   const [celebrating, setCelebrating] = useState<BountyInfo | null>(null);
   const [fresh, setFresh] = useState<BountyId | null>(null);
-  const seenSteps = useRef<Set<string> | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [lifeCapped, setLifeCapped] = useState(false);
+  const seenSteps = useRef<Map<string, { completed: unknown; expired: string }> | null>(null);
   const rules = run.rules_config;
   const active = (rules.active_bounties ?? [])
     .map((id) => bountyInfo(id, rules))
     .filter((bounty): bounty is BountyInfo => bounty !== null);
   const { data: llm } = useLlmStatus();
   const roll = useRollCustomBounty(run.id);
+  const discard = useDiscardBounty(run.id);
+  const { data: engines } = useEngines();
   const canRoll = !!llm?.enabled && run.status === "active" && !active.some((b) => b.ai);
   const completedCount = run.rules_config.completed_bounties?.length ?? 0;
   const wildcards = run.rules_config.wildcards_budget;
-  const rabbitHole = run.game_type === "rabbit_hole";
   const lives = run.rules_config.lives_remaining ?? run.rules_config.max_lives ?? 3;
   const maxLives = run.rules_config.max_lives ?? 3;
-  const reward = rabbitHole ? LIFE_REWARD : WILDCARD_REWARD;
+  const rewardType = engines?.find((engine) => engine.game_type === run.game_type)?.bounty_reward;
+  const reward = rewardType ? BOUNTY_REWARDS[rewardType] : "Reward loading…";
+  const balance = rewardType === "life" ? `❤️ ${lives}/${maxLives} lives`
+    : rewardType === "hint" ? `💡 ${rules.tunnel_hints_remaining ?? 2} hint${rules.tunnel_hints_remaining === 1 ? "" : "s"}`
+    : rewardType === "star" ? `⭐ ${rules.bounty_stars ?? 0} star${rules.bounty_stars === 1 ? "" : "s"}`
+    : rewardType === "wildcard" ? `🎟️ ${wildcards === -1 ? "∞" : wildcards} wildcard${wildcards === 1 ? "" : "s"}` : "";
 
   // Steps present on first load were completed before this visit: only later ones celebrate.
   useEffect(() => {
+    const current = new Map(run.steps.map((step) => [
+      step.id,
+      {
+        completed: step.transition_metadata?.completed_bounty,
+        expired: JSON.stringify(step.transition_metadata?.bounty_expired ?? []),
+      },
+    ]));
     if (seenSteps.current === null) {
-      seenSteps.current = new Set(run.steps.map((s) => s.id));
+      seenSteps.current = current;
       return;
     }
     const seen = seenSteps.current;
-    const added = run.steps.filter((s) => !seen.has(s.id));
-    added.forEach((s) => seen.add(s.id));
-    const won = added.map((s) => ({ step: s, bounty: completedBountyOf(s, rules) })).find((x) => x.bounty);
+    const removed = [...seen.keys()].filter((id) => !current.has(id));
+    if (removed.length) {
+      setCelebrating(null);
+      setFresh(null);
+      setToast(null);
+    }
+    const added = run.steps.filter((step) =>
+      seen.get(step.id)?.completed !== current.get(step.id)?.completed
+      || seen.get(step.id)?.expired !== current.get(step.id)?.expired,
+    );
+    seenSteps.current = current;
+    const expired = added.filter((step) =>
+      seen.get(step.id)?.expired !== current.get(step.id)?.expired,
+    ).flatMap((step) => {
+      const metadata = step.transition_metadata as {
+        bounty_expired?: string[]; bounty_expiry_reasons?: Record<string, string>;
+      } | null;
+      return (metadata?.bounty_expired ?? []).map((id) =>
+        `${bountyInfo(id, rules)?.title ?? id}: ${metadata?.bounty_expiry_reasons?.[id] ?? "no eligible films remain"}`);
+    });
+    if (expired.length) setToast({ type: "success", message: `Expired: ${expired.join("; ")}. Replaced for free where possible.`, duration: 7000 });
+    const won = added.filter((step) =>
+      seen.get(step.id)?.completed !== current.get(step.id)?.completed,
+    ).map((step) => ({ step, bounty: completedBountyOf(step, rules) })).find((entry) => entry.bounty);
     if (!won?.bounty) return;
     setCelebrating(won.bounty);
+    setLifeCapped((won.step.transition_metadata as { bounty_life_awarded?: boolean } | null)?.bounty_life_awarded === false);
     const replacement = (won.step.transition_metadata as { bounty_replacement?: BountyId } | null)
       ?.bounty_replacement;
     setFresh(replacement ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.steps]);
+
+  useEffect(() => {
+    if (!celebrating) return;
     const timer = window.setTimeout(() => {
       setCelebrating(null);
       setFresh(null);
     }, CELEBRATION_MS);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run.steps]);
+  }, [celebrating]);
 
   return (
     <section
@@ -66,9 +108,7 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
         <span className="text-sm font-semibold text-zinc-100">📜 Bounty Board</span>
         <span className="flex items-center gap-3 text-xs text-zinc-400">
           <span className="font-semibold text-amber-300">
-            {rabbitHole
-              ? `❤️ ${lives}/${maxLives} lives`
-              : `🎟️ ${wildcards === -1 ? "∞" : wildcards} wildcard${wildcards === 1 ? "" : "s"}`}
+            {balance}
           </span>
           {completedCount > 0 && <span>{completedCount} completed</span>}
           <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
@@ -88,7 +128,7 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
             <p className="text-[11px] text-emerald-200/70">{celebrating.criteria}</p>
           </div>
           <span className="shrink-0 animate-bounce rounded-full bg-amber-400/20 px-2.5 py-1 text-xs font-bold text-amber-200">
-            {reward}
+            {rewardType === "life" && lifeCapped ? "❤️ Lives already full" : reward}
           </span>
         </div>
       )}
@@ -120,6 +160,13 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
                 <span className="mt-auto self-start rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
                   {reward}
                 </span>
+                {run.status === "active" && (rules.bounty_discards_left ?? 1) > 0 && (
+                  <button type="button" disabled={discard.isPending}
+                    onClick={() => discard.mutate(bounty.id)}
+                    className="self-start text-xs text-zinc-400 underline hover:text-zinc-100 disabled:opacity-50">
+                    Discard (1 free per run)
+                  </button>
+                )}
               </li>
             );
           })}
@@ -146,6 +193,11 @@ export default function BountyBoardPanel({ run }: { run: RunDetail }) {
           )}
         </div>
       )}
+      {discard.isError && <p role="alert" className="mt-2 text-xs text-amber-400">
+        {discard.error instanceof Error ? discard.error.message : "Could not discard this bounty."}
+      </p>}
+      {rules.bounty_roll_note && <p role="status" className="mt-2 text-xs text-amber-300">{rules.bounty_roll_note}</p>}
+      <Toast toast={toast} onDismiss={() => setToast(null)} placement="top" />
     </section>
   );
 }

@@ -90,8 +90,11 @@ HANDICAPS: dict[str, Handicap] = {
 }
 
 
-def roll(rng: random.Random | None = None) -> dict[str, str]:
-    handicap = (rng or random.Random()).choice(list(HANDICAPS.values()))
+def roll(rng: random.Random | None = None, feasible: list[str] | None = None) -> dict[str, Any]:
+    pool = [h for h in HANDICAPS.values() if feasible is None or h.id in feasible]
+    if not pool:
+        raise ValueError("No feasible Chaos handicap")
+    handicap = (rng or random.Random()).choice(pool)
     return {"id": handicap.id, "label": handicap.label}
 
 

@@ -21,6 +21,8 @@ GLOSSARY: dict[str, str] = {
     "seed": "The starting film, not an inbound link. Some modes derive it, require two seeds, or use no seed.",
     "tier": "Rabbit Hole's current depth-based restriction. Look ahead to the next tier before choosing a film.",
     "bounty": "A side quest completed by a qualifying logged film. At most one completes per step and earns the mode's reward.",
+    "hint": "Meet in the Middle's currency for inspecting the route between the two frontiers.",
+    "star": "A Bounty Board achievement recorded with your victory; it never bypasses hard mode restrictions.",
     "raid": "Pick opposing territory. V3 moves the rope 2 and breaks their streak; legacy raids remove only available points. A bank doubles the pull.",
     "build": "Pick your own territory to add points. Momentum may increase the pull up to the configured cap.",
     "bank": "A neutral film banks a multiplier for your next scoring pull. V3 always scores 0 and resets only your own streak; v2 Sudden Death concedes 1.",

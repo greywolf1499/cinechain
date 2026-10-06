@@ -123,7 +123,7 @@ def rules_of(client, run_id):
 def force_chaos(monkeypatch, handicap_id):
     handicap = chaos.HANDICAPS[handicap_id]
     monkeypatch.setattr(
-        chaos, "roll", lambda rng=None: {"id": handicap.id, "label": handicap.label}
+        chaos, "roll", lambda rng=None, feasible=None: {"id": handicap.id, "label": handicap.label}
     )
 
 
@@ -184,7 +184,13 @@ def test_unknown_data_never_blocks_and_imdb_beats_the_tmdb_score(db_engine):
 # --- the Chaos Button ---
 
 
-def test_rolling_stores_one_handicap_and_it_cannot_be_rerolled(client):
+def test_rolling_stores_one_handicap_and_it_cannot_be_rerolled(client, db_engine):
+    with Session(db_engine) as session:
+        session.add(CachedMovie(tmdb_id=1, title="Old", release_date="1950-01-01", runtime=70,
+                                original_language="fr", vote_average=5, vote_count=100))
+        session.add(CachedMovie(tmdb_id=2, title="New", release_date="2000-01-01", runtime=160,
+                                original_language="en", vote_average=7, vote_count=100))
+        session.commit()
     run_id = make_run(client)
     rolled = client.post(f"/api/runs/{run_id}/chaos")
     assert rolled.status_code == 200, rolled.text
@@ -196,6 +202,14 @@ def test_rolling_stores_one_handicap_and_it_cannot_be_rerolled(client):
     cancelled = client.delete(f"/api/runs/{run_id}/chaos")
     assert cancelled.status_code == 200 and cancelled.json()["rules_config"]["active_chaos"] is None
     assert client.post(f"/api/runs/{run_id}/chaos").status_code == 200
+
+
+def test_empty_pool_cannot_roll_a_handicap(client):
+    run_id = make_run(client)
+    response = client.post(f"/api/runs/{run_id}/chaos")
+    assert response.status_code == 409
+    assert "no roll was applied" in response.json()["detail"]
+    assert rules_of(client, run_id).get("active_chaos") is None
 
 
 def test_chaos_needs_a_mode_with_a_pick_next_pool(client):

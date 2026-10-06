@@ -635,6 +635,15 @@ export function useRollCustomBounty(runId: string) {
 	});
 }
 
+export function useDiscardBounty(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (bountyId: string) =>
+			api.post<RunDetail>(`/runs/${runId}/bounties/${encodeURIComponent(bountyId)}/discard`),
+		onSuccess: (run) => queryClient.setQueryData(queryKeys.run(runId), run),
+	});
+}
+
 export function useRabbitHoleReroll(runId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({

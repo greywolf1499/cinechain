@@ -116,6 +116,18 @@ def _decade_of(release_date: str | None) -> int | None:
 
 
 class RegionalDeepDiveEngine(TrackerEngine):
+    bounty_reward = "star"
+
+    def bounty_ids(self, rules: dict, history: Sequence[RunStep]) -> list[int]:
+        return self._checklist(rules)
+
+    def bounty_bounds(self, rules: dict, history: Sequence[RunStep]) -> dict:
+        bounds = super().bounty_bounds(rules, history)
+        decade = (rules.get(EXPEDITION_KEY) or {}).get("decade")
+        if decade is not None:
+            bounds["year"] = (decade, decade + 9)
+        return bounds
+
     tagline = "Conquer one corner of the canon"
     tags: ClassVar[list[str]] = ["Canon list", "Country", "Decade"]
     rulebook: ClassVar[RuleSection] = RuleSection(

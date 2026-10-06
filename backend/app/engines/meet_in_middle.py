@@ -71,6 +71,7 @@ class TunnelDistance:
 
 
 class MeetInTheMiddleEngine(CineChainEngine):
+    bounty_reward = "hint"
     tagline = "Two partners, one tunnel"
     tags: ClassVar[list[str]] = ["Shared cast", "Co-op", "Two seeds"]
     rulebook: ClassVar[RuleSection] = RuleSection(

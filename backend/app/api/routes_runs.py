@@ -100,7 +100,7 @@ from app.schemas.runs import (
     RunUpdate,
     StepValidateRequest,
 )
-from app.services import blind_fork, bounties, cache_repo, pool_options
+from app.services import blind_fork, bounties, cache_repo, feasibility, pool_options
 from app.services.bridge_paths import parse_countries
 from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient
@@ -241,6 +241,10 @@ SERVER_OWNED_METADATA = (
     # Bounty Board awards and Rotten Tomatoes Split settlements: a client could mint wildcards/points.
     "completed_bounty",
     "bounty_replacement",
+    "bounty_reward",
+    "bounty_expired",
+    "bounty_expiry_changes",
+    "bounty_expiry_reasons",
     "household_score",
     "critic_score",
     "audience_score",
@@ -327,9 +331,14 @@ def _apply_run_outcome(session: Session, tmdb: TMDBClient, run: Run) -> None:
     outcome = engine.evaluate_run_outcome(run, list(steps))
     if outcome is not None:
         run.status = outcome.status
-        run.status_reason = outcome.reason
+        run.status_reason = _with_bounty_stars(run, outcome.reason) if outcome.status == RUN_STATUS_COMPLETED else outcome.reason
         run.completed_at = utcnow()
         session.add(run)
+
+
+def _with_bounty_stars(run: Run, reason: str) -> str:
+    stars = (run.rules_config or {}).get("bounty_stars", 0)
+    return f"{reason} · {stars} bounty star{'s' if stars != 1 else ''}" if stars else reason
 
 
 async def _enforce_run_rules(
@@ -703,8 +712,6 @@ async def create_run(
             rules_config = await engine.prepare_run(rules_config, current_user.id)
         except RunSetupError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-        if bounties.board_enabled(rules_config):
-            rules_config = bounties.prepare_board(rules_config)
         for seed_id in (payload.seed_movie_id, payload.tail_seed_movie_id):
             if seed_id is None:
                 continue
@@ -757,7 +764,16 @@ async def create_run(
         session.commit()
 
     if engine_class is not None:
-        engine_class(session, tmdb).sync_run_state(run, _run_history(session, run.id))
+        engine = engine_class(session, tmdb)
+        history = _run_history(session, run.id)
+        engine.sync_run_state(run, history)
+        if bounties.board_enabled(run.rules_config):
+            rules = run.rules_config or {}
+            run.rules_config = bounties.prepare_board(
+                rules, feasible=lambda bounty_id: engine.bounty_feasible(
+                    rules, history, bounties.BOUNTIES[bounty_id],
+                ).drawable,
+            )
         session.commit()
         session.refresh(run)
     return _to_run_detail(session, run)
@@ -784,6 +800,8 @@ def update_run(
         else:
             run.completed_at = utcnow()
             run.status_reason = MANUAL_STATUS_REASONS.get(payload.status)
+            if payload.status == RUN_STATUS_COMPLETED:
+                run.status_reason = _with_bounty_stars(run, run.status_reason or "Completed")
             engine_class = ENGINE_REGISTRY.get(run.game_type)
             if payload.status == RUN_STATUS_FORFEITED and engine_class is not None:
                 outcome = engine_class.forfeit_outcome(run, _run_history(session, run.id))
@@ -965,10 +983,22 @@ async def _log_step(
             extra_metadata.update(
                 RottenTomatoesSplitEngine(session, tmdb).settle(movie.tmdb_id, payload.household_score)
             )
-    bounty = await bounties.evaluate(session, tmdb, run.rules_config, movie)
+    rules = run.rules_config or {}
+    engine = get_engine(run.game_type, session, tmdb) if bounties.board_enabled(rules) else None
+    history = [*_run_history(session, run.id), RunStep(
+        run_id=run.id, movie_id=movie.tmdb_id, movie_title=movie.title,
+        transition_metadata=extra_metadata,
+    )]
+    bounty = await bounties.evaluate(
+        session, tmdb, rules, movie,
+        feasible=(lambda quest: engine.bounty_feasible(rules, history, quest).drawable) if engine else None,
+        context=_bounty_context(engine, rules, history) if engine else "",
+    )
     if bounty is not None:
+        assert engine is not None
         extra_metadata[bounties.COMPLETED_METADATA_KEY] = bounty[0]
         extra_metadata[bounties.REPLACEMENT_METADATA_KEY] = bounty[1]
+        extra_metadata["bounty_reward"] = engine.bounty_reward
 
     transition_metadata = _without_server_keys(
         linked_metadata if linked_metadata is not None else payload.transition_metadata
@@ -992,10 +1022,11 @@ async def _log_step(
     session.add(step)
     session.flush()
     if bounty is not None:
+        assert engine is not None
         before_lives = (
             lives_of(run.rules_config)[0] if run.game_type == rabbit_hole.RABBIT_HOLE else None
         )
-        awarded_rules = get_engine(run.game_type, session, tmdb).award_bounty(
+        awarded_rules = engine.award_bounty(
             run.rules_config or {}, *bounty
         )
         if before_lives is not None:
@@ -1012,6 +1043,8 @@ async def _log_step(
         # The handicap was for this step only.
         run.rules_config = chaos.clear(run.rules_config or {})
         session.add(run)
+    if engine is not None:
+        _expire_bounties(session, engine, run, step)
     _apply_run_outcome(session, tmdb, run)
     return step
 
@@ -1071,6 +1104,8 @@ def mark_step_watched(
         step.user_notes = payload.user_notes
     session.add(step)
     session.flush()
+    if bounties.board_enabled(run.rules_config):
+        _expire_bounties(session, get_engine(run.game_type, session, tmdb), run, step)
     _apply_run_outcome(session, tmdb, run)
     session.commit()
     session.refresh(step)
@@ -1090,7 +1125,8 @@ def update_step(
     if step is None or step.run_id != run.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
     actor = _acting_user(session, run, current_user, payload.acting_participant_id)
-    if payload.watched_at is not None and step.status == "planned":
+    became_watched = payload.watched_at is not None and step.status == "planned"
+    if became_watched:
         _ensure_run_open(run)
         if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
             raise HTTPException(403, detail="Switch to the participant who queued this film")
@@ -1132,6 +1168,8 @@ def update_step(
             step.transition_metadata = metadata or None
     session.add(step)
     session.flush()
+    if became_watched and bounties.board_enabled(run.rules_config):
+        _expire_bounties(session, get_engine(run.game_type, session, tmdb), run, step)
     _apply_run_outcome(session, tmdb, run)
     session.commit()
     session.refresh(step)
@@ -1145,9 +1183,19 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
     session.delete(step)
     session.flush()
     rules_before_revoke = dict(run.rules_config or {})
+    rules = dict(run.rules_config or {})
+    board = bounties.active_bounties(rules)
+    for change in reversed(metadata.get("bounty_expiry_changes") or []):
+        board = [b for b in board if b != change["replacement"]]
+        if change["id"] not in board:
+            board.insert(min(change["index"], len(board)), change["id"])
+    if metadata.get("bounty_expiry_changes"):
+        run.rules_config = {**rules, bounties.ACTIVE_KEY: board}
     if metadata.get(bounties.COMPLETED_METADATA_KEY):
-        # The step earned a wildcard for a bounty: take both back.
-        run.rules_config = bounties.revoke(
+        # Undo the earned reward and board swap.
+        revoke = get_engine(run.game_type, session, tmdb).revoke_bounty \
+            if metadata.get("bounty_reward") else bounties.revoke
+        run.rules_config = revoke(
             run.rules_config or {},
             metadata[bounties.COMPLETED_METADATA_KEY],
             metadata.get(bounties.REPLACEMENT_METADATA_KEY),
@@ -1764,9 +1812,10 @@ async def get_run_constraint(
 
 
 @router.post("/{run_id}/rabbit-hole/reroll", response_model=RunDetail)
-def reroll_rabbit_hole_tier(
+async def reroll_rabbit_hole_tier(
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ) -> RunDetail:
     """Spend one life to replace the tier requirement for the next depth only."""
     if run.game_type != rabbit_hole.RABBIT_HOLE:
@@ -1802,7 +1851,16 @@ def reroll_rabbit_hole_tier(
         )
 
     current_tier = tier_for_depth(depth).number
-    choices = [tier for tier in range(2, 6) if tier != current_tier]
+    engine = get_engine(run.game_type, session, tmdb)
+    ids = await _reachable_pool(session, engine, run, off_tier=True)
+    evidence = feasibility.Evidence(session)
+    choices = [
+        tier.number for tier in rabbit_hole.TIERS
+        if tier.number > 1 and tier.number != current_tier and tier.predicate is not None
+        and evidence.check(tier.predicate, ids).drawable
+    ]
+    if not choices:
+        raise HTTPException(409, detail="No fair reachable alternative tier; no life was spent")
     rules[TIER_OVERRIDE_KEY] = {"depth": depth, "tier": random.choice(choices)}
     rules[LIVES_KEY] = lives - 1
     run.rules_config = rules
@@ -1914,12 +1972,20 @@ def _ensure_chaos_allowed(run: Run) -> None:
 async def roll_custom_bounty(
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ) -> RunDetail:
     """ "✨ Roll Custom Bounty": the AI writes a new bounty (with a programmatic rule) that takes
     the oldest slot on the Bounty Board."""
     _ensure_run_open(run)
     try:
-        run.rules_config = await bounties.roll_custom(session, run.rules_config)
+        engine = get_engine(run.game_type, session, tmdb)
+        rules = run.rules_config or {}
+        history = _run_history(session, run.id)
+        run.rules_config = await bounties.roll_custom(
+            session, rules,
+            feasible=lambda quest: engine.bounty_feasible(rules, history, quest).drawable,
+            context=_bounty_context(engine, rules, history),
+        )
     except bounties.BountyError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     session.add(run)
@@ -1928,10 +1994,126 @@ async def roll_custom_bounty(
     return _to_run_detail(session, run)
 
 
-@router.post("/{run_id}/chaos", response_model=RunDetail)
-def roll_chaos(
+def _bounty_context(engine: BaseChallengeEngine, rules: dict, history: list[RunStep]) -> str:
+    ids = engine.bounty_ids(rules, history)
+    remaining = len(set(ids) - {step.movie_id for step in history}) if ids is not None else "open pool"
+    tier = tier_for_depth(len(history), rules).rule if isinstance(engine, RabbitHoleEngine) else "none"
+    expedition = rules.get("expedition") or {}
+    return (
+        f"mode={engine.game_type}; bounds={engine.bounty_bounds(rules, history)}; "
+        f"tier={tier}; depth={len(history)}; remaining checklist={remaining}; "
+        f"slice country={expedition.get('country')}; decade={expedition.get('decade')}; "
+        f"reward={engine.bounty_reward}. Avoid impossible or universally satisfied quests."
+    )
+
+
+def _expire_bounties(session: Session, engine: BaseChallengeEngine, run: Run, step: RunStep) -> None:
+    rules = run.rules_config or {}
+    if not bounties.board_enabled(rules):
+        return
+    history = _run_history(session, run.id)
+    engine._bounty_evidence = None
+    feasibility.invalidate(session)
+    active = bounties.active_bounties(rules)
+    changes = []
+    reasons = {}
+    for bounty_id in list(active):
+        quest = bounties.resolve(rules, bounty_id)
+        if quest is None:
+            continue
+        result = engine.bounty_feasible(rules, history, quest)
+        if result.ok:
+            continue
+        index = active.index(bounty_id)
+        active.remove(bounty_id)
+        replacement = bounties.draw_replacement(
+            [*active, bounty_id], rules.get(bounties.COMPLETED_KEY) or [], random.Random(),
+            feasible=lambda candidate: engine.bounty_feasible(
+                rules, history, bounties.BOUNTIES[candidate],
+            ).drawable,
+        )
+        if replacement:
+            active.insert(index, replacement)
+        changes.append({"id": bounty_id, "replacement": replacement, "index": index})
+        reasons[bounty_id] = result.reason
+    if changes:
+        run.rules_config = {**rules, bounties.ACTIVE_KEY: active}
+        metadata = step.transition_metadata or {}
+        prior_reasons = metadata.get("bounty_expiry_reasons") or {}
+        step.transition_metadata = {
+            **(step.transition_metadata or {}),
+            "bounty_expired": list(dict.fromkeys([*(metadata.get("bounty_expired") or []), *reasons])),
+            "bounty_expiry_reasons": {**prior_reasons, **reasons},
+            "bounty_expiry_changes": [*(metadata.get("bounty_expiry_changes") or []), *changes],
+        }
+        session.add(run)
+        session.add(step)
+
+
+@router.post("/{run_id}/bounties/{bounty_id}/discard", response_model=RunDetail)
+def discard_bounty(
+    bounty_id: str,
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> RunDetail:
+    _ensure_run_open(run)
+    rules = run.rules_config or {}
+    active = bounties.active_bounties(rules)
+    if not bounties.board_enabled(rules) or bounty_id not in active:
+        raise HTTPException(409, detail="That bounty is not active on this board")
+    if rules.get("bounty_discards_left", 1) <= 0:
+        raise HTTPException(409, detail="The free discard has already been used")
+    engine = get_engine(run.game_type, session, tmdb)
+    history = _run_history(session, run.id)
+    replacement = bounties.draw_replacement(
+        active, rules.get(bounties.COMPLETED_KEY) or [], random.Random(),
+        feasible=lambda candidate: engine.bounty_feasible(rules, history, bounties.BOUNTIES[candidate]).drawable,
+    )
+    board = [replacement if item == bounty_id else item for item in active]
+    run.rules_config = {**rules, bounties.ACTIVE_KEY: [item for item in board if item],
+                       "bounty_discards_left": 0}
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
+async def _reachable_pool(
+    session: Session, engine: BaseChallengeEngine, run: Run, *, off_tier: bool = False,
+) -> list[int]:
+    history = _run_history(session, run.id)
+    rules = _run_rules(run)
+    if not history:
+        seeds = await engine.seed_candidates(rules)
+        return [row.tmdb_id for row in session.exec(select(CachedMovie)).all()
+                if (seeds is None or row.tmdb_id in seeds)
+                and is_reality_eligible(row)
+                and (row.runtime is None or row.runtime >= rules.get("min_runtime", 0))]
+    tail = history[-1]
+    candidates = await engine.discover_with_modifiers(
+        frontier_movie_id=tail.movie_id, mode="or", cast_limit=rules.get("max_cast_order"),
+        rules=rules, previous_transition=tail.transition_metadata, history=history,
+        **({"include_off_tier": off_tier} if isinstance(engine, RabbitHoleEngine) else {}),
+    )
+    await engine._hydrate_pool(
+        candidates, rules, needs=frozenset({"runtime", "original_language", "vote_average"}),
+    )
+    used = {step.movie_id for step in history}
+    return [
+        candidate.movie_id for candidate in candidates
+        if (rules.get("allow_repeats") == "allowed" or candidate.movie_id not in used)
+        and (row := session.get(CachedMovie, candidate.movie_id)) is not None
+        and is_reality_eligible(row)
+        and (row.runtime is None or row.runtime >= rules.get("min_runtime", 0))
+    ]
+
+
+@router.post("/{run_id}/chaos", response_model=RunDetail)
+async def roll_chaos(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ) -> RunDetail:
     """Rolls one random handicap for the next film only: `rules_config["active_chaos"]`. It
     expires when a step is logged (or is cancelled with DELETE)."""
@@ -1940,7 +2122,23 @@ def roll_chaos(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="A chaos handicap is already active"
         )
-    run.rules_config = {**_run_rules(run), chaos.ACTIVE_KEY: chaos.roll()}
+    from app.services.feasibility import Evidence
+
+    engine = get_engine(run.game_type, session, tmdb)
+    ids = await _reachable_pool(session, engine, run)
+    evidence = Evidence(session)
+    feasible_ids = [
+        handicap.id for handicap in chaos.HANDICAPS.values()
+        if evidence.check(handicap.predicate, ids).drawable
+        and not feasibility.contradicts(
+            handicap.predicate, engine.bounty_bounds(_run_rules(run), _run_history(session, run.id)),
+        )
+    ]
+    if not feasible_ids:
+        raise HTTPException(409, detail="No nontrivial feasible handicap fits the current pool; no roll was applied")
+    rolled = chaos.roll(feasible=feasible_ids)
+    rolled["skipped"] = [h.label for h in chaos.HANDICAPS.values() if h.id not in feasible_ids]
+    run.rules_config = {**_run_rules(run), chaos.ACTIVE_KEY: rolled}
     session.add(run)
     session.commit()
     session.refresh(run)

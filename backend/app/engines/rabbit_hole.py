@@ -158,6 +158,27 @@ def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
 
 
 class RabbitHoleEngine(CineChainEngine):
+    bounty_reward = "life"
+
+    def bounty_bounds(self, rules: dict, history: Sequence[RunStep]) -> dict:
+        from app.services.feasibility import ranges_of
+
+        bounds = super().bounty_bounds(rules, history)
+        tier = tier_for_depth(len(history), rules)
+        if tier.predicate:
+            for field, (low, high) in ranges_of(tier.predicate).items():
+                previous_low, previous_high = bounds.get(field, (None, None))
+                lows = [v for v in (low, previous_low) if v is not None]
+                highs = [v for v in (high, previous_high) if v is not None]
+                bounds[field] = (max(lows) if lows else None, min(highs) if highs else None)
+        return bounds
+
+    def bounty_pool_allowed(self, movie: CachedMovie, rules: dict, history: Sequence[RunStep]) -> bool:
+        return (
+            super().bounty_pool_allowed(movie, rules, history)
+            and compliance(self.session, tier_for_depth(len(history), rules), movie) is not False
+        )
+
     rule_fields: ClassVar[list[RuleField]] = [
         *(field for field in CineChainEngine.rule_fields if field.key != "wildcards_budget"),
         RuleField(key="max_lives", kind="int", label="Starting lives",

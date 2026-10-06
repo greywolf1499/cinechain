@@ -39,6 +39,12 @@ export default function ChaosBanner({
             Cancel chaos
           </button>
         </div>
+        {!!chaos.skipped?.length && <p className="mt-2 text-xs text-yellow-300/80">
+          Skipped impossible or too-easy handicaps: {chaos.skipped.join("; ")}.
+        </p>}
+        {cancel.isError && <p className="mt-2 text-xs text-red-300">
+          {cancel.error instanceof Error ? cancel.error.message : "Could not cancel chaos."}
+        </p>}
       </div>
     </div>
   );

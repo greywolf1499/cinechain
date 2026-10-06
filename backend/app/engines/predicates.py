@@ -49,6 +49,8 @@ class Predicate(Protocol):
     def difficulty(self) -> int: ...
     @property
     def params(self) -> dict[str, float]: ...
+    @property
+    def ranges(self) -> dict[str, tuple[float | None, float | None]]: ...
 
     def check(self, movie: CachedMovie | None, facts: MovieFacts) -> bool | None: ...
 
@@ -61,6 +63,18 @@ class FilmPredicate:
     needs: frozenset[str]
     difficulty: int
     params: dict[str, float]
+
+    @property
+    def ranges(self) -> dict[str, tuple[float | None, float | None]]:
+        if "value" not in self.params:
+            return {}
+        field_name, comparison = self.id.rsplit("_", 1)
+        value = self.params["value"]
+        offset = 1 if field_name in ("year", "runtime") else 0
+        return {field_name: (
+            value + (offset if comparison == "gt" else 0) if comparison in ("gt", "ge") else None,
+            value - (offset if comparison == "lt" else 0) if comparison in ("lt", "le") else None,
+        )}
 
     def check(self, movie: CachedMovie | None, facts: MovieFacts) -> bool | None:
         if self.id == "female_director":

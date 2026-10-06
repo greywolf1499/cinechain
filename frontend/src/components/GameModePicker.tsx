@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import ModeOptions from "./ModeOptions";
+import { ModeRulebookHelp } from "./HowToPlay";
 import { cn } from "../lib/cn";
-import { gameModeStyle } from "../lib/gameModes";
+import { gameModeStyle, LEGACY_MODE_COPY } from "../lib/gameModes";
 import { activeModifierCount, clearModifiers, supportsModifiers } from "../lib/modifiers";
 import type { EngineMeta, RulesConfig } from "../types/api";
 
@@ -67,6 +68,8 @@ export default function GameModePicker({
     <div role="radiogroup" aria-label="Game mode" className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
       {modes.map((mode) => {
         const style = gameModeStyle(mode.game_type);
+        const copy = LEGACY_MODE_COPY[mode.game_type];
+        const tags = mode.tags ?? copy?.tags ?? [];
         const Icon = style.icon;
         const selected = mode.game_type === value;
         const capabilities = engines ? mode.capabilities : undefined;
@@ -96,7 +99,7 @@ export default function GameModePicker({
               onKeyDown={(event) => {
                 if (event.key === "Enter") onAdvance?.(mode.game_type);
               }}
-              className="group flex flex-1 flex-col gap-2 p-3.5 text-left"
+              className="group flex flex-1 flex-col gap-2 p-3.5 pr-10 text-left"
             >
               <div className="flex items-start justify-between gap-2">
                 <span className={cn("flex h-10 w-10 items-center justify-center rounded-xl", style.bubble)}>
@@ -110,7 +113,7 @@ export default function GameModePicker({
               </div>
               <div>
                 <p className="text-sm font-semibold text-zinc-100">{mode.display_name}</p>
-                <p className={cn("text-[11px] font-medium", style.text)}>{style.tagline}</p>
+                <p className={cn("text-[11px] font-medium", style.text)}>{mode.tagline ?? copy?.tagline ?? mode.display_name}</p>
               </div>
               {mode.description && (
                 <p className="line-clamp-4 text-[11px] leading-relaxed text-zinc-500">{mode.description}</p>
@@ -120,12 +123,12 @@ export default function GameModePicker({
                   Needs {mode.requires?.join(", ") || "configuration"}
                 </span>
               )}
-              {style.progression && (
+              {copy?.progression && (
                 <ol
                   aria-label="Tier progression"
                   className="flex flex-wrap items-center gap-x-1 gap-y-1 text-[10px] font-medium text-zinc-400"
                 >
-                  {style.progression.map((step, index) => (
+                  {copy.progression.map((step, index) => (
                     <li key={step} className="flex items-center gap-1">
                       {index > 0 && <span aria-hidden className="text-zinc-600">→</span>}
                       <span className={cn("rounded px-1.5 py-0.5 ring-1 ring-inset ring-zinc-700", style.text)}>
@@ -136,9 +139,9 @@ export default function GameModePicker({
                   ))}
                 </ol>
               )}
-              {style.tags.length > 0 && (
+              {tags.length > 0 && (
                 <div className="mt-auto flex flex-wrap gap-1 pt-1">
-                  {style.tags.map((tag) => (
+                  {tags.map((tag) => (
                     <span
                       key={tag}
                       className="rounded-full bg-app-surface-hover px-2 py-0.5 text-[10px] font-medium text-zinc-400"
@@ -149,6 +152,7 @@ export default function GameModePicker({
                 </div>
               )}
             </button>
+            <ModeRulebookHelp engine={mode} />
 
             {customizable && (
               <div className="border-t border-app-border/70">

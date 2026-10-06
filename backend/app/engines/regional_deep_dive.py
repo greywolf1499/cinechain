@@ -15,13 +15,14 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 import anyio
 from sqlmodel import col, select
 
 from app.engines.base import RunSetupError
 from app.engines.conditions import RunOutcome
+from app.engines.rulebook import RuleSection
 from app.engines.trackers import MIN_DECADE, TrackerEngine
 from app.models.cache import CachedMovie
 from app.models.curated import CanonMovieBadge, CuratedList
@@ -115,6 +116,25 @@ def _decade_of(release_date: str | None) -> int | None:
 
 
 class RegionalDeepDiveEngine(TrackerEngine):
+    tagline = "Conquer one corner of the canon"
+    tags: ClassVar[list[str]] = ["Canon list", "Country", "Decade"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Complete the {slice_name} expedition checklist.",
+        ["Watch the prepared slice of your canon list in any order; cast links are not required."],
+        ["Log every checklist film to finish the expedition."],
+        ["Films outside the expedition are blocked."],
+        ["Start with an available film; no chronological route needs to be preserved.",
+         "Use the remaining checklist to plan variety within your chosen slice."], ["checklist", "seed"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
+        config = rules or {}
+        expedition = config.get(EXPEDITION_KEY) or {}
+        country = expedition.get("country_name") or config.get("target_country") or "all countries"
+        decade = expedition.get("decade") or config.get("target_decade")
+        return {**super().rulebook_values(rules),
+                "slice_name": f"{country}, {str(decade) + 's' if decade else 'all decades'}"}
     game_type = REGIONAL_DEEP_DIVE
     seed_policy = "derived"
     display_name = "Regional Deep Dive"

@@ -11,6 +11,7 @@ from sqlmodel import Session
 
 from app.engines import chaos, modifiers
 from app.engines.conditions import RunOutcome, evaluate_conditions, validate_conditions
+from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import (
     LEGACY_ENGINE_VERSION,
@@ -50,6 +51,9 @@ class BaseChallengeEngine(ABC):
     game_type: str
     display_name: str
     description: str
+    rulebook: ClassVar[RuleSection]
+    tagline: ClassVar[str]
+    tags: ClassVar[list[str]]
     capabilities: ClassVar[list[str]]
     requires: ClassVar[list[str]] = []
     seed_policy: ClassVar[Literal["none", "free", "derived", "pair"]] = "free"
@@ -78,6 +82,32 @@ class BaseChallengeEngine(ABC):
         # engine's own pool filter and the modifier filter.
         self._hydration_left: int | None = None
         self._hydration_deadline = 0.0
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
+        from app.models.run import DEFAULT_RULES_CONFIG
+
+        config = {**DEFAULT_RULES_CONFIG, **(rules or {})}
+        wins = config.get("win_condition")
+        failures = config.get("fail_condition")
+
+        def conditions(raw: Any, verb: str) -> str:
+            if not raw:
+                return ""
+            entries = raw if isinstance(raw, list) else [raw]
+            return "; ".join(
+                f"{verb} {entry['count']} {entry['type'].removeprefix('max_').replace('_', ' ')}"
+                for entry in entries
+            )
+
+        return {
+            **config,
+            "win_goal": conditions(wins, "reach") if cls.supports_json_rules and wins
+            else "Keep exploring; complete the run manually when you are done.",
+            "fail_goal": conditions(failures, "exceed") if cls.supports_json_rules and failures
+            else "There is no automatic loss unless a mode-specific rule says otherwise.",
+            "cast_depth": config.get("max_cast_order") or "all credited actors",
+        }
 
     @classmethod
     def modifier_problems(cls, rules: dict | None) -> list[str]:

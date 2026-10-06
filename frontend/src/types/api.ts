@@ -396,6 +396,28 @@ export interface EngineMeta {
 	requires?: string[];
 	unavailable_reason?: string | null;
 	seed_policy: "none" | "free" | "derived" | "pair";
+	tagline?: string;
+	tags?: string[];
+	rulebook?: RuleSection;
+	glossary?: Record<string, string>;
+}
+
+export interface RuleSection {
+	goal: string;
+	turn: string[];
+	scoring: string[];
+	lose: string[];
+	tips: string[];
+	glossary: string[];
+}
+
+export interface RunRulebook {
+	game_type: string;
+	display_name: string;
+	rulebook: RuleSection;
+	overlays: { key: string; title: string; rulebook: RuleSection }[];
+	glossary: Record<string, string>;
+	settings: Record<string, string>;
 }
 
 export interface SeedOptions {

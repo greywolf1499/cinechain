@@ -7,6 +7,16 @@ Vetoing removes the film from `movie_ids`, so an offer with two films left is re
 
 from typing import Any
 
+from app.engines.rulebook import RuleSection
+
+RULEBOOK = RuleSection(
+    "Give your partner a constrained choice.",
+    ["Offer three legal films; another participant vetoes one, then picks from the remaining two."],
+    ["The accepted film becomes the next step under the main mode's rules."],
+    ["A Golden Veto can cancel the entire offer by spending an account token."],
+    ["Offer three films you are willing to watch; your partner controls the last choice."], ["fork", "veto"],
+)
+
 from app.utils.ids import utcnow
 
 BLIND_FORK_KEY = "blind_fork"

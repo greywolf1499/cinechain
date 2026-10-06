@@ -27,6 +27,7 @@ from app.engines.mutators import (
     candidate_from_row,
     today_iso,
 )
+from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
@@ -187,6 +188,20 @@ class AestheticGradientEngine(FeatureEngine):
     """Consecutive films must have visually similar posters (dominant colour)."""
 
     game_type = "aesthetic_gradient"
+    tagline = "Fade poster to poster"
+    tags: ClassVar[list[str]] = ["Any film", "Poster colour"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Create a visual gradient from movie posters.",
+        ["Choose a film with a nearby dominant poster colour; shared cast is optional."],
+        ["Colour distance must be at most {color_threshold}. {win_goal}"],
+        ["A measured colour gap above the threshold blocks the hop.", "{fail_goal}"],
+        ["Use intermediate colours instead of jumping across the palette.",
+         "Inspect the swatches, not just the artwork's subject."], ["seed"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict:
+        return {**super().rulebook_values(rules), "color_threshold": COLOR_DISTANCE_THRESHOLD}
     display_name = "Aesthetic Gradient"
     description = (
         "Fade from poster to poster: every film's dominant colour must be close to the last "
@@ -296,6 +311,20 @@ class SemanticTropeEngine(FeatureEngine):
     at least one discrete trope (LLM-extracted, kebab-case)."""
 
     game_type = "semantic_trope"
+    tagline = "Follow the plot, not the cast"
+    tags: ClassVar[list[str]] = ["Any film", "Plot similarity"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Connect films by plot similarity or a shared extracted trope.",
+        ["Pick a film sharing a trope or exceeding {similarity_threshold}% normalized plot similarity."],
+        ["{win_goal}"], ["A measured weak match with no shared trope blocks the hop.", "{fail_goal}"],
+        ["Broad themes give more onward routes than a single narrow premise.",
+         "Inspect the shared trope and synopsis rather than treating model tags as certainty."], ["seed"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict:
+        return {**super().rulebook_values(rules),
+                "similarity_threshold": _percent(SEMANTIC_SIMILARITY_THRESHOLD)}
     display_name = "Semantic Trope Web"
     description = (
         "Follow the plot: every film must be a close semantic match to the last, judged by a "

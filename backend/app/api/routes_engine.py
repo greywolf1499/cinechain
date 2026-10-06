@@ -1,5 +1,6 @@
 import json
 import time
+from dataclasses import replace
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -8,11 +9,14 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from app.api.deps import get_current_user, get_tmdb_client
+from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
 from app.config import get_settings
 from app.db import get_session
+from app.engines import chaos, modifiers
 from app.engines.registry import ENGINE_REGISTRY, get_engine
+from app.engines.rulebook import GLOSSARY, RuleSection, render
 from app.engines.trackers import RouletteEngine, SpinFilters
+from app.models.curated import CuratedList
 from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
 from app.models.user import User
 from app.schemas.engine import (
@@ -27,7 +31,16 @@ from app.schemas.engine import (
     TeaserResult,
     ValidationResult,
 )
-from app.services import bridge_paths, cache_repo, daily_puzzle, llm, settings_repo
+from app.services import (
+    blind_fork,
+    bounties,
+    bridge_paths,
+    cache_repo,
+    daily_puzzle,
+    llm,
+    settings_repo,
+    veto,
+)
 from app.services.tmdb import TMDBClient, TMDBError
 from app.services.tmdb_backoff import DeadlineReached
 from app.utils.dates import parse_release_year
@@ -54,6 +67,25 @@ class EngineMeta(BaseModel):
     requires: list[str]
     seed_policy: Literal["none", "free", "derived", "pair"]
     unavailable_reason: str | None = None
+    tagline: str
+    tags: list[str]
+    rulebook: RuleSection
+    glossary: dict[str, str]
+
+
+class RulebookOverlay(BaseModel):
+    key: str
+    title: str
+    rulebook: RuleSection
+
+
+class RunRulebook(BaseModel):
+    game_type: str
+    display_name: str
+    rulebook: RuleSection
+    overlays: list[RulebookOverlay]
+    glossary: dict[str, str]
+    settings: dict[str, str]
 
 
 class ValidateRequest(BaseModel):
@@ -83,6 +115,10 @@ def list_engines(
             capabilities=cls.capabilities,
             requires=cls.requires,
             seed_policy=cls.seed_policy,
+            tagline=cls.tagline,
+            tags=cls.tags,
+            rulebook=render(cls.rulebook, cls.rulebook_values(DEFAULT_RULES_CONFIG)),
+            glossary={key: GLOSSARY[key] for key in cls.rulebook.glossary},
             unavailable_reason=(
                 "Requires OMDb integration. Ask an admin to configure it in Settings → Integrations."
                 if "omdb" in cls.requires
@@ -97,6 +133,109 @@ def list_engines(
         )
         for cls in ENGINE_REGISTRY.values()
     ]
+
+
+@router.get("/runs/{run_id}/rulebook", response_model=RunRulebook)
+def run_rulebook(
+    run: Run = Depends(run_participant_guard),
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> RunRulebook:
+    engine = get_engine(run.game_type, session, tmdb)
+    rules = run.rules_config or {}
+    render_rules = rules
+    if run.game_type == "tug_of_war" and rules.get("tug_rules_version") != 2:
+        render_rules = {**rules, "tug_rules_version": 1}
+    values = engine.rulebook_values(render_rules)
+    if run.engine_version <= 1:
+        values.update({
+            "win_goal": "Legacy run: complete it manually when you are done.",
+            "fail_goal": "Legacy run: configured automatic fail conditions are not enforced.",
+        })
+    active = engine.active_modifiers(rules)
+    overlays: list[RulebookOverlay] = []
+
+    def add(key: str, title: str, section: RuleSection, extra: dict | None = None) -> None:
+        overlays.append(RulebookOverlay(
+            key=key, title=title, rulebook=render(section, {**values, **(extra or {})}),
+        ))
+
+    if rules.get(bounties.BOUNTY_BOARD_KEY) and engine.supports_bounty_board:
+        add("bounty_board", "Bounty Board", bounties.RULEBOOK, {
+            "bounty_reward": "one life, capped at your maximum" if engine.uses_lives else "one wildcard",
+        })
+    handicap = chaos.active(rules)
+    if handicap:
+        add("chaos", "Chaos handicap", chaos.RULEBOOK, {"chaos_label": handicap.label})
+    for key, value in active.items():
+        add(key, key.replace("_", " ").title(), modifiers.RULEBOOK[key], {
+            key: value, "chrono_word": "before" if value == "descent" else "after",
+            "runtime_word": "shorter" if value == "descending" else "longer",
+        })
+    if getattr(engine, "optional_cast_link", False) and rules.get(modifiers.CAST_LINK_KEY):
+        add(modifiers.CAST_LINK_KEY, "Shared cast", modifiers.RULEBOOK[modifiers.CAST_LINK_KEY])
+    if rules.get(blind_fork.BLIND_FORK_KEY):
+        add("blind_fork", "Blind Fork", blind_fork.RULEBOOK)
+    participants = session.exec(select(RunParticipant).where(RunParticipant.run_id == run.id)).all()
+    if len(participants) > 1 and (
+        run.game_type != "meet_in_the_middle" or rules.get(blind_fork.BLIND_FORK_KEY)
+    ):
+        add("veto", "Golden Veto", veto.RULEBOOK)
+    section = render(engine.rulebook, values)
+    if run.game_type == "tug_of_war" and render_rules.get("tug_rules_version") == 1:
+        section = replace(section, glossary=["seed", "wildcard"])
+    if run.engine_version <= 1:
+        section = replace(section, scoring=[
+            *section.scoring,
+            "Legacy engine: progress is recorded, but automatic win/fail completion is not enforced; finish the run manually.",
+        ])
+    terms = dict.fromkeys([*section.glossary, *(key for overlay in overlays for key in overlay.rulebook.glossary)])
+    settings = {
+        "Seed policy": engine.seed_policy,
+        "Engine version": str(run.engine_version),
+        "Repeat policy": str(values["allow_repeats"]),
+        "Minimum runtime": f"{values['min_runtime']} minutes",
+        "Wildcard budget": "Unlimited" if values["wildcards_budget"] == -1 else str(values["wildcards_budget"]),
+    }
+    mode_settings = {
+        "tug_of_war": ("target_lead", "effective_target", "territory_a", "territory_b",
+                       "momentum_cap", "sudden_death_after", "sudden_death_every", "steal_enabled"),
+        "rt_split": ("target_points",),
+        "decade_sieve": ("target_decade",),
+        "regional_deep_dive": ("slice_name",),
+        "method_actor": ("person_name", "max_skip"),
+        "auteur_marathon": ("person_name", "max_skip"),
+        "rabbit_hole": ("max_lives", "lives_remaining", "escape_depth"),
+        "meet_in_the_middle": ("hints_remaining",),
+        "genre_pendulum": ("genre_cycle", "swing_frequency"),
+        "historical_time_travel": ("setting_direction",),
+        "chrono_climb": ("chrono_word",),
+        "aesthetic_gradient": ("color_threshold",),
+        "semantic_trope": ("similarity_threshold",),
+    }
+    for key in mode_settings.get(run.game_type, ()):
+        if key in values and values[key] is not None:
+            settings[key.replace("_", " ").title()] = str(values[key])
+    if engine.supports_json_rules:
+        settings["Win conditions"] = values["win_goal"]
+        settings["Fail conditions"] = values["fail_goal"]
+        settings["Cast depth"] = str(values["cast_depth"])
+        settings["Consecutive actor restriction"] = str(values.get("no_consecutive_actor", False))
+    list_keys = {
+        "canon_island": ("allowed_curated_list_id",),
+        "regional_deep_dive": ("curated_list_id",),
+    }
+    for key in list_keys.get(run.game_type, ()):
+        if rules.get(key):
+            curated_list = session.get(CuratedList, rules[key])
+            settings["Canon list"] = curated_list.title if curated_list else f"Unavailable list ({rules[key]})"
+    settings.update({key.replace("_", " ").title(): str(value) for key, value in active.items()})
+    settings["Bounty Board"] = "On" if any(overlay.key == "bounty_board" for overlay in overlays) else "Off"
+    settings["Blind Fork"] = "On" if rules.get(blind_fork.BLIND_FORK_KEY) else "Off"
+    return RunRulebook(
+        game_type=run.game_type, display_name=engine.display_name, rulebook=section,
+        overlays=overlays, glossary={key: GLOSSARY[key] for key in terms}, settings=settings,
+    )
 
 
 @router.post("/engine/validate", response_model=ValidationResult)

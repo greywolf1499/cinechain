@@ -46,6 +46,7 @@ import RoleBadge from "./RoleBadge";
 import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
 import { SIDE_LABELS } from "../lib/tunnel";
 import { tugEffectLabel, tugNextTeam } from "../lib/tugOfWar";
+import { GlossaryChip } from "./HowToPlay";
 import ExpandableText from "./ui/ExpandableText";
 import ClampedLabel from "./ui/ClampedLabel";
 import {
@@ -845,6 +846,7 @@ function DiscoveryGrid({
               ratings={ratingsMap?.[String(candidate.movie_id)]}
               badges={badgesMap?.[String(candidate.movie_id)]}
               gameType={gameType}
+              tugMultiplier={rulesConfig.tug_momentum?.anchor === nextTeam ? 2 : 1}
               castLinked={castLinked}
               tierLabel={
                 gameType === RABBIT_HOLE && constraint?.rabbit_hole
@@ -941,6 +943,7 @@ function CandidateCard({
   ratings,
   badges,
   gameType,
+  tugMultiplier,
   castLinked,
   tierLabel,
   frontierTropes,
@@ -960,6 +963,7 @@ function CandidateCard({
   ratings: MovieRatings | null | undefined;
   badges: { badge_label: string; badge_color: string }[] | undefined;
   gameType: string;
+  tugMultiplier: number;
   castLinked: boolean;
   /** The Rabbit Hole's active tier ("Tier 3: Non-English"): shown as a check when the film complies. */
   tierLabel?: string;
@@ -1067,7 +1071,8 @@ function CandidateCard({
         {castLinked && <ConnectionBadge connections={candidate.connections} />}
         <MechanicBadge candidate={candidate} gameType={gameType} />
         {gameType === "tug_of_war" && candidate.tug_effect && candidate.tug_points != null && (
-          <span
+          <GlossaryChip
+            term={candidate.tug_effect === "invasion" ? "raid" : candidate.tug_effect === "neutral" ? "bank" : candidate.tug_effect === "home" ? "build" : "sudden_death"}
             className={cn(
               "w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold",
               candidate.tug_effect === "invasion"
@@ -1077,8 +1082,8 @@ function CandidateCard({
                   : "bg-lime-950 text-lime-200",
             )}
           >
-            {tugEffectLabel(candidate.tug_effect, candidate.tug_points)}
-          </span>
+            {tugEffectLabel(candidate.tug_effect, candidate.tug_points, tugMultiplier)}
+          </GlossaryChip>
         )}
         {tierLabel && candidate.tier_compliant !== undefined && candidate.tier_compliant !== null && (
           <span

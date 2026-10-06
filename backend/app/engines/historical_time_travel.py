@@ -21,6 +21,7 @@ from app.engines.mutators import (
     candidate_from_row,
     today_iso,
 )
+from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
@@ -47,6 +48,20 @@ def format_year(year: int) -> str:
 
 
 class HistoricalTimeTravelEngine(MutatorEngine):
+    tagline = "Travel through the eras stories are set in"
+    tags: ClassVar[list[str]] = ["Any film", "Setting year", "Forward / Backward"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Travel through story settings, not release dates.",
+        ["Pick a film set strictly {setting_direction} the current film; inspect or edit uncertain setting years."],
+        ["{win_goal}"], ["Equal or wrong-direction settings block the hop.", "{fail_goal}"],
+        ["Small era jumps leave more history available for future moves.",
+         "Check inferred settings before making a large leap."], ["seed"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
+        return {**super().rulebook_values(rules),
+                "setting_direction": "before" if cls.direction(rules) == "descent" else "after"}
     game_type = HISTORICAL_TIME_TRAVEL
     display_name = "Historical Time-Travel"
     description = (

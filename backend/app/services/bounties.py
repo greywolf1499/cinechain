@@ -27,6 +27,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
+from app.engines.rulebook import RuleSection
+
+RULEBOOK = RuleSection(
+    "Earn rewards by completing film side quests.",
+    ["Match a film to one of the three active bounties while obeying your mode's rules."],
+    ["At most one bounty completes per logged step. Reward: {bounty_reward}; then a fresh quest replaces it."],
+    ["A bounty does not waive the main mode's restrictions."],
+    ["Choose a film satisfying both a bounty and a useful onward route.",
+     "A rewarded wildcard only buys soft violations; hard-only modes still keep their restrictions."],
+    ["bounty", "wildcard", "life"],
+)
+
 from sqlmodel import Session
 
 from app.models.cache import CachedMovie, CachedMovieDirector

@@ -27,6 +27,7 @@ from typing import ClassVar
 
 from app.engines.cinechain import CineChainEngine
 from app.engines.conditions import RunOutcome
+from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, Run, RunStep
 from app.schemas.discovery import DiscoveryCandidate
@@ -155,6 +156,27 @@ def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
 
 
 class RabbitHoleEngine(CineChainEngine):
+    tagline = "Descend. Survive. Don't blink."
+    tags: ClassVar[list[str]] = ["Shared cast", "3 lives", "Rogue-like"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Survive deeper into the chain; {escape_goal}",
+        ["Link a film and satisfy the current tier; scheduled restrictions are {tier_schedule}.",
+         "Forcing a soft link or tier violation costs one life; inspect the HUD for any active tier re-roll."],
+        ["Start with {max_lives} lives; {lives_remaining} remain. Legal moves cost no life.", "{win_goal}"],
+        ["At zero lives, a dead end or surrender ends the run as failed.", "{fail_goal}"],
+        ["Your current pick should leave a filmography suited to the next tier.",
+         "Spend a life to escape a trap, not merely to avoid comparing legal choices."], ["seed", "life", "tier", "bounty"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict:
+        remaining, maximum = lives_of(rules)
+        escape = (rules or {}).get(ESCAPE_DEPTH_KEY)
+        return {
+            **super().rulebook_values(rules), "max_lives": maximum, "lives_remaining": remaining,
+            "escape_goal": f"escape at depth {escape}." if escape else "no escape depth is configured.",
+            "tier_schedule": "; ".join(f"depth {tier.start_depth}: {tier.rule}" for tier in TIERS),
+        }
     game_type = RABBIT_HOLE
     supports_bounty_board = True
     display_name = "The Rabbit Hole"

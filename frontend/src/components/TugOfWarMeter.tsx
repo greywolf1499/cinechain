@@ -1,5 +1,6 @@
 import { cn } from "../lib/cn";
-import { TUG_DIMENSIONS, tugMomentum, tugTarget } from "../lib/tugOfWar";
+import { TUG_DIMENSIONS, tugEffectLabel, tugMomentum, tugTarget } from "../lib/tugOfWar";
+import { GlossaryChip } from "./HowToPlay";
 import type { RulesConfig, RunParticipant, UserSummary } from "../types/api";
 import PlayerAvatar from "./PlayerAvatar";
 
@@ -128,25 +129,25 @@ export default function TugOfWarMeter({
       <div className="mt-1.5 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
         <span>First to lead by {target} wins.</span>
         {tugState?.streak_team && tugState.streak > 0 && (
-          <span className="text-orange-300">
+          <GlossaryChip term="streak" className="text-orange-300">
             🔥 {tugState.streak_team === "team_a" ? nameA : nameB} streak ×{tugState.streak}
-          </span>
+          </GlossaryChip>
         )}
         {tugState?.anchor && (
-          <span className="text-amber-300">
-            ⚓ {tugState.anchor === "team_a" ? nameA : nameB} has the next-pull anchor
-          </span>
+          <GlossaryChip term="bank" className="text-amber-300">
+            ⚓ {tugState.anchor === "team_a" ? nameA : nameB} Bank (next pull ×2)
+          </GlossaryChip>
         )}
         {tugState?.sudden_death && (
-          <span className="font-semibold text-red-300">Sudden Death · target shrinks every pull</span>
+          <GlossaryChip term="sudden_death" className="font-semibold text-red-300">Sudden Death · target shrinks every {rules.sudden_death_every ?? 2} pulls</GlossaryChip>
         )}
       </div>
       {tugState?.pulls.length ? (
         <div aria-label="Recent Tug pulls" className="mt-2 flex flex-wrap justify-center gap-1">
           {tugState.pulls.slice(-8).map((pull, index) => (
-            <span
+            <GlossaryChip
+              term={pull.kind === "invasion" ? "raid" : pull.kind === "neutral" ? "bank" : pull.kind === "home" ? "build" : "sudden_death"}
               key={pull.step_id}
-              title={`${pull.puller === "team_a" ? nameA : nameB}: ${pull.kind.replace("_", " ")} (${pull.points > 0 ? "+" : ""}${pull.points})`}
               className={cn(
                 "rounded px-1.5 py-0.5 text-[10px]",
                 pull.kind === "invasion"
@@ -156,10 +157,9 @@ export default function TugOfWarMeter({
                     : "bg-lime-950/70 text-lime-200",
               )}
             >
-              {pull.kind === "invasion" ? "⚔️" : pull.kind.includes("neutral") ? "⚓" : "🔥"}
-              {pull.points > 0 ? `+${pull.points}` : pull.points}
+              {tugEffectLabel(pull.kind, pull.points, pull.multiplier)}
               {index === tugState.pulls.slice(-8).length - 1 ? " · now" : ""}
-            </span>
+            </GlossaryChip>
           ))}
         </div>
       ) : null}

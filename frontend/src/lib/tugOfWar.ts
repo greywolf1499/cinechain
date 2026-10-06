@@ -40,9 +40,12 @@ export function tugNextTeam(rules: RulesConfig): "team_a" | "team_b" {
 export function tugEffectLabel(
   effect: NonNullable<DiscoveryCandidate["tug_effect"]>,
   points: number,
+  multiplier?: number,
 ): string {
-  if (effect === "invasion") return `⚔️ Steal · ${points}-point swing`;
+  if (effect === "invasion") return multiplier === undefined
+    ? `⚔️ Raid (${points}-point swing)`
+    : `⚔️ Raid (+${multiplier} you · −${points - multiplier} them)`;
   if (effect === "sudden_neutral") return "☠️ Sudden neutral · opponent +1";
-  if (effect === "neutral") return "⚓ Anchor ×2";
-  return points > 1 ? `+${points} 🔥` : `+${points}`;
+  if (effect === "neutral") return "⚓ Bank (next pull ×2)";
+  return `🔥 Build (+${points} you)`;
 }

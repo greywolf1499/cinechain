@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.services.bridge_paths import parse_countries
@@ -40,6 +41,37 @@ CAST_LINK_KEY = "require_cast_link"
 LEGACY_CHRONO_KEY = "direction"
 
 PAIR_MODIFIER_KEYS = (CHRONO_KEY, STAIRCASE_KEY, COOLDOWN_KEY)
+
+RULEBOOK = {
+    CHRONO_KEY: RuleSection(
+        "Move strictly through release years.",
+        ["Each next film must be released {chrono_word} the previous film."],
+        ["The release-year direction applies on every hop."],
+        ["Equal, missing or wrong-direction years block a hop; wildcards cannot bypass it."],
+        ["Use small year changes to keep your remaining catalogue broad."], ["wildcard"],
+    ),
+    STAIRCASE_KEY: RuleSection(
+        "Build a runtime staircase.",
+        ["Each next film must be {runtime_word} than the previous film."],
+        ["Known runtimes must move strictly in the configured direction."],
+        ["Equal or wrong-direction known runtimes are blocked; wildcards cannot bypass it."],
+        ["Leave runtime headroom instead of jumping straight to an extreme."], ["wildcard"],
+    ),
+    COOLDOWN_KEY: RuleSection(
+        "Avoid recently visited countries.",
+        ["Do not reuse a primary country from the last {country_cooldown} logged films."],
+        ["Each new film rolls the country window forward; unknown countries do not block."],
+        ["A country in the cooldown window is blocked; wildcards cannot bypass it."],
+        ["Keep more than two countries in your route so you do not yo-yo into a lockout."], ["wildcard"],
+    ),
+    CAST_LINK_KEY: RuleSection(
+        "Combine this mode's rule with shared cast links.",
+        ["Also connect each film by a shared credited actor or an eligible same-character hop."],
+        ["Both the primary mode and the cast link are checked."],
+        ["A wildcard can override a soft cast-link violation, but not a hard mode rule."],
+        ["Choose connectors satisfying both restrictions instead of planning two separate routes."], ["wildcard"],
+    ),
+}
 
 
 def merge_modifiers(defaults: dict[str, Any], rules: dict | None) -> dict[str, Any]:

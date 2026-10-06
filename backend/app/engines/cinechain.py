@@ -17,6 +17,7 @@ from app.engines.reunions import (
     find_character_hop,
     find_golden_reunion,
 )
+from app.engines.rulebook import RuleSection
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
 from app.schemas.engine import (
@@ -79,6 +80,17 @@ def cast_credits(cast: Sequence[dict]) -> list[CastCredit]:
 
 
 class CineChainEngine(BaseChallengeEngine):
+    tagline = "Six Degrees of Kevin Bacon"
+    tags: ClassVar[list[str]] = ["Shared cast"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Build a connected movie chain.",
+        ["Start with a seed, then link by a shared credited actor or the same character played by different actors.",
+         "Actor links use the configured cast depth: {cast_depth}."],
+        ["{win_goal}"], ["{fail_goal}"],
+        ["Choose a connector with a broad filmography to keep your next move open.",
+         "Save wildcards for scarce links rather than spending them on easy detours."],
+        ["seed", "wildcard"],
+    )
     game_type = "cinechain"
     display_name = "CineChain"
     description = (

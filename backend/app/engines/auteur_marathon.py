@@ -16,10 +16,11 @@ import re
 import time
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from app.engines.base import RunSetupError
 from app.engines.conditions import RunOutcome
+from app.engines.rulebook import RuleSection
 from app.engines.trackers import TrackerEngine
 from app.models.cache import CachedMovie
 from app.models.run import (
@@ -103,6 +104,23 @@ def build_filmography(
 
 
 class AuteurMarathonEngine(TrackerEngine):
+    tagline = "One director, every feature"
+    tags: ClassVar[list[str]] = ["One director", "Release order", "Filmography"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Explore {person_name}'s feature filmography in release order.",
+        ["Advance along the prepared filmography; skip at most {max_skip} entries between picks."],
+        ["Reaching the last track entry completes the marathon."],
+        ["Off-track films are blocked; order violations require a soft-rule override."],
+        ["Save skips for hard-to-find features rather than rushing to familiar favourites.",
+         "Watch for recurring collaborators and themes across the career."], ["track", "seed", "wildcard"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
+        config = rules or {}
+        return {**super().rulebook_values(rules),
+                "person_name": (config.get("director") or {}).get("name", "your chosen director"),
+                "max_skip": config.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP)}
     seed_policy = "none"
     game_type = AUTEUR_MARATHON
     display_name = "The Auteur Marathon"

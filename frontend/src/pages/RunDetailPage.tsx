@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  BookOpen,
   Calendar,
   Clapperboard,
   Drama,
@@ -50,6 +51,7 @@ import PlayerAvatar from "../components/PlayerAvatar";
 import StatusBadge from "../components/StatusBadge";
 import EmptyState from "../components/EmptyState";
 import CountryFlags from "../components/CountryFlags";
+import { HowToPlayCard, HowToPlayDrawer } from "../components/HowToPlay";
 import { cn } from "../lib/cn";
 import { allowsMovieRepeats } from "../lib/rules";
 import { useActiveRunStore } from "../store/activeRunStore";
@@ -62,6 +64,7 @@ import {
   useRun,
   useRunConstraint,
   useRunStats,
+  useRunRulebook,
   useUpdateRun,
   useUpdateRunRules,
   useUsers,
@@ -98,6 +101,21 @@ export default function RunDetailPage() {
   const { data: stats } = useRunStats(id);
   const { data: engines } = useEngines();
   const { data: curatedLists } = useCuratedLists();
+  const rulebook = useRunRulebook(id);
+  const [showRulebook, setShowRulebook] = useState(false);
+  const [introType, setIntroType] = useState<string | null>(null);
+  useEffect(() => {
+    setShowRulebook(false);
+    setIntroType(null);
+  }, [id]);
+  useEffect(() => {
+    const type = run?.game_type;
+    if (!type || !rulebook.data) return;
+    const key = `cinechain.rulebook.seen.${type}`;
+    const seen = localStorage.getItem(key);
+    setIntroType(seen ? null : type);
+    localStorage.setItem(key, "1");
+  }, [id, run?.game_type, !!rulebook.data]);
   const [showDirectSearch, setShowDirectSearch] = useState(false);
   const deleteStep = useDeleteStep(id ?? "");
   const deleteRun = useDeleteRun();
@@ -197,12 +215,33 @@ export default function RunDetailPage() {
           </div>
           <p className="mt-1 text-sm text-zinc-500">{participantNames || "No participants"}</p>
         </div>
-        <RunActionsMenu
-          canForfeit={!locked}
-          onForfeit={() => setConfirmForfeit(true)}
-          onDelete={() => setConfirmDeleteRun(true)}
-        />
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={() => {
+            localStorage.setItem(`cinechain.rulebook.seen.${run.game_type}`, "1");
+            setIntroType(null);
+            setShowRulebook(true);
+          }}
+            className="flex items-center gap-1.5 rounded-lg border border-app-border px-3 py-2 text-xs font-semibold text-zinc-300 hover:text-white">
+            <BookOpen className="h-3.5 w-3.5" aria-hidden />
+            How to play
+          </button>
+          <RunActionsMenu
+            canForfeit={!locked}
+            onForfeit={() => setConfirmForfeit(true)}
+            onDelete={() => setConfirmDeleteRun(true)}
+          />
+        </div>
       </div>
+      {introType === run.game_type && rulebook.data && (
+        <section aria-label="First visit rules" className="mb-5 rounded-xl border border-sky-500/30 bg-sky-500/5 p-4">
+          <HowToPlayCard section={rulebook.data.rulebook} />
+          <div className="mt-3 flex gap-4 text-xs">
+            <button type="button" className="text-sky-300" onClick={() => setShowRulebook(true)}>Full rules</button>
+            <button type="button" className="text-zinc-400" onClick={() => setIntroType(null)}>Got it</button>
+          </div>
+        </section>
+      )}
+      <HowToPlayDrawer runId={run.id} engine={engine} open={showRulebook} onClose={() => setShowRulebook(false)} />
 
       {locked && (
         <RunOutcomeBanner

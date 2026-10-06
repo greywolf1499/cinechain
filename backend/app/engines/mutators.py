@@ -28,6 +28,7 @@ from sqlmodel import select
 
 from app.engines import modifiers
 from app.engines.cinechain import CineChainEngine
+from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
@@ -273,6 +274,21 @@ class ChronoClimbEngine(MutatorEngine):
     backward (descent) in time. Any film qualifies; shared cast is optional."""
 
     game_type = "chrono_climb"
+    tagline = "Climb or descend through time"
+    tags: ClassVar[list[str]] = ["Any film", "Release year"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Move strictly through release years.",
+        ["Choose a film released {chrono_word} the previous one; shared cast is optional."],
+        ["{win_goal}"], ["Equal or wrong-direction years are blocked.", "{fail_goal}"],
+        ["Take small year jumps to leave more room for future moves.",
+         "Check the release year, not the story's setting."], ["seed"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
+        values = super().rulebook_values(rules)
+        direction = modifiers.merge_modifiers(cls.default_modifiers, rules)[modifiers.CHRONO_KEY]
+        return {**values, "chrono_word": "before" if direction == "descent" else "after"}
     display_name = "Chrono Climb"
     description = (
         "March through time: every film must be released after the last (Climb) or before it "
@@ -412,6 +428,15 @@ class WorldPassportEngine(MutatorEngine):
     film qualifies; shared cast is optional."""
 
     game_type = "world_passport"
+    tagline = "A new country every film"
+    tags: ClassVar[list[str]] = ["Any film", "Country"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Collect stamps by changing the primary production country each film.",
+        ["Choose a film whose first country differs from the frontier; obey the active cooldown."],
+        ["{win_goal}"], ["Same-country hops are blocked when both countries are known.", "{fail_goal}"],
+        ["Choose a country with several onward options instead of bouncing between two hubs.",
+         "Unknown country data is unverified, not a reason to hide a film."], ["seed"],
+    )
     display_name = "World Cinema Passport"
     description = (
         "Collect stamps: every film must come from a different country than the last. "
@@ -543,6 +568,15 @@ class AuteurRelayEngine(MutatorEngine):
     """
 
     game_type = "auteur_relay"
+    tagline = "Actor, director, actor, director..."
+    tags: ClassVar[list[str]] = ["Shared cast", "Shared director"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Build a chain alternating shared actors and shared directors.",
+        ["The first hop may use either; each subsequent hop must use the other link type."],
+        ["{win_goal}"], ["{fail_goal}"],
+        ["After an actor hop, pick a film whose director gives you several next choices.",
+         "Plan two hops ahead: the current connector determines the next link type."], ["seed", "wildcard"],
+    )
     display_name = "Auteur Relay"
     character_hop_links = False  # links must be a real actor or director, strictly alternating
     description = (

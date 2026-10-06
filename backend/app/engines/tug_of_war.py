@@ -12,6 +12,7 @@ from sqlmodel import select
 
 from app.engines.cinechain import CineChainEngine
 from app.engines.conditions import RunOutcome
+from app.engines.rulebook import RuleSection
 from app.models.run import (
     LEGACY_ENGINE_VERSION,
     RUN_STATUS_ACTIVE,
@@ -384,6 +385,44 @@ def preview_pull(
 
 
 class TugOfWarEngine(CineChainEngine):
+    tagline = "Pull the rope your way"
+    tags: ClassVar[list[str]] = ["Shared cast", "Two teams", "Era or geography"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Win by leading the rope by {target_lead} points (current target: {effective_target}).",
+        ["{tug_first_turn} Team A is {territory_a}; Team B is {territory_b}.",
+         "{tug_turn}"],
+        ["{tug_scoring}",
+         "{sudden_rule}"],
+        ["The other team wins if it reaches the lead target first.", "{fail_goal}"],
+        ["Your pick sets your opponent's options: leave a frontier they cannot easily exploit.",
+         "{tug_tip}"],
+        ["seed", "build", "raid", "bank", "streak", "sudden_death"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
+        config = tug_config(rules)
+        state = (rules or {}).get(MOMENTUM_KEY) or {}
+        legacy = (rules or {}).get(TUG_RULES_VERSION_KEY) == 1
+        return {
+            **super().rulebook_values(rules), **config,
+            "effective_target": state.get("effective_target", config["target_lead"]),
+            "territory_a": f"pre-{config['era_a_before']}" if config["dimension"] == DIMENSION_ERA else "US and Europe",
+            "territory_b": f"post-{config['era_b_after']}" if config["dimension"] == DIMENSION_ERA else "the rest of the world",
+            "tug_first_turn": "Log shared-cast films." if legacy else "Take alternating shared-cast turns.",
+            "tug_tip": "Choose actors with routes back into your territory; logging an opposing-territory film helps that side."
+            if legacy else "A raid removes only available points; bank when the doubled next pull outweighs waiting.",
+            "tug_turn": "Each watched film scores for its territory, regardless of who logged it; neutral films score neither team."
+            if legacy else "Build on your territory, raid the opponent's, or bank with a neutral film.",
+            "tug_scoring": "Legacy scoring: each watched territory film gives its territory one point; neutral films score neither team."
+            if legacy else (
+                f"Build adds streak points up to {config['momentum_cap']}; a bank doubles the next scoring pull. "
+                + ("Raids gain 1 and remove up to 1 available opponent point, doubled by a bank."
+                   if config["steal_enabled"] else "Raids are disabled: opposing-territory films count as neutral.")
+            ),
+            "sudden_rule": "Legacy scoring has no momentum or Sudden Death." if legacy else
+            f"Sudden Death begins after {config['sudden_death_after']} pulls: neutral films give the opponent 1 point and the target shrinks every {config['sudden_death_every']} pulls.",
+        }
     game_type = TUG_OF_WAR
     display_name = "Tug of War"
     description = (

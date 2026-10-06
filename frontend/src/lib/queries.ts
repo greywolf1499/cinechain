@@ -18,6 +18,7 @@ import type {
 	Passport,
 	DiscoveryCandidate,
 	EngineMeta,
+	RunRulebook,
 	GoldenVetoResult,
 	MovieDetail,
 	NarrativeEra,
@@ -92,6 +93,14 @@ export function useEngines() {
 		queryKey: ["engines"],
 		queryFn: () => api.get<EngineMeta[]>("/engines"),
 		staleTime: 5 * 60_000,
+	});
+}
+
+export function useRunRulebook(runId: string | undefined) {
+	return useQuery({
+		queryKey: ["runs", runId ?? "", "rulebook"],
+		queryFn: () => api.get<RunRulebook>(`/runs/${runId}/rulebook`),
+		enabled: !!runId,
 	});
 }
 

@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import copy
 import random
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlmodel import Session, select
 
 from app.engines.base import RunSetupError
+from app.engines.rulebook import RuleSection
 from app.engines.trackers import TrackerEngine
 from app.models.cache import CachedMovie
 from app.models.curated import LetterboxdWatchlist
@@ -140,6 +141,16 @@ def seed_from_watchlist(
 
 
 class MarchMadnessEngine(TrackerEngine):
+    tagline = "16 films enter, one is crowned"
+    tags: ClassVar[list[str]] = ["Tournament", "Watchlist", "Partner voting"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Crown a champion from a 16-film bracket.",
+        ["Compare each matchup and advance your winner, round by round; there is no seed chain."],
+        ["Each decision eliminates one film; the final winner is the champion."],
+        ["Eliminated films leave the tournament; there is no points-based loss."],
+        ["Agree on what makes a winner before voting.",
+         "Compare the pair in front of you, not a favourite from another branch."], [],
+    )
     seed_policy = "none"
     game_type = MARCH_MADNESS
     supports_bounty_board = False

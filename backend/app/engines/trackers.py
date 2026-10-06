@@ -12,6 +12,7 @@ from sqlmodel import col, select
 
 from app.engines.base import BaseChallengeEngine
 from app.engines.cinechain import compute_run_stats
+from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie, CachedMovieRating
 from app.models.run import RunStep
 from app.schemas.engine import RunStats, Suggestion, SuggestionFilters, ValidationResult
@@ -64,6 +65,20 @@ class DecadeSieveEngine(TrackerEngine):
     """Every film must be released in the run's `target_decade` (e.g. 1970)."""
 
     game_type = "decade_sieve"
+    tagline = "One decade, no escape"
+    tags: ClassVar[list[str]] = ["Any film", "One decade"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Explore films released in the {target_decade}s.",
+        ["Log any film from the selected decade; no cast connection is required."],
+        ["Each watched film adds to your exploration; complete the run manually."],
+        ["Films outside the decade cannot be logged."],
+        ["Mix genres and countries to make one decade feel expansive.",
+         "Check release dates on remakes and reissues."], ["seed"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict:
+        return {**super().rulebook_values(rules), "target_decade": (rules or {}).get("target_decade", 1970)}
     seed_policy = "derived"
     display_name = "Decade Sieve"
     description = (
@@ -127,6 +142,16 @@ class RouletteEngine(TrackerEngine):
     matches your filters. Any film may be logged - the spin is the "pick"."""
 
     game_type = "roulette"
+    tagline = "Let the wheel decide"
+    tags: ClassVar[list[str]] = ["Random pick"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Let a random draw choose movie night.",
+        ["Set filters, spin from the cached matching pool, and log your pick; any film may be logged."],
+        ["Watched films record your discoveries; complete the run manually."],
+        ["An empty pool needs wider filters, not a wildcard."],
+        ["Widen one filter at a time if the wheel runs dry.",
+         "Use a blind draft when you want a choice without browsing endlessly."], ["seed"],
+    )
     seed_policy = "none"
     display_name = "Movie Night Roulette"
     description = "Can't decide? Set a few filters and spin for a random film from your cache."

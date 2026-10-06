@@ -8,6 +8,7 @@ from typing import ClassVar
 from sqlmodel import col, select
 
 from app.engines.cinechain import CineChainEngine
+from app.engines.rulebook import RuleSection
 from app.models.curated import CanonMovieBadge, CuratedList
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
@@ -18,6 +19,15 @@ _SQLITE_CHUNK = 500
 
 
 class CanonIslandEngine(CineChainEngine):
+    tagline = "Stay on the canon"
+    tags: ClassVar[list[str]] = ["Shared cast", "One curated list"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Explore a shared-cast chain entirely inside your chosen canon list.",
+        ["Pick a list member linked to the current film; even the seed must belong to the list."],
+        ["{win_goal}"], ["Films outside the list are blocked, even with a wildcard.", "{fail_goal}"],
+        ["Look for actors appearing in several list entries before committing to a rare film.",
+         "Use the list as your search boundary, not the whole catalogue."], ["seed", "wildcard"],
+    )
     """The classic shared-cast chain, but the engine blocks any film that isn't
     on the run's `allowed_curated_list_id` (a `CuratedList` id). Candidate pools
     are pre-filtered to the list so the UI never offers a film it would reject."""

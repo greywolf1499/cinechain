@@ -16,10 +16,11 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from app.engines.base import RunSetupError
 from app.engines.conditions import RunOutcome
+from app.engines.rulebook import RuleSection
 from app.engines.trackers import TrackerEngine
 from app.models.cache import CachedMovie
 from app.models.run import (
@@ -159,6 +160,23 @@ def build_career_track(
 
 
 class MethodActorEngine(TrackerEngine):
+    tagline = "One career, in order"
+    tags: ClassVar[list[str]] = ["One actor", "Chronological", "Milestones"]
+    rulebook: ClassVar[RuleSection] = RuleSection(
+        "Explore {person_name}'s chronological career track.",
+        ["Advance through the prepared track; skip at most {max_skip} entries between picks."],
+        ["Reaching the last track entry completes the career."],
+        ["Off-track films are blocked; order violations require a soft-rule override."],
+        ["Use skips to avoid an unavailable film without jumping past a milestone.",
+         "Compare early and late roles to notice how the actor's craft changes."], ["track", "seed", "wildcard"],
+    )
+
+    @classmethod
+    def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
+        config = rules or {}
+        return {**super().rulebook_values(rules),
+                "person_name": (config.get("actor") or {}).get("name", "your chosen actor"),
+                "max_skip": config.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP)}
     seed_policy = "none"
     game_type = METHOD_ACTOR
     display_name = "The Method Actor Marathon"

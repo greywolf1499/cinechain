@@ -159,7 +159,7 @@ def run_rulebook(
     engine = get_engine(run.game_type, session, tmdb)
     rules = run.rules_config or {}
     render_rules = rules
-    if run.game_type == "tug_of_war" and rules.get("tug_rules_version") != 2:
+    if run.game_type == "tug_of_war" and rules.get("tug_rules_version") not in (2, 3):
         render_rules = {**rules, "tug_rules_version": 1}
     values = engine.rulebook_values(render_rules)
     if run.engine_version <= 1:

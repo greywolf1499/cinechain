@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -45,7 +45,7 @@ import { RABBIT_HOLE } from "../lib/rabbitHole";
 import RoleBadge from "./RoleBadge";
 import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
 import { SIDE_LABELS } from "../lib/tunnel";
-import { tugEffectLabel, tugNextTeam } from "../lib/tugOfWar";
+import { tugBankMultiplier, tugEffectLabel, tugNextTeam } from "../lib/tugOfWar";
 import { GlossaryChip } from "./HowToPlay";
 import ModeFilterBar, { filterDataUnknown, filterDefaults, matchesModeFilters, visitedCountries } from "./pick-next/ModeFilterBar";
 import type { FilterValues } from "./pick-next/ModeFilterBar";
@@ -332,10 +332,12 @@ function DiscoveryGrid({
   const { data: engines, isError: enginesError, refetch: retryEngines } = useEngines();
   const engine = engines?.find((entry) => entry.game_type === gameType);
   const specs = useMemo(() => (engine?.discovery_filters ?? []).filter((spec) =>
-    spec.source !== "tug_effect" || rulesConfig.tug_rules_version === 2), [engine, rulesConfig.tug_rules_version]);
+    spec.source !== "tug_effect" || [2, 3].includes(rulesConfig.tug_rules_version ?? 1)), [engine, rulesConfig.tug_rules_version]);
   const visited = useMemo(() => visitedCountries(steps), [steps]);
   const [modeOverrides, setModeOverrides] = useState<FilterValues>({});
-  const modeValues = useMemo(() => ({ ...filterDefaults(specs, visited), ...modeOverrides }), [specs, visited, modeOverrides]);
+  const modeValues = useMemo<FilterValues>(() => ({ ...filterDefaults(specs, visited),
+    ...(rulesConfig.tug_rules_version === 3 ? { tug_effect: "" } : {}),
+    ...modeOverrides }), [specs, visited, modeOverrides, rulesConfig.tug_rules_version]);
   const includeOffTier = specs.some((spec) => spec.server_param === "include_off_tier" && modeValues[spec.key] === true);
   const suggestions = useRunSuggestions(runId);
   const [suggestionContext, setSuggestionContext] = useState<string | null>(null);
@@ -575,7 +577,7 @@ function DiscoveryGrid({
       await createStep.mutateAsync({
         movie_id: candidate.movie_id,
         force: true,
-        ...(gameType === "tug_of_war" && rulesConfig.tug_rules_version === 2 ? { tug_team: nextTeam } : {}),
+        ...(gameType === "tug_of_war" && [2, 3].includes(rulesConfig.tug_rules_version ?? 1) ? { tug_team: nextTeam } : {}),
         tunnel_side: tunnelSide,
         status: watched ? "watched" : "planned",
         watched_at: watched ? new Date().toISOString() : null,
@@ -611,7 +613,7 @@ function DiscoveryGrid({
       ratings={ratingsMap?.[String(candidate.movie_id)]}
       badges={badgesMap?.[String(candidate.movie_id)]}
       gameType={gameType}
-      tugMultiplier={rulesConfig.tug_momentum?.anchor === nextTeam ? 2 : 1}
+      tugMultiplier={rulesConfig.tug_rules_version === 3 ? undefined : tugBankMultiplier(rulesConfig)}
       castLinked={castLinked}
       tierLabel={gameType === RABBIT_HOLE && constraint?.rabbit_hole
         ? `Tier ${constraint.rabbit_hole.tier}: ${constraint.rabbit_hole.tier_rule}` : undefined}
@@ -956,7 +958,10 @@ function DiscoveryGrid({
       {!isLoading && !poolError && filtered.length > 0 && (
         <>
           <DirectorsPicks candidates={filtered} matchOrder={pool.map((candidate) => candidate.movie_id)}
-            visited={visited} specs={specs} allowRepeats={allowRepeats} renderCard={renderCandidate} onPick={openCandidate} />
+            visited={visited} specs={specs} allowRepeats={allowRepeats} renderCard={renderCandidate} onPick={openCandidate}
+            slot={gameType === "tug_of_war" && rulesConfig.tug_rules_version === 3
+              ? <TugDecisionTriad candidates={filtered} runId={runId} rules={rulesConfig}
+                  allowRepeats={allowRepeats} renderCard={renderCandidate} /> : undefined} />
           <p className="text-xs text-zinc-500" role="status">
             Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} best matches · narrow with a filter
           </p>
@@ -1016,6 +1021,58 @@ function DiscoveryGrid({
 }
 
 const FORK_OFFER_SIZE = 3;
+function TugDecisionTriad({ candidates, runId, rules, allowRepeats, renderCard }: {
+  candidates: DiscoveryCandidate[];
+  runId: string;
+  rules: RulesConfig;
+  allowRepeats: boolean;
+  renderCard: (candidate: DiscoveryCandidate) => ReactNode;
+}) {
+  const [lookaheadRequested, setLookaheadRequested] = useState(false);
+  const eligible = candidates.filter((candidate) => allowRepeats || !candidate.already_in_run);
+  const best = (effect: DiscoveryCandidate["tug_effect"]) => eligible
+    .filter((candidate) => candidate.tug_effect === effect)
+    .sort((a, b) => (b.tug_points ?? 0) - (a.tug_points ?? 0) || b.connections.length - a.connections.length)[0];
+  const next = tugNextTeam(rules);
+  const defenderStreak = rules.tug_momentum?.streaks?.[next === "team_a" ? "team_b" : "team_a"] ?? 0;
+  const picks = [
+    { label: "Best Build", candidate: best("home") },
+    { label: `Best Raid${defenderStreak ? ` (breaks 🔥${defenderStreak})` : ""}`, candidate: best("invasion") },
+    { label: "Bank", candidate: best("neutral") },
+  ];
+  const ids = picks.flatMap(({ candidate }) => candidate ? [candidate.movie_id] : []).join(",");
+  const lookahead = useQuery({
+    queryKey: ["tug-lookahead", runId, ids, rules],
+    queryFn: () => api.get<{ movies: Record<string, { scoring: number; neutral: number; partial: boolean }>; partial: boolean }>(
+      `/runs/${runId}/tug/lookahead?movie_ids=${ids}`,
+    ),
+    enabled: lookaheadRequested && ids.length > 0,
+    staleTime: 30_000,
+    retry: false,
+  });
+  return <div className="grid gap-3 sm:grid-cols-3" aria-label="Tug Decision Triad">
+    {picks.map(({ label, candidate }) => {
+      const counts = candidate && lookahead.data?.movies[String(candidate.movie_id)];
+      return <div key={label} className="flex min-w-0 flex-col gap-1"
+        onMouseEnter={() => setLookaheadRequested(true)} onFocus={() => setLookaheadRequested(true)}>
+        <p className="text-xs font-semibold text-accent">{label}{candidate ? ` · +${candidate.tug_points ?? 0}` : ""}</p>
+        {candidate ? <>
+          {renderCard(candidate)}
+          <button type="button" onClick={() => setLookaheadRequested(true)}
+            title="Cached reachability estimate; logging still validates all rules."
+            className="text-left text-xs text-zinc-400">
+            {counts ? `Leaves them: ${counts.scoring} scoring · ${counts.neutral} neutral${counts.partial || lookahead.data?.partial ? " · partial cache" : ""}`
+              : lookahead.isFetching ? "Checking cached replies…" : "Hover or tap to check their replies"}
+          </button>
+        </> : <p className="text-xs text-zinc-500">No {label.toLowerCase()} matches these filters.</p>}
+      </div>;
+    })}
+    {lookahead.isError && <p role="alert" className="text-xs text-red-300 sm:col-span-3">
+      Could not load cached replies. <button type="button" onClick={() => void lookahead.refetch()} className="underline">Retry</button>
+    </p>}
+  </div>;
+}
+
 function CandidateCard({
   roulette = false,
   candidate,
@@ -1044,7 +1101,7 @@ function CandidateCard({
   ratings: MovieRatings | null | undefined;
   badges: { badge_label: string; badge_color: string }[] | undefined;
   gameType: string;
-  tugMultiplier: number;
+  tugMultiplier?: number;
   castLinked: boolean;
   /** The Rabbit Hole's active tier ("Tier 3: Non-English"): shown as a check when the film complies. */
   tierLabel?: string;
@@ -1165,6 +1222,7 @@ function CandidateCard({
             )}
           >
             {tugEffectLabel(candidate.tug_effect, candidate.tug_points, tugMultiplier)}
+            {candidate.tug_breaks_streak ? " · breaks their streak" : ""}
           </GlossaryChip>
         )}
         {tierLabel && candidate.tier_compliant !== undefined && candidate.tier_compliant !== null && (
@@ -1515,8 +1573,7 @@ function MovieScreenView({
     await createStep.mutateAsync({
       movie_id: screen.movieId,
       force: true,
-      ...(rulesConfig.tug_rules_version === 2 ? { tug_team: tugNextTeam(rulesConfig) } : {}),
-      ...(rulesConfig.tug_rules_version === 2
+      ...([2, 3].includes(rulesConfig.tug_rules_version ?? 1)
         ? { tug_team: tugNextTeam(rulesConfig) }
         : {}),
       tunnel_side: tunnelSide,

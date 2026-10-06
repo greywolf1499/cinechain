@@ -546,6 +546,18 @@ anchors; invasions steal ground."
 | S4-05 | P2 | **"Leaves them"** look-ahead on hover: how many scoring vs. neutral films the opponent could reach from this frontier, computed from **cached** cast links only, time-boxed (≤ 1.5 s, the "searches stay time-boxed" rule), shown as "Leaves Ana: 6 scoring · 31 neutral". This teaches denial without a tutorial. |
 | S4-06 | P2 | Rename labels to verbs that express intent: "⚔️ Steal" → "⚔️ Raid (+1 you · −1 them · breaks their streak)", "⚓ Anchor ×2" → "⚓ Bank (next pull ×2)". |
 
+**S6 correction/measurement:** Once the trailing team can start a round, Team B's pull is not
+necessarily its last. V3 resolves victory and shrinkage after both teams' pulls, with tied
+Sudden Death initiative alternating. Neutral Bank remains 0 throughout v3, so perpetual
+banking is a draw rather than a guaranteed finish. In 2,000 seeded games per distribution,
+uniform mirror choices yielded 48.3% Team A wins for v3 and 51.75% for v2; the old bias
+requires a more revealing bank-heavy distribution (weights Build/Raid/Bank = 1/1/30):
+v3 47.95%, v2 62.1%. Both v3 distributions pass 45-55%, with all sampled games finishing
+within 500 pulls. The v2 bank-heavy failure remains an explicit expected-failure regression.
+For v3, the authoritative effects are Build = own streak (capped), Raid = +2 rope toward
+the puller and reset the defender's streak, Bank = 0 now and double the next scoring pull;
+S4-02/04/06's old steal/clamp and Sudden Death bank-penalty copy applies only to legacy v2.
+
 ### 4.2 Vertical: strategic legibility across the other versus/co-op mechanics
 
 | Mechanic | Legibility today | Gap |

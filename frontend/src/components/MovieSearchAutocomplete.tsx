@@ -101,7 +101,8 @@ export default function MovieSearchAutocomplete({
       force,
       status: watchStatus,
       watched_at: watchStatus === "watched" ? new Date(watchedDate).toISOString() : null,
-      ...(rulesConfig?.tug_rules_version === 2 ? { tug_team: tugNextTeam(rulesConfig) } : {}),
+      ...([2, 3].includes(rulesConfig?.tug_rules_version ?? 1) && rulesConfig
+        ? { tug_team: tugNextTeam(rulesConfig) } : {}),
       transition_metadata: connection
         ? connectionMetadata(connection, {
             from: connection.character_in_from,

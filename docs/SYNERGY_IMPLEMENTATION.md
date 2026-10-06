@@ -264,6 +264,19 @@ unless a player explicitly chooses the new order control.
 
 **Commit:** `feat(tug): v3 per-team momentum, raids break streaks, fair sudden death and decision triad`
 
+**S6 implementation clarifications:** "After Team B" only identifies the boundary while A
+pulls first; trailing-first Sudden Death can put B first. A v3 round therefore completes after
+both teams pull, and victory/target shrinkage settle only then (solo runs settle each pull).
+Tied Sudden Death rounds alternate initiative. Banks remain zero-point pulls as specified,
+including Sudden Death; perpetual banking can draw, so the termination assertion covers each
+seeded simulated game, not every possible strategy. The 2,000-game uniform harness produces
+48.3% A wins in v3 and 51.75% in v2: uniform draws alone do not demonstrate the old bias.
+The additional identical bank-heavy distribution (Build/Raid/Bank weights 1/1/30) yields
+47.95% in v3 versus 62.1% in v2, retained as a strict v2 `xfail`; every simulated game
+terminates within 500 pulls. Lookahead is a bounded cache-only reachability estimate, not a
+provider search or a promise of legal logging; missing cache/metadata and deadline exhaustion
+are explicitly partial. Queued v3 pulls enter fold chronology when watched, not when queued.
+
 ---
 
 ## Phase S7: Table Mode (one device, many players)

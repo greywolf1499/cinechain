@@ -431,7 +431,7 @@ def test_tug_rules_are_validated_and_defaulted(client):
     assert low.status_code == 422 and "target_lead" in low.json()["detail"]
     rules = bare.json()["rules_config"]
     assert rules["dimension"] == "era" and rules["target_lead"] == 4
-    assert rules["tug_rules_version"] == 2
+    assert rules["tug_rules_version"] == 3
     assert rules["tug_momentum"]["effective_target"] == 4
     assert rules["tug_momentum"]["next_team"] == "team_a"
     assert rules["steal_enabled"] is True
@@ -523,7 +523,7 @@ def test_era_dimension_scores_each_film_for_a_team(client, bob):
         log(client, run_id, 12)  # 2000: neutral anchor
         log(bob, run_id, 3)  # B invades A territory.
         got = detail(client, run_id)
-    assert got["rules_config"]["tug_scores"] == {"team_a": 0, "team_b": 2}
+    assert got["rules_config"]["tug_scores"] == {"team_a": 1, "team_b": 3}
     assert got["status"] == "active"
     players = got["rules_config"]["tug_players"]
     assert players == {"team_a": user_id(client), "team_b": user_id(bob)}
@@ -539,7 +539,7 @@ def test_geography_dimension_uses_first_country_and_skips_the_seed(client):
         log(client, run_id, 12)  # DE -> A
         log(client, run_id, 13)  # no country -> neutral anchor.
         got = scores(client, run_id)
-    assert got == {"team_a": 6, "team_b": 0}
+    assert got == {"team_a": 5, "team_b": 0}
 
 
 def test_a_lead_of_the_target_wins_for_the_leading_partner(client, bob):
@@ -551,7 +551,6 @@ def test_a_lead_of_the_target_wins_for_the_leading_partner(client, bob):
             (bob, 12),
             (client, 3),
             (bob, 13),
-            (client, 4),
         ):
             assert detail(client, run_id)["status"] == "active"
             assert log(picker, run_id, movie_id).status_code == 201
@@ -573,7 +572,7 @@ def test_team_b_can_win_and_the_lead_is_relative(client, bob):
         log(bob, run_id, 9)  # B +1 -> lead of 2.
         done = detail(client, run_id)
     assert done["status"] == "completed"
-    assert done["status_reason"] == "Tug of War won by Bob, 2-0!"
+    assert done["status_reason"] == "Tug of War won by Bob, 3-0!"
 
 
 def test_deleting_the_deciding_step_reopens_the_rope(client, bob):

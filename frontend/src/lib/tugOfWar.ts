@@ -29,12 +29,18 @@ export function tugTarget(rules: RulesConfig): number {
 
 /** Momentum on the number line: positive pulls towards Team A, negative towards Team B. */
 export function tugMomentum(rules: RulesConfig): number {
+  if (rules.tug_rules_version === 3 && rules.tug_momentum?.rope != null) return rules.tug_momentum.rope;
   const scores = rules.tug_scores;
   return scores ? scores.team_a - scores.team_b : 0;
 }
 
 export function tugNextTeam(rules: RulesConfig): "team_a" | "team_b" {
   return rules.tug_momentum?.next_team ?? "team_a";
+}
+
+export function tugBankMultiplier(rules: RulesConfig): number {
+  const team = tugNextTeam(rules);
+  return (rules.tug_rules_version === 3 ? rules.tug_momentum?.banks?.[team] : rules.tug_momentum?.anchor === team) ? 2 : 1;
 }
 
 export function tugEffectLabel(

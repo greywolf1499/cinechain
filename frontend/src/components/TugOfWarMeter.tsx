@@ -36,6 +36,7 @@ export default function TugOfWarMeter({
   const nameA = nameOf(players.team_a, "Team A");
   const nameB = nameOf(players.team_b, "Team B");
   const tugState = rules.tug_momentum;
+  const v3 = rules.tug_rules_version === 3;
   const nextTeam = tugState?.next_team ?? "team_a";
   const nextName = nextTeam === "team_a" ? nameA : nameB;
   const nextLabel =
@@ -128,6 +129,15 @@ export default function TugOfWarMeter({
       )}
       <div className="mt-1.5 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
         <span>First to lead by {target} wins.</span>
+        {v3 && <>
+          <span>Round {(tugState?.rounds ?? 0) + (finished ? 0 : 1)} · victory after both pulls</span>
+          {(["team_a", "team_b"] as const).map((team) => <GlossaryChip key={team} term="streak" className="text-orange-300">
+            🔥 {team === "team_a" ? nameA : nameB} streak ×{tugState?.streaks?.[team] ?? 0}
+          </GlossaryChip>)}
+          {(["team_a", "team_b"] as const).filter((team) => tugState?.banks?.[team]).map((team) => <GlossaryChip key={team} term="bank" className="text-amber-300">
+            ⚓ {team === "team_a" ? nameA : nameB} Bank (next pull ×2)
+          </GlossaryChip>)}
+        </>}
         {tugState?.streak_team && tugState.streak > 0 && (
           <GlossaryChip term="streak" className="text-orange-300">
             🔥 {tugState.streak_team === "team_a" ? nameA : nameB} streak ×{tugState.streak}
@@ -139,7 +149,7 @@ export default function TugOfWarMeter({
           </GlossaryChip>
         )}
         {tugState?.sudden_death && (
-          <GlossaryChip term="sudden_death" className="font-semibold text-red-300">Sudden Death · target shrinks every {rules.sudden_death_every ?? 2} pulls</GlossaryChip>
+          <GlossaryChip term="sudden_death" className="font-semibold text-red-300">Sudden Death · target shrinks every {rules.sudden_death_every ?? 2} pulls{v3 ? " at round boundaries · Trailing team pulls first" : ""}</GlossaryChip>
         )}
       </div>
       {tugState?.pulls.length ? (
@@ -157,14 +167,14 @@ export default function TugOfWarMeter({
                     : "bg-lime-950/70 text-lime-200",
               )}
             >
-              {tugEffectLabel(pull.kind, pull.points, pull.multiplier)}
+              {tugEffectLabel(pull.kind, pull.points, v3 ? undefined : pull.multiplier)}
               {index === tugState.pulls.slice(-8).length - 1 ? " · now" : ""}
             </GlossaryChip>
           ))}
         </div>
       ) : null}
       <p className="mt-1.5 text-center text-[11px] text-zinc-500">
-        {rules.dimension === "era"
+        {v3 ? "Build grows your streak; Raid breaks theirs. Each team can Bank its next pull ×2." : rules.dimension === "era"
           ? `Films from ${rules.era_a_before ?? 1975}–${rules.era_b_after ?? 2005} are neutral anchors; invasions steal ground.`
           : "Films without a country on record are neutral anchors; invasions steal ground."}
       </p>

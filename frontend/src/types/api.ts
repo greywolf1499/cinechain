@@ -101,6 +101,11 @@ export interface RulesConfig {
 		effective_target: number;
 		sudden_death: boolean;
 		next_team: "team_a" | "team_b";
+		rope?: number;
+		streaks?: { team_a: number; team_b: number };
+		banks?: { team_a: boolean; team_b: boolean };
+		rounds?: number;
+		round_complete?: boolean;
 		pulls: {
 			step_id: string;
 			puller: "team_a" | "team_b";
@@ -761,8 +766,9 @@ export interface DiscoveryCandidate {
 	narrative_year?: number | null;
 	narrative_era_label?: string | null;
 	narrative_delta?: number | null;
-	/** Tug of War v2: effect and projected net rope movement for the next pull. */
+	/** Tug of War v2/v3: effect and projected net rope movement for the next pull. */
 	tug_effect?: "home" | "invasion" | "neutral" | "sudden_neutral" | null;
+	tug_breaks_streak?: boolean;
 	tug_points?: number | null;
 }
 

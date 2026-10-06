@@ -55,8 +55,20 @@ class DiscoveryCandidate(BaseModel):
     # Tug of War: the next pull's effect and projected net rope movement.
     tug_effect: Literal["home", "invasion", "neutral", "sudden_neutral"] | None = None
     tug_points: int | None = None
+    tug_breaks_streak: bool = False
 
     @computed_field
     @property
     def origin_countries(self) -> list[str]:
         return parse_countries(self.origin_country)
+
+
+class TugReachable(BaseModel):
+    scoring: int = 0
+    neutral: int = 0
+    partial: bool = False
+
+
+class TugLookahead(BaseModel):
+    movies: dict[int, TugReachable]
+    partial: bool = False

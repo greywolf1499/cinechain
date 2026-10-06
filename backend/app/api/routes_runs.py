@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import random
+import time
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -37,6 +39,7 @@ from app.engines.tug_of_war import (
     TUG_RULES_VERSION_KEY,
     VICTORY_PREFIX,
     TugOfWarEngine,
+    _territory,
     compute_scores,
     leading_team,
     step_turn_team,
@@ -59,7 +62,12 @@ from app.models.run import (
     RunStep,
 )
 from app.models.user import User
-from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
+from app.schemas.discovery import (
+    DiscoveryCandidate,
+    DiscoveryConnection,
+    TugLookahead,
+    TugReachable,
+)
 from app.schemas.engine import (
     ConstraintInfo,
     RunStats,
@@ -94,12 +102,97 @@ from app.schemas.runs import (
 )
 from app.services import blind_fork, bounties, cache_repo, pool_options
 from app.services.bridge_paths import parse_countries
+from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient
 from app.services.veto import consume_veto_token
 from app.utils.dates import parse_release_year
 from app.utils.ids import utcnow
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+TUG_LOOKAHEAD_SECONDS = 1.5
+logger = logging.getLogger(__name__)
+
+
+def _cached_tug_lookahead(
+    session: Session, movie_ids: list[int], rules: dict, excluded: set[int],
+    deadline: float, results: dict[int, TugReachable],
+) -> None:
+    repo = cache_repo.CacheRepo(session)
+    limit = rules.get("max_cast_order") or 15
+    puller = (rules.get("tug_momentum") or {}).get("next_team", TEAM_A)
+    opponent = TEAM_B if puller == TEAM_A else TEAM_A
+    for movie_id in movie_ids:
+        if time.monotonic() >= deadline:
+            return
+        cast = repo.get_cached_cast(movie_id, limit)
+        count = TugReachable(partial=cast is None)
+        seen = {movie_id, *excluded}
+        for member in cast or []:
+            if time.monotonic() >= deadline:
+                count.partial = True
+                break
+            credits = repo.get_cached_actor_credits(member["actor_id"])
+            if credits is None:
+                count.partial = True
+            for movie in credits or []:
+                if time.monotonic() >= deadline:
+                    count.partial = True
+                    break
+                if movie.tmdb_id in seen:
+                    continue
+                seen.add(movie.tmdb_id)
+                if not is_reality_eligible(movie):
+                    continue
+                if movie.runtime is not None and movie.runtime < rules.get("min_runtime", 0):
+                    continue
+                territory = _territory(parse_release_year(movie.release_date), movie.origin_country, rules)
+                if (rules.get("dimension", "era") == "era" and movie.release_date is None) or (
+                    rules.get("dimension") == "geography" and movie.origin_country is None
+                ):
+                    count.partial = True
+                if territory is None or (territory != opponent and not rules.get("steal_enabled", True)):
+                    count.neutral += 1
+                else:
+                    count.scoring += 1
+        if time.monotonic() >= deadline:
+            count.partial = True
+        results[movie_id] = count
+
+
+@router.get("/{run_id}/tug/lookahead", response_model=TugLookahead)
+async def tug_lookahead(
+    movie_ids: str = Query(..., max_length=200),
+    run: Run = Depends(run_participant_guard),
+    session: Session = Depends(get_session),
+) -> TugLookahead:
+    if run.game_type != TUG_OF_WAR:
+        raise HTTPException(422, detail="Lookahead is only available for Tug of War")
+    raw = movie_ids.split(",")
+    if not 1 <= len(raw) <= 10 or any(not item.isdecimal() or int(item) < 1 for item in raw):
+        raise HTTPException(422, detail="Supply 1 to 10 positive movie IDs")
+    ids = list(dict.fromkeys(int(item) for item in raw))
+    rules = dict(run.rules_config or {})
+    excluded = {step.movie_id for step in _run_history(session, run.id)} if rules.get(
+        "allow_repeats", "strict"
+    ) != "allowed" else set()
+    results = {movie_id: TugReachable(partial=True) for movie_id in ids}
+    deadline = time.monotonic() + TUG_LOOKAHEAD_SECONDS
+    bind = session.get_bind()
+
+    def load() -> None:
+        # A timed-out read owns its session until it exits; never share the request session.
+        with Session(bind) as cache_session:
+            _cached_tug_lookahead(cache_session, ids, rules, excluded, deadline, results)
+
+    timed_out = False
+    try:
+        await asyncio.wait_for(asyncio.to_thread(load), timeout=TUG_LOOKAHEAD_SECONDS)
+    except TimeoutError:
+        timed_out = True
+        logger.info("Tug lookahead reached its %.1fs cache-only deadline", TUG_LOOKAHEAD_SECONDS)
+    snapshot = dict(results)
+    return TugLookahead(movies=snapshot, partial=timed_out or any(value.partial for value in snapshot.values()))
 
 MANUAL_STATUS_REASONS = {
     RUN_STATUS_COMPLETED: "Marked as completed",
@@ -248,7 +341,7 @@ async def _enforce_run_rules(
             )
         extra_metadata["tug_team"] = team
         rules_version = rules.get(TUG_RULES_VERSION_KEY)
-        if payload.status == "watched" and rules_version == 2 and all(players.values()):
+        if payload.status == "watched" and rules_version in (2, 3) and all(players.values()):
             next_team = tally(_run_history(session, run.id), rules, players).next_team
             if team != next_team:
                 expected_name = tug_engine.team_name(run, next_team)
@@ -924,7 +1017,7 @@ def mark_step_watched(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Step is already marked as watched"
         )
-    if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 2:
+    if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3):
         players = TugOfWarEngine(session, tmdb).team_players(run)
         team = step_turn_team(step, players)
         if team is not None and all(players.values()):
@@ -935,6 +1028,8 @@ def mark_step_watched(
                     detail=f"It's {TugOfWarEngine(session, tmdb).team_name(run, next_team)}'s pull",
                 )
     step.status = "watched"
+    if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 3:
+        step.logged_at = utcnow()
     step.watched_at = payload.watched_at or utcnow()
     if payload.user_notes is not None:
         step.user_notes = payload.user_notes
@@ -959,7 +1054,7 @@ def update_step(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
     if payload.watched_at is not None and step.status == "planned":
         _ensure_run_open(run)
-        if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 2:
+        if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3):
             players = TugOfWarEngine(session, tmdb).team_players(run)
             team = step_turn_team(step, players)
             if team is not None and all(players.values()):
@@ -972,6 +1067,8 @@ def update_step(
                         status_code=status.HTTP_409_CONFLICT,
                         detail=f"It's {name}'s pull",
                     )
+        if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 3:
+            step.logged_at = utcnow()
     if payload.user_notes is not None:
         step.user_notes = payload.user_notes
     if payload.transition_metadata is not None:
@@ -1047,7 +1144,7 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
                 )
             )
             is None
-            if (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 2
+            if (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3)
             else leading_team(compute_scores(remaining, run.rules_config), run.rules_config) is None
         )
     ):

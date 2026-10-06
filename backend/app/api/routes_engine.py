@@ -192,8 +192,6 @@ def run_rulebook(
             key: value, "chrono_word": "before" if value == "descent" else "after",
             "runtime_word": "shorter" if value == "descending" else "longer",
         })
-    if getattr(engine, "optional_cast_link", False) and rules.get(modifiers.CAST_LINK_KEY):
-        add(modifiers.CAST_LINK_KEY, "Shared cast", modifiers.RULEBOOK[modifiers.CAST_LINK_KEY])
     if rules.get(blind_fork.BLIND_FORK_KEY):
         add("blind_fork", "Blind Fork", blind_fork.RULEBOOK)
     participants = session.exec(select(RunParticipant).where(RunParticipant.run_id == run.id)).all()

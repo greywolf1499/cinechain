@@ -53,6 +53,7 @@ class RunRulesUpdate(BaseModel):
     chrono_direction: Literal["climb", "descent"] | None = None
     runtime_staircase: Literal["ascending", "descending"] | None = None
     country_cooldown: int | None = Field(default=None, ge=0, le=20)
+    modifiers: list[dict[str, Any]] | None = None
     # Blind Fork workflow switch (offer 3, partner vetoes 1 and picks from the rest).
     blind_fork: bool | None = None
     max_lives: int | None = None

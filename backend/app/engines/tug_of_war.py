@@ -581,7 +581,7 @@ class TugOfWarEngine(CineChainEngine):
         *(cap for cap in CineChainEngine.capabilities if cap != "modifiers"),
         "tug_of_war",
     ]
-    supports_modifiers = False
+    modifier_scopes = frozenset({"film", "sequence"})
 
     def validate_rules_config(self, rules: dict | None) -> list[str]:
         problems = super().validate_rules_config(rules)

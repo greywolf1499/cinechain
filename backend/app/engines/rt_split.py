@@ -118,6 +118,7 @@ def winning_team(scores: dict[str, int], rules: dict | None) -> str | None:
 
 
 class RottenTomatoesSplitEngine(TrackerEngine):
+    modifier_scopes = frozenset({"film"})
     bounty_reward = "star"
     tagline = "🍅 Critics vs 🍿 Audience"
     tags: ClassVar[list[str]] = ["Tomatometer split", "Head to head", "Household rating"]

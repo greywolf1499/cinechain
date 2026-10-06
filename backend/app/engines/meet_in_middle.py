@@ -100,7 +100,7 @@ class MeetInTheMiddleEngine(CineChainEngine):
         *(cap for cap in CineChainEngine.capabilities if cap not in ("modifiers", "bridge_swap")),
         "tunnel",
     ]
-    supports_modifiers = False
+    modifier_scopes = frozenset({"film"})
 
     def prepare_rules_config(self, rules: dict) -> dict:
         hints = rules.get("tunnel_hints", 2)

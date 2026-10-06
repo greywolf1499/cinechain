@@ -85,7 +85,7 @@ class MutatorEngine(CineChainEngine):
     def cast_link_required(self, rules: dict | None) -> bool:
         if not self.optional_cast_link:
             return True
-        return bool((rules or {}).get("require_cast_link", False))
+        return bool(self.active_modifiers(rules).get(modifiers.CAST_LINK_KEY, False))
 
     def validate_rules_config(self, rules: dict | None) -> list[str]:
         problems = super().validate_rules_config(rules)

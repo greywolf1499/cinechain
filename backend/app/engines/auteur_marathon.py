@@ -122,6 +122,7 @@ def build_filmography(
 
 
 class AuteurMarathonEngine(TrackerEngine):
+    modifier_scopes = frozenset({"film"})
     rule_fields = MethodActorEngine.rule_fields
     presets = MethodActorEngine.presets
     default_preset = MethodActorEngine.default_preset

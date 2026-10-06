@@ -128,7 +128,7 @@ class CineChainEngine(BaseChallengeEngine):
         "bridge_swap",
     ]
     supports_json_rules = True
-    supports_modifiers = True
+    modifier_scopes = frozenset({"film", "pair", "sequence"})
     # A Character Hop (same character, different actors) is a valid link on its own.
     character_hop_links: ClassVar[bool] = True
 

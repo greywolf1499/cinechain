@@ -203,6 +203,7 @@ def build_career_track(
 
 
 class MethodActorEngine(TrackerEngine):
+    modifier_scopes = frozenset({"film"})
     rule_fields: ClassVar[list[RuleField]] = [
         *TrackerEngine.rule_fields,
         RuleField(key="track_length", kind="enum", label="Marathon length",

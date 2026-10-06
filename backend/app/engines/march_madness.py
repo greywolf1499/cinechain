@@ -141,6 +141,7 @@ def seed_from_watchlist(
 
 
 class MarchMadnessEngine(TrackerEngine):
+    modifier_scopes = frozenset()
     tagline = "16 films enter, one is crowned"
     tags: ClassVar[list[str]] = ["Tournament", "Watchlist", "Partner voting"]
     rulebook: ClassVar[RuleSection] = RuleSection(

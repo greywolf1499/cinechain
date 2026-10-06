@@ -30,6 +30,7 @@ class TrackerEngine(BaseChallengeEngine):
     Solver - the Pick Next hub is replaced by the mode's own UI."""
 
     supports_json_rules = True
+    modifier_scopes = frozenset({"film", "sequence"})
     capabilities: ClassVar[list[str]] = ["validate_next_step", "compute_stats"]
 
     def bounty_ids(self, rules: dict, history: Sequence[RunStep]) -> list[int] | None:
@@ -155,6 +156,7 @@ class SpinFilters:
 
 
 class RouletteEngine(TrackerEngine):
+    modifier_scopes = frozenset()
     """Movie Night Roulette: spin for one random film from the local cache that
     matches your filters. Any film may be logged - the spin is the "pick"."""
 

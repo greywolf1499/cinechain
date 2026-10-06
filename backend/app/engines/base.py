@@ -77,7 +77,7 @@ class BaseChallengeEngine(ABC):
     supports_json_rules: ClassVar[bool] = False
     # Graph-style engines accept the composable pair modifiers (chrono_direction,
     # runtime_staircase, country_cooldown); trackers have no previous film to compare.
-    supports_modifiers: ClassVar[bool] = False
+    modifier_scopes: ClassVar[frozenset[str]] = frozenset()
     # Modifiers this engine always applies unless the run overrides them (e.g. Chrono Climb
     # is just "any film" + chrono_direction="climb").
     default_modifiers: ClassVar[dict[str, Any]] = {}
@@ -129,11 +129,12 @@ class BaseChallengeEngine(ABC):
     @classmethod
     def modifier_problems(cls, rules: dict | None) -> list[str]:
         problems = modifiers.modifier_problems(rules)
-        if not cls.supports_modifiers:
-            problems += [
-                f"{key} isn't supported by {cls.display_name}"
-                for key in modifiers.modifiers_requested(rules)
-            ]
+        from app.engines.modifier_registry import registry
+
+        for key in modifiers.modifiers_requested(rules):
+            spec = registry().get(key)
+            if spec and (reason := spec.compatible(cls)):
+                problems.append(reason)
         return problems
 
     def validate_rules_config(self, rules: dict | None) -> list[str]:
@@ -169,7 +170,7 @@ class BaseChallengeEngine(ABC):
 
     def active_modifiers(self, rules: dict | None) -> dict[str, Any]:
         """The pair modifiers in force: this engine's defaults overridden by the run's."""
-        if not self.supports_modifiers:
+        if not self.modifier_scopes:
             return {}
         return modifiers.merge_modifiers(self.default_modifiers, rules)
 
@@ -196,9 +197,9 @@ class BaseChallengeEngine(ABC):
         active = self.active_modifiers(rules)
         if chaos.needs_detail(row, rules):
             return True
-        if active.get(modifiers.COOLDOWN_KEY) and row.origin_country is None:
-            return True
-        return bool(active.get(modifiers.STAIRCASE_KEY)) and row.runtime is None
+        from app.engines.modifier_registry import contexts
+
+        return any(getattr(row, field) is None for spec, _ in contexts(active) for field in spec.needs)
 
     def _needs_hydration(self, row: CachedMovie, rules: dict | None = None) -> bool:
         """Does this film still need its full TMDB detail before it can be judged?"""

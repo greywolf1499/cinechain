@@ -83,10 +83,18 @@ def merge_modifiers(defaults: dict[str, Any], rules: dict | None) -> dict[str, A
     for key in PAIR_MODIFIER_KEYS:
         if rules.get(key) is not None:
             active[key] = rules[key]
+    if rules.get(CAST_LINK_KEY):
+        active[CAST_LINK_KEY] = rules[CAST_LINK_KEY]
+    for entry in rules.get("modifiers") or []:
+        key, params = entry["key"], entry.get("params", {})
+        from app.engines.modifier_registry import registry
+
+        values = registry()[key].params.model_validate(params).model_dump()
+        active[key] = values.get("steps", values.get("enabled", values.get("direction", values)))
     return {
         key: value
         for key, value in active.items()
-        if key in PAIR_MODIFIER_KEYS and (key != COOLDOWN_KEY or value)
+        if (key != COOLDOWN_KEY or value) and (key != CAST_LINK_KEY or value)
     }
 
 
@@ -94,6 +102,28 @@ def modifier_problems(rules: dict | None) -> list[str]:
     """Human-readable problems with the modifier values (empty = valid)."""
     rules = rules or {}
     problems: list[str] = []
+    from pydantic import ValidationError
+
+    from app.engines.modifier_registry import registry
+
+    entries = rules.get("modifiers", [])
+    if not isinstance(entries, list):
+        problems.append("modifiers must be a list")
+        entries = []
+    seen = set()
+    for entry in entries:
+        if (not isinstance(entry, dict) or not isinstance(entry.get("key"), str)
+                or entry["key"] not in registry()):
+            problems.append("Unknown modifier key")
+            continue
+        key = entry["key"]
+        if key in seen:
+            problems.append(f"Duplicate modifier: {key}")
+        seen.add(key)
+        try:
+            registry()[key].params.model_validate(entry.get("params", {}))
+        except ValidationError as exc:
+            problems.append(f"{key}: {exc}")
     for key, allowed in ((CHRONO_KEY, CHRONO_DIRECTIONS), (STAIRCASE_KEY, STAIRCASE_DIRECTIONS)):
         value = rules.get(key)
         if value is not None and value not in allowed:
@@ -110,7 +140,14 @@ def modifier_problems(rules: dict | None) -> list[str]:
 
 def modifiers_requested(rules: dict | None) -> list[str]:
     """Pair-modifier keys the run explicitly turns on (used to reject them on trackers)."""
-    return [key for key in PAIR_MODIFIER_KEYS if (rules or {}).get(key)]
+    entries = (rules or {}).get("modifiers") or []
+    if not isinstance(entries, list):
+        entries = []
+    return list(dict.fromkeys(
+        [key for key in (*PAIR_MODIFIER_KEYS, CAST_LINK_KEY) if (rules or {}).get(key)]
+        + [entry["key"] for entry in entries
+           if isinstance(entry, dict) and isinstance(entry.get("key"), str)]
+    ))
 
 
 def primary_country(movie: CachedMovie) -> str | None:
@@ -204,16 +241,12 @@ def pair_modifier_violation(
     history: Sequence[RunStep] | None = None,
 ) -> str | None:
     """The first active modifier `later` breaks relative to `earlier`; None = allowed."""
-    if active.get(CHRONO_KEY):
-        reason = _chrono_violation(active[CHRONO_KEY], earlier, later)
-        if reason:
-            return reason
-    if active.get(STAIRCASE_KEY):
-        reason = _staircase_violation(active[STAIRCASE_KEY], earlier, later)
-        if reason:
-            return reason
-    if active.get(COOLDOWN_KEY):
-        return _cooldown_violation(active, earlier, later, history)
+    from app.engines.modifier_registry import contexts
+
+    for spec, ctx in contexts(active, history, earlier):
+        verdict = spec.check(ctx, later)
+        if verdict.ok is False:
+            return verdict.reason
     return None
 
 
@@ -234,7 +267,7 @@ def modifier_mechanic(
     return mechanic or None
 
 
-def modifier_notes(active: dict[str, Any], tail: CachedMovie | None) -> list[str]:
+def legacy_modifier_notes(active: dict[str, Any], tail: CachedMovie | None) -> list[str]:
     """Short player-facing descriptions of the active modifiers, for the Pick Next banner."""
     notes: list[str] = []
     if active.get(CHRONO_KEY):
@@ -251,3 +284,10 @@ def modifier_notes(active: dict[str, Any], tail: CachedMovie | None) -> list[str
             f"Runtime staircase: {word} than " + (f"{runtime} min" if runtime else "the last film")
         )
     return notes
+
+
+def modifier_notes(active: dict[str, Any], tail: CachedMovie | None) -> list[str]:
+    from app.engines.modifier_registry import contexts
+
+    return [progress["label"] for spec, ctx in contexts(active, earlier=tail)
+            if (progress := spec.progress(ctx)) is not None]

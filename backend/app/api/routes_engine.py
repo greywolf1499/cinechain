@@ -25,8 +25,10 @@ from app.schemas.engine import (
     PathTagsResult,
     PitchRequest,
     PitchResult,
+    Preset,
     RouletteMovie,
     RouletteSpinResult,
+    RuleField,
     SwapNodeResult,
     TeaserRequest,
     TeaserResult,
@@ -73,6 +75,9 @@ class EngineMeta(BaseModel):
     rulebook: RuleSection
     glossary: dict[str, str]
     discovery_filters: list[FilterSpec]
+    rule_fields: list[RuleField]
+    presets: list[Preset]
+    default_preset: str
 
 
 class RulebookOverlay(BaseModel):
@@ -118,9 +123,16 @@ def list_engines(
             requires=cls.requires,
             seed_policy=cls.seed_policy,
             discovery_filters=cls.discovery_filters,
+            rule_fields=cls.rule_fields,
+            presets=cls.presets,
+            default_preset=cls.default_preset,
             tagline=cls.tagline,
             tags=cls.tags,
-            rulebook=render(cls.rulebook, cls.rulebook_values(DEFAULT_RULES_CONFIG)),
+            rulebook=render(cls.rulebook, cls.rulebook_values({
+                **DEFAULT_RULES_CONFIG,
+                **{field.key: field.default for field in cls.rule_fields},
+                **next((preset.values for preset in cls.presets if preset.id == cls.default_preset), {}),
+            })),
             glossary={key: GLOSSARY[key] for key in cls.rulebook.glossary},
             unavailable_reason=(
                 "Requires OMDb integration. Ask an admin to configure it in Settings → Integrations."
@@ -202,13 +214,13 @@ def run_rulebook(
     }
     mode_settings = {
         "tug_of_war": ("target_lead", "effective_target", "territory_a", "territory_b",
-                       "momentum_cap", "sudden_death_after", "sudden_death_every", "steal_enabled"),
+                       "momentum_cap", "sudden_death_after", "sudden_death_every", "steal_enabled", "sudden_death_enabled"),
         "rt_split": ("target_points",),
         "decade_sieve": ("target_decade",),
         "regional_deep_dive": ("slice_name",),
-        "method_actor": ("person_name", "max_skip"),
-        "auteur_marathon": ("person_name", "max_skip"),
-        "rabbit_hole": ("max_lives", "lives_remaining", "escape_depth"),
+        "method_actor": ("person_name", "max_skip", "track_length", "order"),
+        "auteur_marathon": ("person_name", "max_skip", "track_length", "order"),
+        "rabbit_hole": ("max_lives", "lives_remaining", "escape_depth", "allow_reroll"),
         "meet_in_the_middle": ("hints_remaining",),
         "genre_pendulum": ("genre_cycle", "swing_frequency"),
         "historical_time_travel": ("setting_direction",),

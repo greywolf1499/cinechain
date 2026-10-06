@@ -63,6 +63,26 @@ def test_the_filmography_is_the_chronological_feature_films_only():
     }
 
 
+@pytest.mark.parametrize("length,size", [("milestones", 3), ("short", 6), ("feature", 12), ("full", 25), ("endless", 60)])
+def test_director_length_caps_preserve_feature_checks(length, size):
+    credits = [crew(i, 1900 + i, votes=1000 + i) for i in range(1, 81)]
+    films = build_filmography(credits, {1: (10, [])}, TODAY, length=length)
+    assert len(films) == size
+    assert 1 not in {film["movie_id"] for film in films}
+
+
+def test_director_endless_free_order_and_wrap(client):
+    with respx.mock:
+        mock_director()
+        run_id = make_run(client, track_length="endless", order="free")
+        assert log(client, run_id, 5).status_code == 201
+        assert detail(client, run_id)["status"] == "active"
+        assert log(client, run_id, 1).status_code == 201
+    response = client.post(f"/api/runs/{run_id}/wrap")
+    assert response.status_code == 200
+    assert response.json()["status_reason"] == "Marathon wrapped: 2 of 5 films (40%)"
+
+
 def test_films_without_a_runtime_are_kept_only_when_somebody_rated_them():
     credits = [crew(1, 2000, votes=0), crew(2, 2001, votes=5)]
     assert [f["movie_id"] for f in build_filmography(credits, {}, TODAY)] == [2]
@@ -152,7 +172,7 @@ def test_creating_a_run_stores_the_director_and_the_filmography(client):
         run_id = make_run(client)
     rules = detail(client, run_id)["rules_config"]
     assert rules["director"] == {"id": DIRECTOR, "name": "Auteur Person"}
-    assert "director_id" not in rules and rules["max_skip"] == 1
+    assert "director_id" not in rules and rules["max_skip"] == 2
     assert [f["movie_id"] for f in rules["filmography"]] == [1, 2, 3, 4, 5]
     assert rules["filmography"][0]["runtime"] == 110
 
@@ -210,7 +230,7 @@ def test_films_must_follow_the_release_order_within_one_skip(client):
 def test_skipping_too_far_or_going_back_needs_a_wildcard(client):
     with respx.mock:
         mock_director()
-        run_id = make_run(client)
+        run_id = make_run(client, max_skip=1)
         too_far = log(client, run_id, 3)  # skips films 1 and 2
         assert too_far.status_code == 409 and not too_far.json()["detail"]["blocked"]
         assert "skips 2 films" in too_far.json()["detail"]["reason"]

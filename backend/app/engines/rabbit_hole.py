@@ -31,7 +31,14 @@ from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, Run, RunStep
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import ConstraintInfo, FilterSpec, RabbitHoleState, ValidationResult
+from app.schemas.engine import (
+    ConstraintInfo,
+    FilterSpec,
+    Preset,
+    RabbitHoleState,
+    RuleField,
+    ValidationResult,
+)
 from app.services.movie_filters import rating_of
 from app.utils.dates import parse_release_year
 
@@ -156,6 +163,21 @@ def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
 
 
 class RabbitHoleEngine(CineChainEngine):
+    rule_fields: ClassVar[list[RuleField]] = [
+        *(field for field in CineChainEngine.rule_fields if field.key != "wildcards_budget"),
+        RuleField(key="max_lives", kind="int", label="Starting lives",
+                  min=1, max=MAX_LIVES_LIMIT, default=3),
+        RuleField(key="allow_reroll", kind="bool", label="Allow tier re-rolls", default=True),
+    ]
+    presets: ClassVar[list[Preset]] = [
+        Preset(id="tourist", label="Tourist", blurb="Five lives and tier re-rolls.",
+               values={"max_lives": 5, "allow_reroll": True}),
+        Preset(id="spelunker", label="Spelunker", blurb="Three lives for a balanced descent.",
+               values={"max_lives": 3, "allow_reroll": True}),
+        Preset(id="ironman", label="Ironman", blurb="One life. No tier re-rolls.",
+               values={"max_lives": 1, "allow_reroll": False}),
+    ]
+    default_preset = "spelunker"
     discovery_filters: ClassVar[list[FilterSpec]] = [
         FilterSpec(key="include_off_tier", kind="toggle", label="Include off-tier films",
                    source="tier_compliant", default=False, server_param="include_off_tier",

@@ -32,7 +32,7 @@ export interface WatchlistStatus {
 export type RunStatus = "active" | "completed" | "forfeited" | "failed";
 export type StepStatus = "watched" | "planned";
 export type RepeatPolicy = "strict" | "penalty" | "allowed";
-export type RulesPreset = "standard" | "purist" | "casual" | "custom";
+export type RulesPreset = string;
 
 /** Opt-in Engine V2 conditions; a win/fail fires once the metric reaches / exceeds `count`. */
 export interface RunCondition {
@@ -53,6 +53,7 @@ export interface RulesConfig {
 	/** The Rabbit Hole: forced (rule-breaking) steps cost a life instead of a wildcard. */
 	lives_remaining?: number;
 	max_lives?: number;
+	allow_reroll?: boolean;
 	/** The Rabbit Hole: optional depth at which escaping completes the run. */
 	escape_depth?: number | null;
 	/** Server-owned one-depth Rabbit Hole tier override. */
@@ -82,6 +83,7 @@ export interface RulesConfig {
 	momentum_cap?: number;
 	sudden_death_after?: number;
 	sudden_death_every?: number;
+	sudden_death_enabled?: boolean;
 	/** Era dimension cut-offs: Team A = before `era_a_before`, Team B = after `era_b_after`. */
 	era_a_before?: number;
 	era_b_after?: number;
@@ -121,7 +123,9 @@ export interface RulesConfig {
 	actor_id?: number;
 	actor?: { id: number; name: string };
 	filmography?: (CareerFilm | AuteurFilm)[];
-	max_skip?: number;
+	max_skip?: number | null;
+	track_length?: "milestones" | "short" | "feature" | "full" | "endless";
+	order?: "strict" | "relaxed" | "free";
 	/** The Auteur Marathon: the picked director's TMDB id when creating; the server builds
 	 * `director` + the chronological `filmography`. */
 	director_id?: number;
@@ -401,6 +405,31 @@ export interface EngineMeta {
 	rulebook?: RuleSection;
 	glossary?: Record<string, string>;
 	discovery_filters: FilterSpec[];
+	rule_fields: RuleField[];
+	presets: Preset[];
+	default_preset: string;
+}
+
+export type RuleValue = boolean | string | number | null;
+
+export interface RuleField {
+	key: keyof RulesConfig;
+	kind: "int" | "bool" | "enum" | "segmented";
+	label: string;
+	help: string;
+	min: number | null;
+	max: number | null;
+	options: string[];
+	default: RuleValue;
+	group: "core" | "advanced";
+}
+
+export interface Preset {
+	id: string;
+	label: string;
+	emoji: string;
+	blurb: string;
+	values: Partial<Record<keyof RulesConfig, RuleValue>>;
 }
 
 export interface FilterSpec {

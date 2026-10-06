@@ -225,6 +225,17 @@ board is on.
 
 **Commit:** `feat(rules): engine rule schemas, mode-flavoured presets and flexible marathon length`
 
+**S5 implementation clarifications:** Auteur Marathon had no milestone/ranking data. Its length
+selection reuses the deterministic career milestones with director credits treated as leading
+work, after the existing director/runtime eligibility checks. When milestone tags collapse onto
+fewer than three films, pad with ranked eligible features (never fabricate milestones); genuinely
+short filmographies remain usable. Free-order tracks complete only when all track films are
+watched, not when the last chronological entry is picked first. Endless tracks never auto-complete
+on their last entry; wrapping counts distinct watched on-track films, excluding queued entries.
+Track length and starting lives are creation-only in the edit form/API, avoiding filmography
+rebuilding or survival-budget resets mid-run. Legacy stored numeric skip limits remain authoritative
+unless a player explicitly chooses the new order control.
+
 ---
 
 ## Phase S6: Tug of War v3 & strategic legibility

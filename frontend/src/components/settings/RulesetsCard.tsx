@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { SettingsCard } from "./shared";
-import { RULE_PRESETS } from "../RulesetFields";
+import { useEngines } from "../../lib/queries";
 
 /** Read-only JSON view of the built-in rule presets (rules themselves are edited per run). */
 export default function RulesetsCard() {
   const [copied, setCopied] = useState<string | null>(null);
+  const engines = useEngines();
 
   async function copy(id: string, json: string) {
     await navigator.clipboard?.writeText(json);
@@ -21,8 +22,11 @@ export default function RulesetsCard() {
           changing a run&apos;s rules (Edit Rules on the run page) never alters these.
         </p>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          {Object.entries(RULE_PRESETS).map(([id, rules]) => {
-            const json = JSON.stringify(rules, null, 2);
+          {engines.isError && <p role="alert">Could not load presets. <button type="button" onClick={() => void engines.refetch()}>Retry</button></p>}
+          {engines.isPending && <p role="status">Loading presets…</p>}
+          {(engines.data?.find((engine) => engine.game_type === "cinechain")?.presets ?? []).map((preset) => {
+            const id = preset.id;
+            const json = JSON.stringify({ ...preset.values, preset: id }, null, 2);
             return (
               <div key={id} className="min-w-0 rounded-md border border-app-border bg-app-bg">
                 <div className="flex items-center justify-between border-b border-app-border px-3 py-1.5">

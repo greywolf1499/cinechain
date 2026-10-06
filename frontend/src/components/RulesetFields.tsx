@@ -1,193 +1,112 @@
-import { useState, type ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
 import { cn } from "../lib/cn";
-import type { RepeatPolicy, RulesConfig } from "../types/api";
+import type { EngineMeta, Preset, RuleField, RulesConfig, RuleValue } from "../types/api";
 
-export const RULE_PRESETS: Record<"standard" | "purist" | "casual", RulesConfig> = {
-  standard: {
-    preset: "standard",
-    allow_repeats: "strict",
-    no_consecutive_actor: true,
-    max_cast_order: 15,
-    min_runtime: 40,
-    wildcards_budget: 2,
-  },
-  purist: {
-    preset: "purist",
-    allow_repeats: "strict",
-    no_consecutive_actor: true,
-    max_cast_order: 5,
-    min_runtime: 60,
-    wildcards_budget: 0,
-  },
-  casual: {
-    preset: "casual",
-    allow_repeats: "penalty",
-    no_consecutive_actor: false,
-    max_cast_order: 25,
-    min_runtime: 0,
-    wildcards_budget: -1,
-  },
-};
+export function engineDefaultRules(engine: EngineMeta): RulesConfig {
+  let rules: RulesConfig = {
+    preset: engine.default_preset, allow_repeats: "strict", no_consecutive_actor: false,
+    max_cast_order: 15, min_runtime: 0, wildcards_budget: 0,
+  };
+  for (const field of engine.rule_fields) rules = { ...rules, [field.key]: field.default };
+  const preset = engine.presets.find((item) => item.id === engine.default_preset);
+  return preset ? applyPreset(rules, engine, preset) : rules;
+}
+
+function applyPreset(value: RulesConfig, engine: EngineMeta, preset: Preset): RulesConfig {
+  let next = { ...value };
+  for (const field of engine.rule_fields) next = { ...next, [field.key]: field.default };
+  for (const field of engine.rule_fields) {
+    if (field.key in preset.values) next = { ...next, [field.key]: preset.values[field.key] };
+  }
+  return { ...next, preset: preset.id };
+}
 
 export default function RulesetFields({
-  value,
-  onChange,
-  castRules = true,
+  value, onChange, engine, castRules = true, editing = false,
 }: {
   value: RulesConfig;
   onChange: (rules: RulesConfig) => void;
-  /** False for runs that don't link films by cast: hides the actor-only options. */
+  engine?: EngineMeta;
   castRules?: boolean;
+  editing?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-
-  function update<K extends keyof RulesConfig>(key: K, val: RulesConfig[K]) {
-    onChange({ ...value, [key]: val, preset: "custom" });
-  }
-
-  return (
-    <div className="rounded-md border border-app-border">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between px-3 py-2 text-left"
-      >
-        <span className="text-xs font-medium text-zinc-400">
-          Ruleset <span className="capitalize text-zinc-300">({value.preset})</span>
-        </span>
-        <ChevronDown
-          className={cn("h-3.5 w-3.5 text-zinc-500 transition-transform", expanded && "rotate-180")}
-        />
-      </button>
-
-      <div className="flex flex-wrap gap-1.5 px-3 pb-2.5">
-        {(Object.keys(RULE_PRESETS) as (keyof typeof RULE_PRESETS)[]).map((name) => (
-          <PresetPill
-            key={name}
-            active={value.preset === name}
-            onClick={() => onChange(RULE_PRESETS[name])}
-          >
-            {name[0].toUpperCase() + name.slice(1)}
-          </PresetPill>
-        ))}
-        <PresetPill active={value.preset === "custom"} onClick={() => update("preset", "custom")}>
-          Custom
-        </PresetPill>
-      </div>
-
-      {expanded && (
-        <div className="flex flex-col gap-3 border-t border-app-border px-3 py-3">
-          <div>
-            <p className="mb-1.5 text-xs text-zinc-500">No Repeats</p>
-            <div className="flex gap-3">
-              {(["strict", "penalty", "allowed"] as RepeatPolicy[]).map((option) => (
-                <label
-                  key={option}
-                  className="flex items-center gap-1.5 text-xs capitalize text-zinc-300"
-                >
-                  <input
-                    type="radio"
-                    name="allow_repeats"
-                    checked={value.allow_repeats === option}
-                    onChange={() => update("allow_repeats", option)}
-                    className="accent-accent"
-                  />
-                  {option}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {castRules && (
-            <>
-            <label className="flex items-center justify-between text-xs text-zinc-300">
-              No consecutive actor reuse
-              <input
-                type="checkbox"
-                checked={value.no_consecutive_actor}
-                onChange={(e) => update("no_consecutive_actor", e.target.checked)}
-                className="accent-accent"
-              />
-            </label>
-
-            <label className="flex items-center justify-between text-xs text-zinc-300">
-              Max cast depth
-              <input
-                type="number"
-                min={5}
-                max={30}
-                value={value.max_cast_order}
-                onChange={(e) => update("max_cast_order", Number(e.target.value))}
-                className={numberInputClass}
-              />
-            </label>
-            </>
-          )}
-
-          <label className="flex items-center justify-between text-xs text-zinc-300">
-            Min runtime (minutes, 0 = no limit)
-            <input
-              type="number"
-              min={0}
-              value={value.min_runtime}
-              onChange={(e) => update("min_runtime", Number(e.target.value))}
-              className={numberInputClass}
-            />
-          </label>
-
-          <div className="flex items-center justify-between text-xs text-zinc-300">
-            Wildcards allowance
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={0}
-                disabled={value.wildcards_budget === -1}
-                value={value.wildcards_budget === -1 ? "" : value.wildcards_budget}
-                onChange={(e) => update("wildcards_budget", Number(e.target.value))}
-                className={cn(numberInputClass, "disabled:opacity-40")}
-              />
-              <label className="flex items-center gap-1 text-[11px] text-zinc-500">
-                <input
-                  type="checkbox"
-                  checked={value.wildcards_budget === -1}
-                  onChange={(e) => update("wildcards_budget", e.target.checked ? -1 : 2)}
-                  className="accent-accent"
-                />
-                Unlimited
-              </label>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+  if (!engine) return <p role="status" className="text-xs text-zinc-400">Loading mode rules…</p>;
+  const fields = engine.rule_fields.filter((field) =>
+    castRules || !["no_consecutive_actor", "max_cast_order"].includes(field.key),
   );
-}
-
-const numberInputClass =
-  "w-16 rounded border border-app-border bg-app-bg px-2 py-1 text-right text-zinc-100 focus:border-accent focus:outline-none";
-
-function PresetPill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
+  const active = engine.presets.find((preset) => preset.id === value.preset);
+  const immutable = (field: RuleField) => editing && ["track_length", "max_lives"].includes(field.key);
+  function update(key: keyof RulesConfig, next: RuleValue) {
+    onChange({ ...value, [key]: next, preset: "custom" });
+  }
+  function renderField(field: RuleField) {
+    const legacyOrder = editing && field.key === "order" && value.order === undefined && "max_skip" in value;
+    const legacyLength = editing && field.key === "track_length" && value.track_length === undefined;
+    const current = legacyLength ? "legacy" : legacyOrder
+      ? value.max_skip === null ? "free" : value.max_skip === 0 ? "strict" : value.max_skip === 2 ? "relaxed" : null
+      : value[field.key] ?? field.default;
+    const disabled = immutable(field);
+    const id = `rule-${field.key}`;
+    return (
+      <div key={field.key} className="flex flex-col gap-1.5">
+        <label htmlFor={id} className="flex items-center justify-between gap-3 text-xs text-zinc-300">
+          {field.label}
+          {field.kind === "bool" ? (
+            <input id={id} type="checkbox" checked={current === true} disabled={disabled}
+              onChange={(event) => update(field.key, event.target.checked)} className="accent-accent" />
+          ) : field.kind === "int" ? (
+            <input id={id} type="number" min={field.min ?? undefined} max={field.max ?? undefined}
+              value={typeof current === "number" ? current : ""} disabled={disabled}
+              onChange={(event) => update(field.key, event.target.value === "" ? null : Number(event.target.value))}
+              className="w-20 rounded border border-app-border bg-app-bg px-2 py-1 text-right disabled:opacity-50" />
+          ) : field.kind === "enum" ? (
+            <select id={id} value={typeof current === "string" ? current : ""} disabled={disabled}
+              onChange={(event) => update(field.key, event.target.value)}
+              className="rounded border border-app-border bg-app-bg px-2 py-1 capitalize disabled:opacity-50">
+              {legacyLength && <option value="legacy">Saved track ({value.filmography?.length ?? 0} films)</option>}
+              {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          ) : null}
+        </label>
+        {field.kind === "segmented" && (
+          <div role="radiogroup" aria-label={field.label} className="flex flex-wrap gap-2">
+            {field.options.map((option) => (
+              <button key={option} type="button" role="radio" aria-checked={current === option}
+                disabled={disabled} onClick={() => update(field.key, option)}
+                className={cn("rounded-md border px-3 py-1.5 text-xs capitalize",
+                  current === option ? "border-accent text-accent" : "border-app-border text-zinc-400")}>
+                {option}
+              </button>
+            ))}
+          </div>
+        )}
+        {field.help && <p className="text-[11px] text-zinc-500">{field.help}</p>}
+        {legacyOrder && current === null && <p className="text-[11px] text-amber-300">Legacy custom pacing: skip at most {value.max_skip} films. Choose an order to replace it.</p>}
+        {disabled && <p className="text-[11px] text-zinc-500">Chosen at creation; start a new run to change this.</p>}
+      </div>
+    );
+  }
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
-        active
-          ? "border-accent bg-accent/10 text-accent"
-          : "border-app-border text-zinc-500 hover:text-zinc-200",
+    <section aria-label="Mode rules" className="flex flex-col gap-3 rounded-md border border-app-border p-3">
+      <p className="text-xs font-semibold text-zinc-300">Mode rules · {active?.label ?? "Custom"}</p>
+      <div className="flex flex-wrap gap-2">
+        {engine.presets.map((preset) => (
+          <button key={preset.id} type="button" aria-pressed={value.preset === preset.id}
+            disabled={editing && fields.some(immutable)}
+            onClick={() => onChange(applyPreset(value, engine, preset))} title={preset.blurb}
+            className={cn("rounded-full border px-3 py-1.5 text-xs disabled:opacity-50",
+              value.preset === preset.id ? "border-accent bg-accent/10 text-accent" : "border-app-border text-zinc-400")}>
+            {preset.emoji} {preset.label}
+          </button>
+        ))}
+      </div>
+      {active && <p className="text-xs text-zinc-400">{active.blurb}</p>}
+      {fields.filter((field) => field.group === "core").map(renderField)}
+      {fields.some((field) => field.group === "advanced") && (
+        <details>
+          <summary className="cursor-pointer text-xs text-zinc-400">Advanced rules</summary>
+          <div className="mt-3 flex flex-col gap-3">{fields.filter((field) => field.group === "advanced").map(renderField)}</div>
+        </details>
       )}
-    >
-      {children}
-    </button>
+    </section>
   );
 }

@@ -69,6 +69,17 @@ def test_solo_run_keeps_team_a_as_the_next_pull():
     assert result.next_team == TEAM_A
 
 
+def test_blood_feud_keeps_target_and_neutral_bank_after_many_pulls():
+    rules = {**RULES, "target_lead": 9, "sudden_death_enabled": False}
+    steps = [step(i, TEAM_A if i % 2 else TEAM_B, 1990) for i in range(1, 101)]
+    result = tally(steps, rules, PLAYERS)
+    assert result.effective_target == 9
+    assert result.sudden_death is False
+    assert all(pull.kind == "neutral" and pull.points == 0 for pull in result.pulls)
+    assert result.scores == {TEAM_A: 0, TEAM_B: 0}
+    assert preview_pull(TEAM_A, None, result, rules) == ("neutral", 0)
+
+
 def test_home_streak_caps_at_configured_momentum_limit():
     result = tally(
         [step(i, TEAM_A, 1950 + i) for i in range(1, 5)],

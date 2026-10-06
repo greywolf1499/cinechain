@@ -105,6 +105,10 @@ export default function Step2RunSetup({
             curatedLists={curatedLists}
           />
         </div>
+        {!rawEnabled && (
+          <RulesetFields value={draft.rules} engine={mode} castRules={castLinked}
+            onChange={(rules) => update({ rules })} />
+        )}
         <details className="rounded-lg border border-app-border">
           <summary className="cursor-pointer px-3 py-2.5 text-xs font-semibold text-zinc-300">Advanced rules and options</summary>
           <div className="flex flex-col gap-3 border-t border-app-border p-3">
@@ -141,19 +145,12 @@ export default function Step2RunSetup({
               </div>
             ) : (
               !isTracker && (
-                <>
                   <ModeOptions
                     gameType={draft.gameType}
                     value={draft.rules}
                     capabilities={mode?.capabilities}
                     onChange={(rules) => update({ rules: { ...draft.rules, ...rules } })}
                   />
-                  <RulesetFields
-                    value={draft.rules}
-                    onChange={(rules) => update({ rules: { ...draft.rules, ...rules } })}
-                    castRules={castLinked}
-                  />
-                </>
               )
             )}
           </div>

@@ -5,7 +5,8 @@ import MarathonProgressBar from "./MarathonProgressBar";
 import MoviePoster from "./MoviePoster";
 import { ApiError } from "../lib/api";
 import { auteurProgress, formatRuntime } from "../lib/auteurTrack";
-import { trackStatuses } from "../lib/careerTrack";
+import { marathonPacing, trackStatuses } from "../lib/careerTrack";
+import { MarathonWrap } from "./CareerTrack";
 import { cn } from "../lib/cn";
 import { useCreateStep } from "../lib/queries";
 import type { AuteurFilm, RunDetail } from "../types/api";
@@ -44,9 +45,10 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold text-zinc-100">🎬 {directorName}: Auteur Track</h2>
         <p className="text-xs text-zinc-500">
-          Release order · skip at most {run.rules_config.max_skip ?? 1} between films
+          {marathonPacing(run.rules_config)}
         </p>
       </div>
+      <MarathonWrap run={run} />
       <MarathonProgressBar progress={progress} barClassName="bg-teal-400" />
       {message && (
         <p role="alert" className="rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">

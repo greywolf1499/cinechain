@@ -1,6 +1,12 @@
-import type { CareerMilestone, RunStep } from "../types/api";
+import type { CareerMilestone, RulesConfig, RunStep } from "../types/api";
 
 export const METHOD_ACTOR = "method_actor";
+
+export function marathonPacing(rules: RulesConfig): string {
+  if (rules.order === "free" || rules.max_skip === null) return "Free order · any unwatched on-track film";
+  const skip = rules.order === "strict" ? 0 : rules.order === "relaxed" ? 2 : rules.max_skip ?? 2;
+  return `Release order · skip at most ${skip} between films`;
+}
 
 export const MILESTONES: Record<CareerMilestone, { emoji: string; label: string; className: string }> = {
   debut: { emoji: "🐣", label: "Debut", className: "bg-sky-500/15 text-sky-200 ring-sky-400/40" },

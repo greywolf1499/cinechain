@@ -3,8 +3,8 @@
 At creation the actor's acting credits are curated into a *career track* stored in
 `rules_config["filmography"]` (oldest first, with the actor's age at release and milestone tags);
 `rules_config["actor"]` is `{"id", "name"}`. A step must be a film on the track (a hard rule) and
-follow the previous one along it: later on the track, skipping at most `max_skip` (default 2) films
-- breaking the order is a soft violation, so only a wildcard can buy it.
+follow the chosen order: strict (skip 0), relaxed (skip 2), or free (any on-track film).
+Legacy numeric `max_skip` remains supported. Endless tracks wrap manually.
 
 Milestones (a film may carry several): `debut` (the first credited film), `breakout` (the first
 top-3 billed role in a film many people rated), `prestige_peak` (the best-rated well-known film)
@@ -30,7 +30,7 @@ from app.models.run import (
     Run,
     RunStep,
 )
-from app.schemas.engine import ValidationResult
+from app.schemas.engine import Preset, RuleField, ValidationResult
 from app.services.tmdb import TMDBError
 
 METHOD_ACTOR = "method_actor"
@@ -40,7 +40,9 @@ DEFAULT_MAX_SKIP = 2
 MAX_SKIP_LIMIT = 10
 
 MAX_TRACK_FILMS = 25
-MIN_TRACK_FILMS = 5
+MIN_TRACK_FILMS = 3
+TRACK_LENGTHS = {"milestones": 3, "short": 6, "feature": 12, "full": MAX_TRACK_FILMS, "endless": 60}
+ORDER_SKIPS = {"strict": 0, "relaxed": 2, "free": None}
 TRACK_MIN_VOTES = 50
 TRACK_MAX_BILLING = 14
 BREAKOUT_BILLING = 2  # top-3 billed
@@ -53,6 +55,38 @@ DOCUMENTARY, TV_MOVIE = 99, 10770
 _NOT_A_ROLE = re.compile(
     r"\b(self|himself|herself|themselves|archive footage|uncredited)\b", re.IGNORECASE
 )
+
+
+def marathon_skip(rules: dict | None, default: int = DEFAULT_MAX_SKIP) -> int | None:
+    config = rules or {}
+    if "order" in config:
+        return ORDER_SKIPS[config["order"]]
+    return config.get(MAX_SKIP_KEY, default)
+
+
+def marathon_order_rule(rules: dict | None, default: int = DEFAULT_MAX_SKIP) -> str:
+    skip = marathon_skip(rules, default)
+    return "Pick any unwatched on-track film in any order." if skip is None else (
+        f"Advance along the track; skip at most {skip} entries between picks."
+    )
+
+
+def marathon_completion_rule(rules: dict | None) -> str:
+    if (rules or {}).get("track_length") == "endless":
+        return "Use Wrap the marathon when you are done; completion records your watched percentage."
+    if marathon_skip(rules) is None:
+        return "Watch every track film to complete the marathon."
+    return "Reaching the last track entry completes the marathon."
+
+
+def marathon_finished(rules: dict, steps: list[RunStep]) -> bool:
+    track = rules.get("filmography") or []
+    if not track or rules.get("track_length") == "endless":
+        return False
+    watched = {step.movie_id for step in steps if step.status == "watched"}
+    if marathon_skip(rules) is None:
+        return {film["movie_id"] for film in track} <= watched
+    return track[-1]["movie_id"] in watched
 
 
 def _year(entry: dict) -> int:
@@ -88,10 +122,12 @@ def age_at(birthday: str | None, release_date: str) -> int | None:
 
 
 def build_career_track(
-    credits: Sequence[dict[str, Any]], birthday: str | None, today: date | None = None
+    credits: Sequence[dict[str, Any]], birthday: str | None, today: date | None = None,
+    *, length: str = "full",
 ) -> list[dict[str, Any]]:
     """Curates TMDB acting credits into the career track (see the module docstring)."""
     today = today or datetime.now(UTC).date()
+    unique = {credit["id"]: credit for credit in credits if credit.get("id") is not None}
     films = sorted(
         (
             {
@@ -106,7 +142,7 @@ def build_career_track(
                 "vote_count": int(c.get("vote_count") or 0),
                 "milestones": [],
             }
-            for c in credits
+            for c in unique.values()
             if c.get("id") is not None and _is_feature_role(c, today)
         ),
         key=lambda f: (f["release_date"], f["movie_id"]),
@@ -151,8 +187,15 @@ def build_career_track(
 
     chosen = sorted(films, key=keep_rank, reverse=True)
     solid = [f for f in chosen if f["milestones"] or keep_rank(f)[1]]
-    selected = solid if len(solid) >= MIN_TRACK_FILMS else chosen[:MIN_TRACK_FILMS]
-    selected = selected[:MAX_TRACK_FILMS]
+    if length == "milestones":
+        selected = [f for f in chosen if f["milestones"]]
+        # Several milestones can belong to one film; pad with ranked features.
+        selected += [f for f in chosen if not f["milestones"]][:max(0, MIN_TRACK_FILMS - len(selected))]
+    elif length == "endless":
+        selected = chosen[:TRACK_LENGTHS[length]]
+    else:
+        selected = solid if len(solid) >= MIN_TRACK_FILMS else chosen[:MIN_TRACK_FILMS]
+        selected = selected[:TRACK_LENGTHS[length]]
     track = sorted(selected, key=lambda f: (f["release_date"], f["movie_id"]))
     for film in track:
         film["age"] = age_at(birthday, film["release_date"])
@@ -160,12 +203,30 @@ def build_career_track(
 
 
 class MethodActorEngine(TrackerEngine):
+    rule_fields: ClassVar[list[RuleField]] = [
+        *TrackerEngine.rule_fields,
+        RuleField(key="track_length", kind="enum", label="Marathon length",
+                  options=list(TRACK_LENGTHS), default="feature",
+                  help="Milestones (at least 3 when available), short (6), feature (12), full (25), endless (up to 60; wrap manually)."),
+        RuleField(key="order", kind="segmented", label="Strictness",
+                  options=list(ORDER_SKIPS), default="relaxed",
+                  help="Strict: skip 0. Relaxed: skip 2. Free: any order, still on-track."),
+    ]
+    presets: ClassVar[list[Preset]] = [
+        Preset(id="taster", label="Taster", blurb="Career milestones in any order.",
+               values={"track_length": "milestones", "order": "free"}),
+        Preset(id="biopic", label="Biopic", blurb="Twelve features; skip up to two.",
+               values={"track_length": "feature", "order": "relaxed"}),
+        Preset(id="completist", label="Completist", blurb="Up to 25 features in strict order.",
+               values={"track_length": "full", "order": "strict"}),
+    ]
+    default_preset = "biopic"
     tagline = "One career, in order"
     tags: ClassVar[list[str]] = ["One actor", "Chronological", "Milestones"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Explore {person_name}'s chronological career track.",
-        ["Advance through the prepared track; skip at most {max_skip} entries between picks."],
-        ["Reaching the last track entry completes the career."],
+        ["{order_rule}"],
+        ["{completion_rule}"],
         ["Off-track films are blocked; order violations require a soft-rule override."],
         ["Use skips to avoid an unavailable film without jumping past a milestone.",
          "Compare early and late roles to notice how the actor's craft changes."], ["track", "seed", "wildcard"],
@@ -176,7 +237,9 @@ class MethodActorEngine(TrackerEngine):
         config = rules or {}
         return {**super().rulebook_values(rules),
                 "person_name": (config.get("actor") or {}).get("name", "your chosen actor"),
-                "max_skip": config.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP)}
+                "max_skip": marathon_skip(config),
+                "order_rule": marathon_order_rule(config),
+                "completion_rule": marathon_completion_rule(config)}
     seed_policy = "none"
     game_type = METHOD_ACTOR
     display_name = "The Method Actor Marathon"
@@ -209,11 +272,12 @@ class MethodActorEngine(TrackerEngine):
             if exc.status_code == 404:
                 raise RunSetupError(f"No person with TMDB id {actor_id}") from exc
             raise RunSetupError(f"TMDB lookup failed: {exc}", 502) from exc
-        track = build_career_track(credits, person.get("birthday"))
+        track = build_career_track(credits, person.get("birthday"), length=rules.get("track_length", "feature"))
         rest = {k: v for k, v in rules.items() if k != ACTOR_ID_KEY}
         return {
             **rest,
-            MAX_SKIP_KEY: rules.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP),
+            "track_length": rules.get("track_length", "feature"),
+            MAX_SKIP_KEY: marathon_skip(rules),
             "actor": {"id": actor_id, "name": person.get("name") or str(actor_id)},
             "filmography": track,
         }
@@ -225,13 +289,8 @@ class MethodActorEngine(TrackerEngine):
         return {f["movie_id"]: i for i, f in enumerate((rules or {}).get("filmography") or [])}
 
     @staticmethod
-    def _max_skip(rules: dict | None) -> int:
-        skip = (rules or {}).get(MAX_SKIP_KEY)
-        return (
-            skip
-            if isinstance(skip, int) and not isinstance(skip, bool) and skip >= 0
-            else DEFAULT_MAX_SKIP
-        )
+    def _max_skip(rules: dict | None) -> int | None:
+        return marathon_skip(rules)
 
     def _check(
         self, rules: dict | None, previous_id: int | None, movie_id: int
@@ -247,6 +306,9 @@ class MethodActorEngine(TrackerEngine):
                 reason=f"Off the track: {title} isn't on {actor}'s career track",
             )
         position = positions[movie_id]
+        max_skip = self._max_skip(rules)
+        if max_skip is None:
+            return ValidationResult(valid=True)
         before = positions.get(previous_id, -1) if previous_id is not None else -1
         title = track[position]["title"]
         if position <= before:
@@ -254,7 +316,7 @@ class MethodActorEngine(TrackerEngine):
                 valid=False, reason=f"Career order: {title} comes before the film you just watched"
             )
         skipped = position - before - 1
-        if skipped > self._max_skip(rules):
+        if skipped > max_skip:
             return ValidationResult(
                 valid=False,
                 reason=(
@@ -286,7 +348,7 @@ class MethodActorEngine(TrackerEngine):
             return None
         rules = run.rules_config or {}
         track = rules.get("filmography") or []
-        if track and any(step.movie_id == track[-1]["movie_id"] for step in steps):
+        if track and marathon_finished(rules, steps):
             name = (rules.get("actor") or {}).get("name", "the actor")
             return RunOutcome(RUN_STATUS_COMPLETED, f"Career complete: {name}")
         return super().evaluate_run_outcome(run, steps)

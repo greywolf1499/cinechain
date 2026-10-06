@@ -477,6 +477,17 @@ export function useUpdateRunRules(runId: string) {
 	});
 }
 
+export function useWrapMarathon(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => api.post<RunDetail>(`/runs/${runId}/wrap`),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+			queryClient.invalidateQueries({ queryKey: ["runs"] });
+		},
+	});
+}
+
 /** Every Blind Fork / Golden Veto call changes the run (and the veto balance in /auth/me). */
 function useRunMutation<TVariables, TResult>(
 	runId: string,

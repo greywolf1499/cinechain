@@ -1,4 +1,4 @@
-import { useMemo, useReducer } from "react";
+import { useEffect, useMemo, useReducer } from "react";
 import { AUTEUR_MARATHON } from "../../lib/auteurTrack";
 import { BRACKET_SIZE, MARCH_MADNESS } from "../../lib/bracket";
 import { NO_BOUNTY_MODES } from "../../lib/bounties";
@@ -8,11 +8,10 @@ import { usesCastLinks } from "../../lib/gameModes";
 import { DEFAULT_GENRE_CYCLE, DEFAULT_SWING_FREQUENCY, GENRE_PENDULUM } from "../../lib/pendulum";
 import { clearModifiers, modifierPayload } from "../../lib/modifiers";
 import { DEFAULT_TARGET_POINTS, RT_SPLIT } from "../../lib/splitScore";
-import { DEFAULT_TARGET_LEAD, TUG_OF_WAR } from "../../lib/tugOfWar";
+import { TUG_OF_WAR } from "../../lib/tugOfWar";
 import { RABBIT_HOLE } from "../../lib/rabbitHole";
-import { RULE_PRESETS } from "../RulesetFields";
+import { engineDefaultRules } from "../RulesetFields";
 import { parseRawRules, RAW_RULES_EXAMPLE } from "../RawRulesEditor";
-import { TRACKER_RULES } from "./shared";
 import { useCuratedSlices, useSeedOptions } from "../../lib/queries";
 import type { CuratedListSummary, EngineMeta, MovieSummary, PersonSummary, RawRulesConfig, RulesConfig, TugDimension } from "../../types/api";
 
@@ -26,7 +25,6 @@ export interface RunDraft {
   canonListId: string;
   targetDecade: number;
   tugDimension: TugDimension;
-  tugLead: number;
   genreCycle: string[];
   swingFrequency: number;
   bracketFilms: MovieSummary[];
@@ -51,11 +49,11 @@ export function initialDraft(): RunDraft {
     participantIds: [],
     seedMovie: null,
     tailSeedMovie: null,
-    rules: RULE_PRESETS.standard,
+    rules: { preset: "loading", allow_repeats: "strict", no_consecutive_actor: false,
+      max_cast_order: 15, min_runtime: 0, wildcards_budget: 0 },
     canonListId: "",
     targetDecade: 1970,
     tugDimension: "era",
-    tugLead: DEFAULT_TARGET_LEAD,
     genreCycle: [...DEFAULT_GENRE_CYCLE],
     swingFrequency: DEFAULT_SWING_FREQUENCY,
     bracketFilms: [],
@@ -78,7 +76,7 @@ function reducer(state: RunDraft, action: DraftAction): RunDraft {
     return {
       ...state,
       ...action.changes,
-      rules: clearModifiers(state.rules),
+      rules: initialDraft().rules,
       seedMovie: null,
       tailSeedMovie: null,
     };
@@ -107,6 +105,11 @@ export function useRunDraft(
 ) {
   const [draft, dispatch] = useReducer(reducer, undefined, initialDraft);
   const engine = engines?.find((item) => item.game_type === draft.gameType);
+  useEffect(() => {
+    if (engine && draft.rules.preset === "loading") {
+      dispatch({ type: "patch", changes: { rules: engineDefaultRules(engine) } });
+    }
+  }, [engine, draft.rules.preset]);
   const engineSupportsRaw =
     engine?.capabilities.includes("json_rules") ?? draft.gameType === "cinechain";
   const rawEnabled = draft.rawMode && isAdmin && engineSupportsRaw;
@@ -139,12 +142,12 @@ export function useRunDraft(
           ...(draft.diveDecade ? { target_decade: Number(draft.diveDecade) } : {}),
         }
       : {}),
-    ...(isTracker ? TRACKER_RULES : clearModifiers(draft.rules)),
+    ...clearModifiers(draft.rules),
     ...modifierPayload(draft.gameType, draft.rules, engine?.capabilities),
     ...(needsCanonList ? { allowed_curated_list_id: draft.canonListId } : {}),
     ...(needsDecade ? { target_decade: draft.targetDecade } : {}),
     ...(draft.gameType === TUG_OF_WAR
-      ? { dimension: draft.tugDimension, target_lead: draft.tugLead }
+      ? { dimension: draft.tugDimension }
       : {}),
     ...(draft.gameType === GENRE_PENDULUM
       ? {

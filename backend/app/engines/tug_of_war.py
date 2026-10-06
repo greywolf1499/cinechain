@@ -23,7 +23,7 @@ from app.models.run import (
 )
 from app.models.user import User
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import FilterSpec
+from app.schemas.engine import FilterSpec, Preset, RuleField
 
 TUG_OF_WAR = "tug_of_war"
 DIMENSION_ERA = "era"
@@ -144,6 +144,7 @@ def tug_config(rules: dict | None) -> dict[str, Any]:
         "momentum_cap": rules.get("momentum_cap", DEFAULT_MOMENTUM_CAP),
         "sudden_death_after": rules.get("sudden_death_after", DEFAULT_SUDDEN_DEATH_AFTER),
         "sudden_death_every": rules.get("sudden_death_every", DEFAULT_SUDDEN_DEATH_EVERY),
+        "sudden_death_enabled": rules.get("sudden_death_enabled", True),
     }
 
 
@@ -258,7 +259,7 @@ def tally(
         multiplier = 2 if anchor == puller else 1
         if territory is None:
             kind: TugEffect = (
-                "sudden_neutral" if turns >= config["sudden_death_after"] else "neutral"
+                "sudden_neutral" if config["sudden_death_enabled"] and turns >= config["sudden_death_after"] else "neutral"
             )
             streak_team, streak = None, 0
             if kind == "sudden_neutral":
@@ -293,7 +294,7 @@ def tally(
             points = multiplier + steal
             anchor = None if anchor == puller else anchor
         else:
-            kind = "sudden_neutral" if turns >= config["sudden_death_after"] else "neutral"
+            kind = "sudden_neutral" if config["sudden_death_enabled"] and turns >= config["sudden_death_after"] else "neutral"
             streak_team, streak = None, 0
             if kind == "sudden_neutral":
                 opponent = TEAM_B if puller == TEAM_A else TEAM_A
@@ -322,9 +323,9 @@ def tally(
                 (turns - config["sudden_death_after"]) // config["sudden_death_every"],
                 0,
             ),
-        )
+        ) if config["sudden_death_enabled"] else config["target_lead"]
 
-    sudden_death = turns >= config["sudden_death_after"]
+    sudden_death = config["sudden_death_enabled"] and turns >= config["sudden_death_after"]
     return TugTally(
         scores=scores,
         streak=(streak_team, streak),
@@ -386,6 +387,29 @@ def preview_pull(
 
 
 class TugOfWarEngine(CineChainEngine):
+    rule_fields: ClassVar[list[RuleField]] = [
+        *CineChainEngine.rule_fields,
+        RuleField(key="target_lead", kind="int", label="Target lead", min=2,
+                  max=MAX_TARGET_LEAD, default=7),
+        RuleField(key="sudden_death_enabled", kind="bool", label="Sudden Death", default=True,
+                  help="Shrink the target and penalize neutral pulls after the threshold."),
+        RuleField(key="steal_enabled", kind="bool", label="Allow raids", default=True, group="advanced"),
+        RuleField(key="momentum_cap", kind="int", label="Momentum cap", min=1, max=5,
+                  default=DEFAULT_MOMENTUM_CAP, group="advanced"),
+        RuleField(key="sudden_death_after", kind="int", label="Sudden Death after pulls",
+                  min=4, max=50, default=DEFAULT_SUDDEN_DEATH_AFTER, group="advanced"),
+        RuleField(key="sudden_death_every", kind="int", label="Shrink target every pulls",
+                  min=1, max=10, default=DEFAULT_SUDDEN_DEATH_EVERY, group="advanced"),
+    ]
+    presets: ClassVar[list[Preset]] = [
+        Preset(id="friendly", label="Friendly", blurb="A quick five-point match.",
+               values={"target_lead": 5, "sudden_death_enabled": True}),
+        Preset(id="rivalry", label="Rivalry", blurb="Seven points with Sudden Death.",
+               values={"target_lead": 7, "sudden_death_enabled": True}),
+        Preset(id="blood_feud", label="Blood Feud", blurb="Nine points, no shrinking target.",
+               values={"target_lead": 9, "sudden_death_enabled": False}),
+    ]
+    default_preset = "rivalry"
     discovery_filters: ClassVar[list[FilterSpec]] = [
         FilterSpec(key="tug_effect", kind="select", label="Pull effect", source="tug_effect",
                    default="home", help="Build your territory, Raid the opponent, or Bank a neutral film."),
@@ -426,6 +450,7 @@ class TugOfWarEngine(CineChainEngine):
                    if config["steal_enabled"] else "Raids are disabled: opposing-territory films count as neutral.")
             ),
             "sudden_rule": "Legacy scoring has no momentum or Sudden Death." if legacy else
+            "Sudden Death is disabled; the target stays fixed." if not config["sudden_death_enabled"] else
             f"Sudden Death begins after {config['sudden_death_after']} pulls: neutral films give the opponent 1 point and the target shrinks every {config['sudden_death_every']} pulls.",
         }
     game_type = TUG_OF_WAR
@@ -494,6 +519,7 @@ class TugOfWarEngine(CineChainEngine):
             "momentum_cap": config["momentum_cap"],
             "sudden_death_after": config["sudden_death_after"],
             "sudden_death_every": config["sudden_death_every"],
+            "sudden_death_enabled": config["sudden_death_enabled"],
         }
 
     def team_players(self, run: Run) -> dict[str, str | None]:

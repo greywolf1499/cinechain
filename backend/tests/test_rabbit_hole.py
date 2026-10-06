@@ -89,6 +89,16 @@ def rabbit_run(client, **rules):
     return create_run(client, "rabbit_hole", **rules)
 
 
+def test_ironman_refuses_reroll_before_spending(client, world):
+    run_id = rabbit_run(client, max_lives=1, allow_reroll=False)
+    put_at_depth(world, run_id, 6)
+    response = client.post(f"/api/runs/{run_id}/rabbit-hole/reroll")
+    assert response.status_code == 409
+    assert "disabled" in response.json()["detail"]
+    rules = client.get(f"/api/runs/{run_id}").json()["rules_config"]
+    assert rules["lives_remaining"] == 1 and "tier_override" not in rules
+
+
 def run_detail(client, run_id):
     return client.get(f"/api/runs/{run_id}").json()
 

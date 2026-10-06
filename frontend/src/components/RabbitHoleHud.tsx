@@ -71,7 +71,7 @@ export default function RabbitHoleHud({
         </span>
         <Lives lives={hud.lives} maxLives={hud.maxLives} className="ml-auto" />
       </div>
-      {!finished && hud.tier.number > 1 && hud.lives >= 2 && !constraint?.rabbit_hole?.tier_override && (
+      {!finished && rules.allow_reroll !== false && hud.tier.number > 1 && hud.lives >= 2 && !constraint?.rabbit_hole?.tier_override && (
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"

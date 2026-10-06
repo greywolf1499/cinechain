@@ -110,7 +110,7 @@ def test_the_track_is_curated_to_well_known_leading_roles_but_keeps_milestones()
 def test_a_thin_career_still_gets_a_track():
     thin = [credit(i, 2000 + i, order=20, votes=5) for i in range(1, 8)]
     track = build_career_track(thin, None, TODAY)
-    assert len(track) >= 5 and track[0]["milestones"] == ["debut"]
+    assert len(track) >= 3 and track[0]["milestones"] == ["debut"]
 
 
 def test_milestone_thresholds_fall_back_for_small_careers():
@@ -334,3 +334,69 @@ def test_person_search_lists_actors_first(client):
     people = resp.json()
     assert [p["person_id"] for p in people] == [2, 1]
     assert people[0]["known_for"] == ["Y", "Z"] and people[0]["profile_path"] == "/a.jpg"
+
+
+@pytest.mark.parametrize("length,size", [("short", 6), ("feature", 12), ("full", 25), ("endless", 60)])
+def test_marathon_length_caps(length, size):
+    credits = [credit(i, 1900 + i, votes=1000 + i) for i in range(1, 81)]
+    track = build_career_track(credits, None, TODAY, length=length)
+    assert len(track) == size
+    assert len({film["movie_id"] for film in track}) == size
+    assert [film["year"] for film in track] == sorted(film["year"] for film in track)
+
+
+def test_milestones_length_keeps_marks_and_pads_collapsed_milestones():
+    track = build_career_track(CAREER, None, TODAY, length="milestones")
+    assert len(track) == 3
+    assert set(milestones(track)) == {1, 3, 8}
+    collapsed = [credit(i, 1900 + i, votes=1000 - i, rating=9 - i / 10) for i in range(1, 9)]
+    assert len(build_career_track(collapsed, None, TODAY, length="milestones")) == 3
+
+
+def test_free_order_can_go_back_but_cannot_leave_track_or_finish_on_last_alone(client):
+    with respx.mock:
+        mock_actor()
+        run_id = make_run(client, order="free")
+        assert log(client, run_id, 8).status_code == 201
+        assert detail(client, run_id)["status"] == "active"
+        assert log(client, run_id, 1).status_code == 201
+        assert log(client, run_id, 99).status_code == 409
+        for movie_id in range(2, 8):
+            assert log(client, run_id, movie_id).status_code == 201
+    assert detail(client, run_id)["status"] == "completed"
+
+
+def test_endless_wrap_counts_only_distinct_watched_on_track_films(client):
+    with respx.mock:
+        mock_actor()
+        run_id = make_run(client, track_length="endless", order="free")
+        assert log(client, run_id, 8).status_code == 201
+        assert log(client, run_id, 1, status="planned").status_code == 201
+    assert detail(client, run_id)["status"] == "active"
+    result = client.post(f"/api/runs/{run_id}/wrap")
+    assert result.status_code == 200
+    assert result.json()["status"] == "completed"
+    assert result.json()["completed_at"]
+    assert result.json()["status_reason"] == "Marathon wrapped: 1 of 8 films (12%)"
+    assert client.post(f"/api/runs/{run_id}/wrap").status_code == 409
+
+
+def test_wrap_rejects_non_endless_marathons_and_other_modes(client):
+    with respx.mock:
+        mock_actor()
+        run_id = make_run(client)
+    assert client.post(f"/api/runs/{run_id}/wrap").status_code == 422
+    other = client.post("/api/runs", json={"name": "Graph", "rules_config": {"track_length": "endless"}}).json()["id"]
+    assert client.post(f"/api/runs/{other}/wrap").status_code == 422
+    assert client.post("/api/runs/missing/wrap").status_code == 404
+
+
+def test_order_maps_to_skips_and_length_is_creation_only(client):
+    with respx.mock:
+        mock_actor()
+        run_id = make_run(client, order="strict", max_skip=10)
+    assert detail(client, run_id)["rules_config"]["max_skip"] == 0
+    changed = client.patch(f"/api/runs/{run_id}/rules", json={"order": "free"})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["rules_config"]["max_skip"] is None
+    assert client.patch(f"/api/runs/{run_id}/rules", json={"track_length": "endless"}).status_code == 422

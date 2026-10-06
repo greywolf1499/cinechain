@@ -5,7 +5,7 @@ import ModeOptions from "./ModeOptions";
 import RulesetFields from "./RulesetFields";
 import { ApiError } from "../lib/api";
 import { usesCastLinks } from "../lib/gameModes";
-import { useUpdateRunRules } from "../lib/queries";
+import { useEngines, useUpdateRunRules } from "../lib/queries";
 import type { RulesConfig } from "../types/api";
 
 export default function EditRulesModal({
@@ -24,6 +24,7 @@ export default function EditRulesModal({
   const [rules, setRules] = useState<RulesConfig>(currentRules);
   const [error, setError] = useState<string | null>(null);
   const updateRules = useUpdateRunRules(runId);
+  const engines = useEngines();
 
   async function handleSave() {
     setError(null);
@@ -43,7 +44,10 @@ export default function EditRulesModal({
           value={rules}
           onChange={(next) => setRules({ ...rules, ...next })}
           castRules={usesCastLinks(gameType, rules)}
+          engine={engines.data?.find((engine) => engine.game_type === gameType)}
+          editing
         />
+        {engines.isError && <p role="alert" className="text-xs text-red-300">Could not load mode rules. <button type="button" onClick={() => void engines.refetch()}>Retry</button></p>}
 
         {error && (
           <p className="rounded-md border border-red-900/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">

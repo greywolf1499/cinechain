@@ -3,9 +3,28 @@ import { Check, Loader2 } from "lucide-react";
 import MoviePoster from "./MoviePoster";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
-import { MILESTONES, decadeOf, trackStatuses } from "../lib/careerTrack";
-import { useCreateStep } from "../lib/queries";
+import { MILESTONES, decadeOf, marathonPacing, trackStatuses } from "../lib/careerTrack";
+import { useCreateStep, useWrapMarathon } from "../lib/queries";
 import type { CareerFilm, CareerMilestone, RunDetail } from "../types/api";
+
+export function MarathonWrap({ run }: { run: RunDetail }) {
+  const wrap = useWrapMarathon(run.id);
+  const [confirming, setConfirming] = useState(false);
+  if (run.status !== "active" || run.rules_config.track_length !== "endless") return null;
+  const ids = new Set(run.rules_config.filmography?.map((film) => film.movie_id));
+  const watched = new Set(run.steps.filter((step) => step.status === "watched" && ids.has(step.movie_id)).map((step) => step.movie_id)).size;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button type="button" disabled={wrap.isPending}
+        onClick={() => confirming ? wrap.mutate() : setConfirming(true)}
+        className="rounded-md border border-accent/50 px-3 py-2 text-xs text-accent disabled:opacity-50">
+        {wrap.isPending ? "Wrapping…" : confirming ? `Confirm wrap · ${watched} of ${ids.size} watched` : "Wrap the marathon"}
+      </button>
+      {confirming && <button type="button" disabled={wrap.isPending} onClick={() => setConfirming(false)} className="text-xs text-zinc-400">Keep watching</button>}
+      {wrap.isError && <p role="alert" className="text-xs text-red-300">{wrap.error instanceof ApiError ? wrap.error.message : "Could not wrap the marathon. Try again."}</p>}
+    </div>
+  );
+}
 
 /** The milestone pill: `[ 🐣 Debut ]`. */
 export function MilestoneBadge({ milestone }: { milestone: CareerMilestone }) {
@@ -58,9 +77,10 @@ export default function CareerTrack({ run }: { run: RunDetail }) {
           🎭 {actorName}: Career Progression Track
         </h2>
         <p className="text-xs text-zinc-500">
-          {watched} of {track.length} watched · skip at most {run.rules_config.max_skip ?? 2} between films
+          {watched} of {track.length} watched · {marathonPacing(run.rules_config)}
         </p>
       </div>
+      <MarathonWrap run={run} />
       {message && (
         <p role="alert" className="rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
           {message}

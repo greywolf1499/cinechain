@@ -1,4 +1,3 @@
-import { Field } from "../shared";
 import { TUG_DIMENSIONS } from "../../../lib/tugOfWar";
 import type { TugDimension } from "../../../types/api";
 import { cn } from "../../../lib/cn";
@@ -35,20 +34,9 @@ export default function TugConfig({ draft, update }: ModeConfigProps) {
           })}
         </div>
       </div>
-      <Field label={`Target lead (points ahead to win): ${draft.tugLead}`}>
-        <input
-          type="range"
-          min={2}
-          max={10}
-          value={draft.tugLead}
-          onChange={(event) => update({ tugLead: Number(event.target.value) })}
-          aria-label="Target lead"
-          className="w-full accent-accent"
-        />
-      </Field>
       <p className="text-[11px] text-zinc-500">
         You are Team A; the next participant you add is Team B. Home films build momentum, invasions
-        steal ground, and neutral films score for neither team and set an anchor. First to lead by {draft.tugLead} wins.
+        steal ground, and neutral films set an anchor. First to lead by {draft.rules.target_lead ?? 7} wins.
       </p>
     </div>
   );

@@ -10,6 +10,28 @@ FilterSource = Literal[
     "tug_effect", "tier_compliant", "new_country",
 ]
 
+RuleValue = bool | str | int | None
+
+
+class RuleField(BaseModel):
+    key: str
+    kind: Literal["int", "bool", "enum", "segmented"]
+    label: str
+    help: str = ""
+    min: int | None = None
+    max: int | None = None
+    options: list[str] = []
+    default: RuleValue = None
+    group: Literal["core", "advanced"] = "core"
+
+
+class Preset(BaseModel):
+    id: str
+    label: str
+    emoji: str = ""
+    blurb: str
+    values: dict[str, RuleValue]
+
 
 class FilterSpec(BaseModel):
     key: str

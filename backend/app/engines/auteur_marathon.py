@@ -3,8 +3,8 @@
 At creation the director's credits (`job == "Director"`) are curated into a *filmography* stored in
 `rules_config["filmography"]` (oldest first); `rules_config["director"]` is `{"id", "name"}`. A step
 must be a film on the filmography (a hard rule) and follow the previous one along it: later on the
-list, skipping at most `max_skip` (default 1) films - breaking the order is a soft violation, so only
-a wildcard can buy it. Logging the last film completes the run.
+list, skipping at most `max_skip` (default 2) films - breaking the order is a soft violation, so only
+a wildcard can buy it. Free order completes when every film is watched; endless tracks wrap manually.
 
 Only feature-length narrative films count: shorts (under 40 minutes), documentaries, TV movies,
 videos (music videos...), adult titles and unreleased or undated films are left out.
@@ -20,6 +20,14 @@ from typing import Any, ClassVar
 
 from app.engines.base import RunSetupError
 from app.engines.conditions import RunOutcome
+from app.engines.method_actor import (
+    MethodActorEngine,
+    build_career_track,
+    marathon_completion_rule,
+    marathon_finished,
+    marathon_order_rule,
+    marathon_skip,
+)
 from app.engines.rulebook import RuleSection
 from app.engines.trackers import TrackerEngine
 from app.models.cache import CachedMovie
@@ -38,7 +46,7 @@ from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
 AUTEUR_MARATHON = "auteur_marathon"
 DIRECTOR_ID_KEY = "director_id"
 MAX_SKIP_KEY = "max_skip"
-DEFAULT_MAX_SKIP = 1
+DEFAULT_MAX_SKIP = 2
 MAX_SKIP_LIMIT = 10
 
 DIRECTOR_JOB = "Director"
@@ -71,6 +79,7 @@ def build_filmography(
     credits: Sequence[dict[str, Any]],
     runtimes: dict[int, tuple[int | None, Sequence[int]]] | None = None,
     today: date | None = None,
+    *, length: str | None = None,
 ) -> list[dict[str, Any]]:
     """Curates TMDB crew credits into the chronological filmography (see the module docstring).
 
@@ -100,16 +109,28 @@ def build_filmography(
         raise RunSetupError(
             "This person has no feature films as a director to build a marathon from"
         )
-    return sorted(films, key=lambda f: (f["release_date"], f["movie_id"]))
+    ordered = sorted(films, key=lambda f: (f["release_date"], f["movie_id"]))
+    if length is None:
+        return ordered
+    eligible = {film["movie_id"]: film for film in films}
+    track = build_career_track(
+        [{**entry, "order": 0, "character": "Director"}
+         for entry in credits if entry.get("id") in eligible],
+        None, today, length=length,
+    )
+    return [{**eligible[film["movie_id"]], "milestones": film["milestones"]} for film in track]
 
 
 class AuteurMarathonEngine(TrackerEngine):
+    rule_fields = MethodActorEngine.rule_fields
+    presets = MethodActorEngine.presets
+    default_preset = MethodActorEngine.default_preset
     tagline = "One director, every feature"
     tags: ClassVar[list[str]] = ["One director", "Release order", "Filmography"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Explore {person_name}'s feature filmography in release order.",
-        ["Advance along the prepared filmography; skip at most {max_skip} entries between picks."],
-        ["Reaching the last track entry completes the marathon."],
+        ["{order_rule}"],
+        ["{completion_rule}"],
         ["Off-track films are blocked; order violations require a soft-rule override."],
         ["Save skips for hard-to-find features rather than rushing to familiar favourites.",
          "Watch for recurring collaborators and themes across the career."], ["track", "seed", "wildcard"],
@@ -120,7 +141,9 @@ class AuteurMarathonEngine(TrackerEngine):
         config = rules or {}
         return {**super().rulebook_values(rules),
                 "person_name": (config.get("director") or {}).get("name", "your chosen director"),
-                "max_skip": config.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP)}
+                "max_skip": marathon_skip(config),
+                "order_rule": marathon_order_rule(config),
+                "completion_rule": marathon_completion_rule(config)}
     seed_policy = "none"
     game_type = AUTEUR_MARATHON
     display_name = "The Auteur Marathon"
@@ -155,11 +178,12 @@ class AuteurMarathonEngine(TrackerEngine):
             if exc.status_code == 404:
                 raise RunSetupError(f"No person with TMDB id {director_id}") from exc
             raise RunSetupError(f"TMDB lookup failed: {exc}", 502) from exc
-        filmography = build_filmography(candidates, details)
+        filmography = build_filmography(candidates, details, length=rules.get("track_length", "feature"))
         rest = {k: v for k, v in rules.items() if k != DIRECTOR_ID_KEY}
         return {
             **rest,
-            MAX_SKIP_KEY: rules.get(MAX_SKIP_KEY, DEFAULT_MAX_SKIP),
+            "track_length": rules.get("track_length", "feature"),
+            MAX_SKIP_KEY: marathon_skip(rules),
             "director": {"id": director_id, "name": person.get("name") or str(director_id)},
             "filmography": filmography,
         }
@@ -202,13 +226,8 @@ class AuteurMarathonEngine(TrackerEngine):
         return {f["movie_id"]: i for i, f in enumerate((rules or {}).get("filmography") or [])}
 
     @staticmethod
-    def _max_skip(rules: dict | None) -> int:
-        skip = (rules or {}).get(MAX_SKIP_KEY)
-        return (
-            skip
-            if isinstance(skip, int) and not isinstance(skip, bool) and skip >= 0
-            else DEFAULT_MAX_SKIP
-        )
+    def _max_skip(rules: dict | None) -> int | None:
+        return marathon_skip(rules)
 
     def _title(self, movie_id: int) -> str:
         row = self.session.get(CachedMovie, movie_id)
@@ -227,6 +246,9 @@ class AuteurMarathonEngine(TrackerEngine):
                 reason=f"Off the filmography: {self._title(movie_id)} isn't a feature by {director}",
             )
         position = positions[movie_id]
+        max_skip = self._max_skip(rules)
+        if max_skip is None:
+            return ValidationResult(valid=True)
         before = positions.get(previous_id, -1) if previous_id is not None else -1
         title = filmography[position]["title"]
         if position <= before:
@@ -234,7 +256,7 @@ class AuteurMarathonEngine(TrackerEngine):
                 valid=False, reason=f"Release order: {title} came before the film you just watched"
             )
         skipped = position - before - 1
-        if skipped > self._max_skip(rules):
+        if skipped > max_skip:
             return ValidationResult(
                 valid=False,
                 reason=(
@@ -262,7 +284,7 @@ class AuteurMarathonEngine(TrackerEngine):
             return None
         rules = run.rules_config or {}
         filmography = rules.get("filmography") or []
-        if filmography and any(step.movie_id == filmography[-1]["movie_id"] for step in steps):
+        if filmography and marathon_finished(rules, steps):
             name = (rules.get("director") or {}).get("name", "the director")
             return RunOutcome(RUN_STATUS_COMPLETED, f"Completed the works of {name}!")
         return super().evaluate_run_outcome(run, steps)

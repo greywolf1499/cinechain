@@ -38,6 +38,8 @@ class RunUpdate(BaseModel):
 
 
 class RunRulesUpdate(BaseModel):
+    model_config = ConfigDict(strict=True)
+
     preset: str = "custom"
     allow_repeats: str = "strict"  # strict | penalty | allowed
     no_consecutive_actor: bool = True
@@ -53,6 +55,16 @@ class RunRulesUpdate(BaseModel):
     country_cooldown: int | None = Field(default=None, ge=0, le=20)
     # Blind Fork workflow switch (offer 3, partner vetoes 1 and picks from the rest).
     blind_fork: bool | None = None
+    max_lives: int | None = None
+    allow_reroll: bool | None = None
+    target_lead: int | None = None
+    sudden_death_enabled: bool | None = None
+    steal_enabled: bool | None = None
+    momentum_cap: int | None = None
+    sudden_death_after: int | None = None
+    sudden_death_every: int | None = None
+    track_length: str | None = None
+    order: str | None = None
 
 
 MODIFIER_UPDATE_KEYS = ("chrono_direction", "runtime_staircase", "country_cooldown")

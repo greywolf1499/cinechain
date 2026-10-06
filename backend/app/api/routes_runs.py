@@ -673,12 +673,36 @@ def update_run(
     session.refresh(run)
     return _to_run_detail(session, run)
 
+@router.post("/{run_id}/wrap", response_model=RunDetail)
+def wrap_marathon(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    if run.game_type not in ("method_actor", "auteur_marathon") or (
+        _run_rules(run).get("track_length") != "endless"
+    ):
+        raise HTTPException(422, detail="Only endless marathons can be wrapped")
+    if run.status != RUN_STATUS_ACTIVE:
+        raise HTTPException(409, detail="This marathon is no longer active")
+    film_ids = {film["movie_id"] for film in _run_rules(run).get("filmography", [])}
+    watched = {step.movie_id for step in _run_history(session, run.id) if step.status == "watched"}
+    count, total = len(film_ids & watched), len(film_ids)
+    percent = round(100 * count / total) if total else 0
+    run.status = RUN_STATUS_COMPLETED
+    run.status_reason = f"Marathon wrapped: {count} of {total} films ({percent}%)"
+    run.completed_at = utcnow()
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
 
 @router.patch("/{run_id}/rules", response_model=RunDetail)
 def update_run_rules(
     payload: RunRulesUpdate,
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ):
     # A Bounty Board run earns its wildcards: the budget isn't editable.
     bounty_run = bounties.board_enabled(run.rules_config)
@@ -706,17 +730,23 @@ def update_run_rules(
         }
     )
     merged = {**(run.rules_config or {}), **update}
+    for key in ("track_length", "max_lives"):
+        if key in update and update[key] != (run.rules_config or {}).get(key):
+            raise HTTPException(422, detail=f"{key} can only be chosen when creating a run")
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if update.get(blind_fork.BLIND_FORK_KEY) is False:
         merged = blind_fork.with_fork(merged, None)
     if engine_class is not None:
-        problems = engine_class.modifier_problems(merged)
+        problems = engine_class(session, tmdb).validate_rules_config(merged)
         if update.get(blind_fork.BLIND_FORK_KEY):
             problems += _blind_fork_problems(engine_class)
         if problems:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems)
             )
+    if run.game_type in ("method_actor", "auteur_marathon") and "order" in update:
+        from app.engines.method_actor import marathon_skip
+        merged["max_skip"] = marathon_skip(merged)
     run.rules_config = merged
     session.add(run)
     session.commit()
@@ -1604,6 +1634,8 @@ def reroll_rabbit_hole_tier(
         )
 
     rules = dict(_run_rules(run))
+    if not rules.get("allow_reroll", True):
+        raise HTTPException(409, detail="Tier re-rolls are disabled for this ruleset")
     depth = len(_run_history(session, run.id))
     lives, _ = lives_of(rules)
     if lives < 2:

@@ -23,6 +23,8 @@ from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import (
     ConstraintInfo,
     FilterSpec,
+    Preset,
+    RuleField,
     RunStats,
     Suggestion,
     SuggestionFilters,
@@ -59,6 +61,16 @@ class BaseChallengeEngine(ABC):
     requires: ClassVar[list[str]] = []
     seed_policy: ClassVar[Literal["none", "free", "derived", "pair"]] = "free"
     discovery_filters: ClassVar[list[FilterSpec]] = []
+    rule_fields: ClassVar[list[RuleField]] = [
+        RuleField(key="allow_repeats", kind="enum", label="Repeat policy",
+                  options=["strict", "penalty", "allowed"], default="strict", group="advanced"),
+        RuleField(key="min_runtime", kind="int", label="Minimum runtime (minutes)",
+                  min=0, default=0, group="advanced"),
+        RuleField(key="wildcards_budget", kind="int", label="Wildcards allowance",
+                  min=-1, default=0, help="-1 means unlimited.", group="advanced"),
+    ]
+    presets: ClassVar[list[Preset]] = []
+    default_preset: ClassVar[str] = "custom"
     # Graph-style engines honour opt-in win/fail conditions in `rules_config`;
     # rigid trackers leave this False and ignore them.
     supports_json_rules: ClassVar[bool] = False
@@ -123,8 +135,30 @@ class BaseChallengeEngine(ABC):
 
     def validate_rules_config(self, rules: dict | None) -> list[str]:
         """Problems with a V2 `rules_config` payload (empty list = valid)."""
-        problems = validate_conditions(rules) if self.supports_json_rules else []
+        problems = self.rule_field_problems(rules)
+        problems += validate_conditions(rules) if self.supports_json_rules else []
         return problems + self.modifier_problems(rules)
+
+    @classmethod
+    def rule_field_problems(cls, rules: dict | None) -> list[str]:
+        problems: list[str] = []
+        rules = rules or {}
+        for field in cls.rule_fields:
+            if field.key not in rules:
+                continue
+            value = rules[field.key]
+            if field.kind == "int":
+                if type(value) is not int:
+                    problems.append(f"{field.key} must be a whole number")
+                elif (field.min is not None and value < field.min
+                      or field.max is not None and value > field.max):
+                    problems.append(f"{field.key} is outside its allowed range")
+            elif field.kind == "bool":
+                if type(value) is not bool:
+                    problems.append(f"{field.key} must be a boolean")
+            elif not isinstance(value, str) or value not in field.options:
+                problems.append(f"{field.key} must be one of: {', '.join(field.options)}")
+        return problems
 
     async def seed_candidates(self, rules: dict) -> list[int] | None:
         """Cache-only seed bounds: None means unrestricted, [] means no legal cached seeds."""

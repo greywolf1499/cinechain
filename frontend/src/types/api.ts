@@ -393,6 +393,28 @@ export interface EngineMeta {
 	capabilities: string[];
 	requires?: string[];
 	unavailable_reason?: string | null;
+	seed_policy: "none" | "free" | "derived" | "pair";
+}
+
+export interface SeedOptions {
+	seed_policy: EngineMeta["seed_policy"];
+	allowed_ids: number[] | null;
+	reason: string | null;
+}
+
+export interface SeedSuggestionResponse {
+	suggestion: SeedSuggestion | null;
+	reason: string | null;
+}
+
+export interface CuratedSlices {
+	hydrated: number;
+	total: number;
+	countries: Record<string, number>;
+	decades: Record<string, number>;
+	pairs: Record<string, number>;
+	indexing: boolean;
+	indexing_error: string | null;
 }
 
 /** How two films are linked. `kind: "director"` reuses the shape: actor_id/actor_name hold the director. */
@@ -633,15 +655,6 @@ export interface RunStats {
 	countries: string[];
 	decades: number[];
 	keystone_actors: KeystoneActor[];
-}
-
-export interface EngineMeta {
-	game_type: string;
-	display_name: string;
-	description: string;
-	capabilities: string[];
-	requires?: string[];
-	unavailable_reason?: string | null;
 }
 
 // --- discovery (schemas/discovery.py, Phase 13) ---

@@ -140,6 +140,7 @@ def seed_from_watchlist(
 
 
 class MarchMadnessEngine(TrackerEngine):
+    seed_policy = "none"
     game_type = MARCH_MADNESS
     supports_bounty_board = False
     display_name = "Watchlist March Madness"

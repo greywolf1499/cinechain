@@ -24,6 +24,8 @@ interface MovieSearchAutocompleteProps {
   rulesConfig?: RulesConfig;
   steps?: RunStep[];
   onLogged?: () => void;
+  allowedMovieIds?: number[] | null;
+  excludedMovieIds?: number[];
 }
 
 export default function MovieSearchAutocomplete({
@@ -34,6 +36,8 @@ export default function MovieSearchAutocomplete({
   rulesConfig,
   steps = [],
   onLogged,
+  allowedMovieIds,
+  excludedMovieIds = [],
 }: MovieSearchAutocompleteProps) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -60,7 +64,11 @@ export default function MovieSearchAutocomplete({
       ),
     enabled: debouncedQuery.trim().length > 1 && !picked,
   });
-  const results = data?.results ?? [];
+  const results = (data?.results ?? []).filter(
+    (movie) =>
+      (allowedMovieIds == null || allowedMovieIds.includes(movie.tmdb_id)) &&
+      !excludedMovieIds.includes(movie.tmdb_id),
+  );
   const resultsOpen = debouncedQuery.trim().length > 1 && !picked && !resultsDismissed;
 
   async function handlePick(movie: MovieSummary) {

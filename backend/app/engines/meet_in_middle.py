@@ -70,6 +70,7 @@ class TunnelDistance:
 
 
 class MeetInTheMiddleEngine(CineChainEngine):
+    seed_policy = "pair"
     game_type = MEET_IN_THE_MIDDLE
     display_name = "Meet in the Middle"
     description = (

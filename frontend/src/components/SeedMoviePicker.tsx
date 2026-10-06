@@ -1,10 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Loader2, RefreshCw, X } from "lucide-react";
 import MoviePoster from "./MoviePoster";
 import MovieSearchAutocomplete from "./MovieSearchAutocomplete";
 import { api } from "../lib/api";
-import type { MovieSummary, SeedSuggestion } from "../types/api";
+import type { MovieSummary, SeedSuggestionResponse, RulesConfig, RawRulesConfig } from "../types/api";
 
 /** Search for a starting film, or let the local cache pick one: "Recommend Seed
  * Movie" rolls a well-regarded film and "Re-roll" never repeats one until they're used up. */
@@ -12,41 +12,65 @@ export default function SeedMoviePicker({
   value,
   onChange,
   gameType,
+  rules,
+  excludeIds = [],
+  allowedIds,
   recommendFirst = false,
 }: {
   value: MovieSummary | null;
   onChange: (movie: MovieSummary | null) => void;
   gameType: string;
+  rules: RulesConfig | RawRulesConfig;
+  excludeIds?: number[];
+  allowedIds?: number[] | null;
   /** Give the recommendation action primary placement in large seed previews. */
   recommendFirst?: boolean;
 }) {
-  const [reason, setReason] = useState<string | null>(null);
-  const [emptyCache, setEmptyCache] = useState(false);
-  const seen = useRef<number[]>([]);
+  const contextKey = JSON.stringify([gameType, rules, excludeIds]);
+  const activeContext = useRef<string | null>(contextKey);
+  useEffect(() => {
+    activeContext.current = contextKey;
+    return () => { activeContext.current = null; };
+  }, [contextKey]);
+  const [rotation, setRotation] = useState<{
+    key: string; seen: number[]; reason: string | null; emptyReason: string | null;
+  }>({ key: contextKey, seen: [], reason: null, emptyReason: null });
+  const seen = [...new Set([
+    ...(rotation.key === contextKey ? rotation.seen : []),
+    ...(value ? [value.tmdb_id] : []),
+  ])];
+  const reason = rotation.key === contextKey ? rotation.reason : null;
+  const emptyReason = rotation.key === contextKey ? rotation.emptyReason : null;
 
   const roll = useMutation({
     mutationFn: async () => {
       const query = (exclude: number[]) =>
-        api.get<SeedSuggestion | null>(
-          `/movies/seed-suggestion?game_type=${encodeURIComponent(gameType)}&exclude=${exclude.join(",")}`,
-        );
-      const first = await query(seen.current);
-      if (first || seen.current.length === 0) return first;
+        api.post<SeedSuggestionResponse>("/movies/seed-suggestion", {
+          game_type: gameType,
+          rules_config: rules,
+          exclude: [...excludeIds, ...exclude],
+        });
+      const first = await query(seen);
+      if (first.suggestion || seen.length === 0) return { response: first, key: contextKey, previous: seen };
       // Every candidate has been shown: start the rotation over.
-      seen.current = [];
-      return query([]);
+      return { response: await query([]), key: contextKey, previous: [] };
     },
-    onSuccess: (suggestion) => {
-      setEmptyCache(!suggestion);
+    onSuccess: ({ response, key, previous }) => {
+      if (key !== activeContext.current) return;
+      const suggestion = response.suggestion;
+      setRotation({
+        key,
+        seen: suggestion ? [...previous, suggestion.tmdb_id] : previous,
+        reason: suggestion ? response.reason : null,
+        emptyReason: suggestion ? null : response.reason,
+      });
       if (!suggestion) return;
-      seen.current.push(suggestion.tmdb_id);
-      setReason(suggestion.reason);
       onChange(suggestion);
     },
   });
 
   function clear() {
-    setReason(null);
+    setRotation((current) => ({ ...current, reason: null }));
     onChange(null);
   }
 
@@ -60,6 +84,7 @@ export default function SeedMoviePicker({
             {value.release_year && <span className="ml-1.5 text-zinc-500">({value.release_year})</span>}
           </p>
           {reason && <p className="text-[11px] text-accent">🎲 {reason}</p>}
+          {(emptyReason || roll.isError) && <p role="alert" className="text-[11px] text-amber-400">{roll.isError ? roll.error.message : emptyReason}</p>}
         </div>
         <button
           type="button"
@@ -88,8 +113,10 @@ export default function SeedMoviePicker({
 
   const search = (
     <MovieSearchAutocomplete
+      allowedMovieIds={allowedIds}
+      excludedMovieIds={excludeIds}
       onSelect={(movie) => {
-        setReason(null);
+        setRotation((current) => ({ ...current, reason: null }));
         onChange(movie);
       }}
       placeholder="Search for a starting film..."
@@ -124,11 +151,11 @@ export default function SeedMoviePicker({
           {recommend}
         </div>
       )}
-      {(emptyCache || roll.isError) && (
+      {(emptyReason || roll.isError) && (
         <p role="alert" className="text-[11px] text-amber-400">
           {roll.isError
-            ? "Couldn't fetch a suggestion - try searching instead."
-            : "Your movie cache has nothing to recommend yet - search for a film instead."}
+            ? roll.error.message
+            : emptyReason}
         </p>
       )}
     </div>

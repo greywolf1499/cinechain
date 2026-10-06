@@ -11,8 +11,11 @@ watching the whole checklist wins the run.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
+from typing import Any
 
 import anyio
 from sqlmodel import col, select
@@ -44,6 +47,7 @@ EXPEDITION_KEY = "expedition"
 
 HYDRATE_SECONDS = 90.0
 HYDRATE_BATCH = 20
+logger = logging.getLogger(__name__)
 
 COUNTRY_NAMES = {
     "AR": "Argentina",
@@ -112,6 +116,7 @@ def _decade_of(release_date: str | None) -> int | None:
 
 class RegionalDeepDiveEngine(TrackerEngine):
     game_type = REGIONAL_DEEP_DIVE
+    seed_policy = "derived"
     display_name = "Regional Deep Dive"
     description = (
         "Slice a canon list by country and/or decade - say Japan on Sight & Sound, or the 1970s "
@@ -123,6 +128,12 @@ class RegionalDeepDiveEngine(TrackerEngine):
         rules = rules or {}
         if not isinstance(rules.get(LIST_ID_KEY), str) or not rules[LIST_ID_KEY]:
             problems.append(f"{LIST_ID_KEY} is required (pick a curated list)")
+        else:
+            curated = self.session.get(CuratedList, rules[LIST_ID_KEY])
+            if curated is None:
+                problems.append("Unknown curated list")
+            elif not curated.is_enabled:
+                problems.append(f"{curated.title} isn't enabled - enable it in Settings first")
         country, decade = rules.get(COUNTRY_KEY), rules.get(DECADE_KEY)
         if country is not None and (
             not isinstance(country, str) or len(country) != 2 or not country.isalpha()
@@ -142,29 +153,26 @@ class RegionalDeepDiveEngine(TrackerEngine):
             problems.append(f"Pick a {COUNTRY_KEY} and/or a {DECADE_KEY} to slice the list by")
         return problems
 
-    async def prepare_run(self, rules: dict, user_id: str) -> dict:
-        curated = self.session.get(CuratedList, rules[LIST_ID_KEY])
-        if curated is None:
-            raise RunSetupError("Unknown curated list")
-        if not curated.is_enabled:
-            raise RunSetupError(f"{curated.title} isn't enabled - enable it in Settings first")
-        country = (rules.get(COUNTRY_KEY) or "").upper() or None
-        decade = rules.get(DECADE_KEY)
+    def _slice_rows(self, curated_id: str) -> list[tuple[CanonMovieBadge, CachedMovie]]:
+        return [
+            (badge, movie)
+            for badge, movie in self.session.exec(
+                select(CanonMovieBadge, CachedMovie)
+                .join(CachedMovie, col(CachedMovie.tmdb_id) == col(CanonMovieBadge.movie_id))
+                .where(CanonMovieBadge.curated_list_id == curated_id)
+                .order_by(col(CanonMovieBadge.rank), col(CanonMovieBadge.id))
+            ).all()
+        ]
 
-        badges = {}
-        for badge in self.session.exec(
-            select(CanonMovieBadge).where(CanonMovieBadge.curated_list_id == curated.id)
-        ).all():
-            badges.setdefault(badge.movie_id, badge)
-        await self._hydrate(list(badges), country, decade)
-
-        rows = self.session.exec(
-            select(CanonMovieBadge, CachedMovie)
-            .join(CachedMovie, col(CachedMovie.tmdb_id) == col(CanonMovieBadge.movie_id))
-            .where(CanonMovieBadge.curated_list_id == curated.id)
-        ).all()
+    @staticmethod
+    def _slice(
+        rows: Sequence[tuple[CanonMovieBadge, CachedMovie]],
+        country: str | None,
+        decade: int | None,
+    ) -> list[dict[str, Any]]:
         films = []
         seen: set[int] = set()
+        country = country.upper() if country else None
         for badge, movie in rows:
             if movie.tmdb_id in seen:
                 continue
@@ -184,13 +192,44 @@ class RegionalDeepDiveEngine(TrackerEngine):
                     "rank": badge.rank,
                 }
             )
+        films.sort(key=lambda f: (f["rank"] is None, f["rank"] or 0, f["title"]))
+        return films
+
+    def _slice_ids(
+        self, curated_id: str, country: str | None, decade: int | None
+    ) -> list[int]:
+        return [
+            film["movie_id"] for film in self._slice(self._slice_rows(curated_id), country, decade)
+        ]
+
+    async def seed_candidates(self, rules: dict) -> list[int]:
+        return self._slice_ids(
+            rules[LIST_ID_KEY], rules.get(COUNTRY_KEY), rules.get(DECADE_KEY)
+        )
+
+    async def prepare_run(self, rules: dict, user_id: str) -> dict:
+        curated = self.session.get(CuratedList, rules[LIST_ID_KEY])
+        if curated is None:
+            raise RunSetupError("Unknown curated list")
+        if not curated.is_enabled:
+            raise RunSetupError(f"{curated.title} isn't enabled - enable it in Settings first")
+        country = (rules.get(COUNTRY_KEY) or "").upper() or None
+        decade = rules.get(DECADE_KEY)
+
+        badges = {}
+        for badge in self.session.exec(
+            select(CanonMovieBadge).where(CanonMovieBadge.curated_list_id == curated.id)
+        ).all():
+            badges.setdefault(badge.movie_id, badge)
+        await self._hydrate(list(badges), country, decade)
+
+        films = self._slice(self._slice_rows(curated.id), country, decade)
         if not films:
             raise RunSetupError(
                 f"No films on {curated.title} match that "
                 f"{' / '.join(p for p in (country_name(country), f'{decade}s' if decade else None) if p)}"
                 " slice"
             )
-        films.sort(key=lambda f: (f["rank"] is None, f["rank"] or 0, f["title"]))
         inputs = {LIST_ID_KEY, COUNTRY_KEY, DECADE_KEY}
         return {
             **{k: v for k, v in rules.items() if k not in inputs},
@@ -207,7 +246,15 @@ class RegionalDeepDiveEngine(TrackerEngine):
             },
         }
 
-    async def _hydrate(self, movie_ids: list[int], country: str | None, decade: int | None) -> None:
+    async def _hydrate(
+        self,
+        movie_ids: list[int],
+        country: str | None,
+        decade: int | None,
+        progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        *,
+        index_all: bool = False,
+    ) -> None:
         """Fetch the detail of every list film the slice can't be judged on yet: canon syncs only
         store TMDB ids, and a film's countries only come with its full detail. Progress is cached,
         so a run that times out can simply be created again."""
@@ -217,11 +264,15 @@ class RegionalDeepDiveEngine(TrackerEngine):
             row = self.session.get(CachedMovie, movie_id)
             if (
                 row is None
-                or (country and row.origin_country is None)
+                or ((country or index_all) and row.origin_country is None)
+                or (index_all and _decade_of(row.release_date) is None)
                 or (decade is not None and not row.release_date)
             ):
                 missing.append(movie_id)
         deadline = time.monotonic() + HYDRATE_SECONDS
+        hydrated = len(movie_ids) - len(missing)
+        if progress:
+            await progress({"current": hydrated, "total": len(movie_ids)})
         for start in range(0, len(missing), HYDRATE_BATCH):
             batch = missing[start : start + HYDRATE_BATCH]
             results = await asyncio.gather(
@@ -237,10 +288,22 @@ class RegionalDeepDiveEngine(TrackerEngine):
                         "Still indexing this list's films from TMDB - try again in a minute", 503
                     )
                 if isinstance(result, TMDBError) or result is None:
+                    logger.warning("Could not index a canon film: %s", result)
                     continue  # unfetchable film: it can't be placed in a slice
                 if isinstance(result, BaseException):
                     raise result
-                await anyio.to_thread.run_sync(repo.upsert_movie, result)
+                row = await anyio.to_thread.run_sync(repo.upsert_movie, result)
+                if not index_all or (
+                    row.origin_country is not None and _decade_of(row.release_date) is not None
+                ):
+                    hydrated += 1
+            if progress:
+                await progress(
+                    {
+                        "current": hydrated,
+                        "total": len(movie_ids),
+                    }
+                )
 
     # --- the checklist ---
 

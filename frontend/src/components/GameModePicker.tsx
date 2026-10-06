@@ -57,9 +57,9 @@ export default function GameModePicker({
   onAdvance?: (gameType: string) => void;
 }) {
   const [openDrawer, setOpenDrawer] = useState<string | null>(null);
-  const modes = [
+  const modes: EngineMeta[] = [
     ...(engines ?? [
-      { game_type: "cinechain", display_name: "CineChain", description: "", capabilities: [] },
+      { game_type: "cinechain", display_name: "CineChain", description: "", capabilities: [], seed_policy: "free" },
     ]),
   ].sort((a, b) => orderOf(a.game_type) - orderOf(b.game_type));
 

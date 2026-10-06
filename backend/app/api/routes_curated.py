@@ -24,10 +24,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, case, col, func, or_, select
 
-from app.api.deps import get_current_admin, get_current_user
+from app.api.deps import get_current_admin, get_current_user, get_tmdb_client
 from app.api.routes_tasks import TaskOut
 from app.config import get_settings
 from app.db import get_session
+from app.engines.base import RunSetupError
+from app.engines.regional_deep_dive import RegionalDeepDiveEngine, _decade_of
+from app.models.cache import CachedMovie
 from app.models.curated import (
     CanonMovieBadge,
     CuratedList,
@@ -35,12 +38,128 @@ from app.models.curated import (
     LetterboxdWatchlist,
 )
 from app.models.run import RunStep
+from app.models.system import SystemTask
 from app.models.user import User
 from app.services import image_cache, letterboxd, settings_repo, task_runner
+from app.services.bridge_paths import parse_countries
+from app.services.tmdb import TMDBClient
 from app.utils.ids import utcnow
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/curated", tags=["curated"])
+slices_router = APIRouter(tags=["curated"])
+
+
+class CuratedSlices(BaseModel):
+    hydrated: int
+    total: int
+    countries: dict[str, int]
+    decades: dict[int, int]
+    pairs: dict[str, int]
+    indexing: bool = False
+    indexing_error: str | None = None
+
+
+def _canon_ids(session: Session, list_id: str) -> list[int]:
+    return list(
+        session.exec(
+            select(CanonMovieBadge.movie_id)
+            .where(CanonMovieBadge.curated_list_id == list_id)
+            .distinct()
+        ).all()
+    )
+
+
+def _queue_canon_hydration(
+    background_tasks: BackgroundTasks,
+    session: Session,
+    curated: CuratedList,
+    user_id: str,
+    tmdb: TMDBClient,
+) -> None:
+    list_id, title = curated.id, curated.title
+    if not curated.is_enabled:
+        return
+
+    async def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
+        with ctx.session() as db:
+            row = db.get(CuratedList, list_id)
+            if row is None or not row.is_enabled:
+                raise RunSetupError("This canon list is no longer enabled")
+            ids = _canon_ids(db, list_id)
+            engine = RegionalDeepDiveEngine(db, tmdb)
+            await engine._hydrate(ids, None, None, progress=ctx.aprogress, index_all=True)
+            hydrated = sum(
+                1
+                for movie_id in ids
+                if (movie := db.get(CachedMovie, movie_id)) is not None
+                and movie.origin_country is not None
+                and _decade_of(movie.release_date) is not None
+            )
+            if hydrated < len(ids):
+                raise RunSetupError(
+                    f"Indexed {hydrated}/{len(ids)} films; some TMDB details are unavailable. "
+                    "Sync this list again to retry."
+                )
+            return {"list_id": list_id, "hydrated": hydrated, "total": len(ids)}
+
+    task_runner.submit_task(
+        background_tasks,
+        session,
+        "canon_hydrate",
+        work,
+        user_id=user_id,
+        dedupe_key=f"canon_hydrate:{list_id}",
+        label=f"Indexing {title}",
+    )
+
+
+@slices_router.get("/curated-lists/{list_id}/slices", response_model=CuratedSlices)
+@router.get("/lists/{list_id}/slices", response_model=CuratedSlices)
+def curated_slices(
+    list_id: str,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _user: User = Depends(get_current_user),
+) -> CuratedSlices:
+    curated = session.get(CuratedList, list_id)
+    if curated is None:
+        raise HTTPException(404, detail="Unknown curated list")
+    engine = RegionalDeepDiveEngine(session, tmdb)
+    rows = engine._slice_rows(list_id)
+    movies = {movie.tmdb_id: movie for _, movie in rows}
+    countries = sorted({c for movie in movies.values() for c in parse_countries(movie.origin_country)})
+    decades = sorted(
+        {decade for movie in movies.values() if (decade := _decade_of(movie.release_date)) is not None}
+    )
+    latest = session.exec(
+        select(SystemTask)
+        .where(SystemTask.dedupe_key == f"canon_hydrate:{list_id}")
+        .order_by(col(SystemTask.created_at).desc())
+    ).first()
+    syncing = session.exec(
+        select(SystemTask).where(
+            SystemTask.dedupe_key == f"curated_list_sync:{list_id}",
+            col(SystemTask.status).in_(task_runner.ACTIVE_STATUSES),
+        )
+    ).first()
+    return CuratedSlices(
+        hydrated=sum(
+            movie.origin_country is not None and _decade_of(movie.release_date) is not None
+            for movie in movies.values()
+        ),
+        total=len(_canon_ids(session, list_id)),
+        countries={country: len(engine._slice(rows, country, None)) for country in countries},
+        decades={decade: len(engine._slice(rows, None, decade)) for decade in decades},
+        pairs={
+            f"{country}:{decade}": count
+            for country in countries
+            for decade in decades
+            if (count := len(engine._slice(rows, country, decade)))
+        },
+        indexing=bool(syncing or (latest and latest.status in task_runner.ACTIVE_STATUSES)),
+        indexing_error=latest.error if latest and latest.status == task_runner.FAILED else None,
+    )
 
 
 def _error_payload(exc: Exception) -> dict[str, Any]:
@@ -285,12 +404,14 @@ def sync_curated_list(
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     admin: User = Depends(get_current_admin),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ) -> TaskOut:
     """Starts a background sync (a `SystemTask`) and returns its id immediately;
     poll `GET /api/tasks/{id}` or stream `GET /api/tasks/stream` for progress."""
     curated_list = _get_or_create_list(session, list_id)
     tmdb_api_key = _resolve_tmdb_api_key(session)
     row_id, url, title = curated_list.id, curated_list.url, curated_list.title
+    user_id = admin.id
 
     def work(ctx: task_runner.TaskContext) -> dict[str, Any]:
         try:
@@ -307,7 +428,10 @@ def sync_curated_list(
             raise
         with ctx.session() as db:
             row = db.get(CuratedList, row_id)
+            if row is None:
+                raise RunSetupError("This canon list no longer exists")
             matched, total = _persist_sync_result(db, row, result)
+            _queue_canon_hydration(background_tasks, db, row, user_id, tmdb)
         return {"matched": matched, "total_films": total, "is_ranked": result["is_ranked"]}
 
     task, _ = task_runner.submit_task(
@@ -315,7 +439,7 @@ def sync_curated_list(
         session,
         "curated_list_sync",
         work,
-        user_id=admin.id,
+        user_id=user_id,
         dedupe_key=f"curated_list_sync:{row_id}",
         label=f"Syncing {title}",
         describe_error=_error_payload,
@@ -564,12 +688,15 @@ class ListUpdate(BaseModel):
 def update_curated_list(
     list_id: str,
     payload: ListUpdate,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     _admin: User = Depends(get_current_admin),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
 ) -> CuratedListOut:
     """Tier 2 toggle plus unified customization (slug, emoji badge, logo) for
     every list, preset or custom. Enabling lists it for syncing; disabling drops its badges."""
     curated_list = _get_or_create_list(session, list_id)
+    enabling = payload.is_enabled is True and not curated_list.is_enabled
     if payload.slug is not None and payload.slug != curated_list.slug:
         if session.exec(select(CuratedList.id).where(CuratedList.slug == payload.slug)).first():
             raise HTTPException(
@@ -611,6 +738,8 @@ def update_curated_list(
     session.add(curated_list)
     session.commit()
     session.refresh(curated_list)
+    if enabling:
+        _queue_canon_hydration(background_tasks, session, curated_list, _admin.id, tmdb)
     return _list_out(session, curated_list)
 
 

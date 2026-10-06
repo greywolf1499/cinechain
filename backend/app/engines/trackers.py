@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 from sqlalchemy import Float, cast, func, or_, text
-from sqlmodel import select
+from sqlmodel import col, select
 
 from app.engines.base import BaseChallengeEngine
 from app.engines.cinechain import compute_run_stats
@@ -64,6 +64,7 @@ class DecadeSieveEngine(TrackerEngine):
     """Every film must be released in the run's `target_decade` (e.g. 1970)."""
 
     game_type = "decade_sieve"
+    seed_policy = "derived"
     display_name = "Decade Sieve"
     description = (
         "Work through one decade of cinema: only films released in the target decade count."
@@ -100,6 +101,14 @@ class DecadeSieveEngine(TrackerEngine):
             reason=f"Outside the sieve: {movie.title} ({released}) isn't from the {decade}s",
         )
 
+    async def seed_candidates(self, rules: dict) -> list[int]:
+        prefix = str(rules[TARGET_DECADE_KEY])[:3]
+        return list(
+            self.session.exec(
+                select(CachedMovie.tmdb_id).where(col(CachedMovie.release_date).like(f"{prefix}%"))
+            ).all()
+        )
+
 
 @dataclass
 class SpinFilters:
@@ -118,6 +127,7 @@ class RouletteEngine(TrackerEngine):
     matches your filters. Any film may be logged - the spin is the "pick"."""
 
     game_type = "roulette"
+    seed_policy = "none"
     display_name = "Movie Night Roulette"
     description = "Can't decide? Set a few filters and spin for a random film from your cache."
     capabilities: ClassVar[list[str]] = [*TrackerEngine.capabilities, "roulette_spin"]

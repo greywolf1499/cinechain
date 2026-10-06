@@ -23,6 +23,7 @@ class CanonIslandEngine(CineChainEngine):
     are pre-filtered to the list so the UI never offers a film it would reject."""
 
     game_type = "canon_island"
+    seed_policy = "derived"
     display_name = "Canon-Only Island"
     description = (
         "Shared-cast chain with a purist twist: every film must belong to one curated canon list."
@@ -54,6 +55,15 @@ class CanonIslandEngine(CineChainEngine):
                 ).all()
             )
         return allowed
+
+    async def seed_candidates(self, rules: dict) -> list[int]:
+        return list(
+            self.session.exec(
+                select(CanonMovieBadge.movie_id)
+                .where(CanonMovieBadge.curated_list_id == rules[ALLOWED_LIST_KEY])
+                .distinct()
+            ).all()
+        )
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
         list_id = (rules or {}).get(ALLOWED_LIST_KEY)

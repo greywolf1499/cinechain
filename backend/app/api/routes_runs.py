@@ -522,6 +522,13 @@ async def create_run(
     engine_class = ENGINE_REGISTRY.get(payload.game_type)
     if engine_class is not None:
         engine = engine_class(session, tmdb)
+        if engine.seed_policy == "none" and (
+            payload.seed_movie_id is not None or payload.tail_seed_movie_id is not None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{engine.display_name} doesn't use a seed film",
+            )
         problems = engine.validate_rules_config(rules_config)
         problems += _bounty_board_problems(engine_class, rules_config)
         if rules_config.get(blind_fork.BLIND_FORK_KEY):
@@ -530,14 +537,15 @@ async def create_run(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(problems)
             )
-        rules_config = engine.prepare_rules_config(rules_config)
-        try:
-            rules_config = await engine.prepare_run(rules_config, current_user.id)
-        except RunSetupError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-        if bounties.board_enabled(rules_config):
-            rules_config = bounties.prepare_board(rules_config)
-        if payload.game_type == MEET_IN_THE_MIDDLE:
+        allowed_seeds = await engine.seed_candidates(rules_config)
+        if allowed_seeds is not None:
+            for seed_id in (payload.seed_movie_id, payload.tail_seed_movie_id):
+                if seed_id is not None and seed_id not in allowed_seeds:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Seed movie rejected: not in the configured {engine.display_name} slice",
+                    )
+        if engine.seed_policy == "pair":
             if payload.seed_movie_id is None or payload.tail_seed_movie_id is None:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -553,6 +561,13 @@ async def create_run(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="A second seed film is only for Meet in the Middle runs",
             )
+        rules_config = engine.prepare_rules_config(rules_config)
+        try:
+            rules_config = await engine.prepare_run(rules_config, current_user.id)
+        except RunSetupError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if bounties.board_enabled(rules_config):
+            rules_config = bounties.prepare_board(rules_config)
         for seed_id in (payload.seed_movie_id, payload.tail_seed_movie_id):
             if seed_id is None:
                 continue

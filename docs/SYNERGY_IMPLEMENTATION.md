@@ -80,7 +80,7 @@ button respects the chosen mode.
 | # | File · symbol | Change |
 |---|---|---|
 | 1 | `backend/app/services/seed_suggestions.py` · `suggest_seed` | New keyword arguments `allowed_ids: set[int] \| None` and `min_runtime: int \| None`. When `allowed_ids` is set, both pools are intersected with it, plus a third pool, `allowed_ids` itself (labelled e.g. "On Sight & Sound #12"), so a niche slice never comes back empty. Respect `min_runtime` when the runtime is known. |
-| 2 | `backend/app/api/routes_movies.py` | Add `POST /movies/seed-suggestion` with body `{game_type, rules_config, exclude: list[int]}`. It runs `strip_server_rules`, `engine.validate_rules_config` (422 on problems) and `seed_candidates` (no `prepare_run`), then `suggest_seed`. Returns `null` plus a `reason` when the policy is `none`. Keep the GET for compatibility (it delegates to the same function). |
+| 2 | `backend/app/api/routes_movies.py` | Add `POST /movies/seed-suggestion` with body `{game_type, rules_config, exclude: list[int]}`. It runs `strip_server_rules`, `engine.validate_rules_config` (422 on problems) and `seed_candidates` (no `prepare_run`), then `suggest_seed`. The new response is `{suggestion: film \| null, reason: string \| null}` (a literal JSON null cannot carry a reason); `none` returns a null suggestion and board-start reason without preparing its board. Keep the GET's existing film/null shape; optional JSON `rules_config` lets derived-mode legacy callers supply their bounds. Add cache-only `POST /movies/seed-options` returning `{seed_policy, allowed_ids, reason}` so manual candidates can be rejected before detail hydration. |
 | 3 | `backend/app/api/routes_runs.py` · `create_run` | (a) `seed_policy == "none"` and a seed sent → 422 "`<mode>` doesn't use a seed film". (b) When `seed_candidates(rules)` is not `None`, validate seed membership **before** `prepare_run` (fail fast, without the 90 s hydration). (c) The existing post-prepare `validate_candidate` stays as the authoritative check. |
 | 4 | `frontend/src/components/SeedMoviePicker.tsx` | New props: `rules: RulesConfig` and `excludeIds?: number[]`. Use the POST endpoint and reset `seen` when `JSON.stringify(rules-subset)` changes. Show the server's `reason`. |
 | 5 | `frontend/src/components/run-creator/Step2RunSetup.tsx`, `HeroSeedPreview.tsx`, `useRunDraft.ts` | Render the seed column from `mode.seed_policy`: `none` → a one-line note ("This mode starts on its board"); `derived` → the label "Seed (from your slice)"; `pair` → both pickers share `excludeIds`. `useRunDraft` omits `seed_movie_id` when the policy is `none`. Replace `TRACKER_MODES`-based seed decisions with the policy. |
@@ -89,7 +89,7 @@ button respects the chosen mode.
 
 | # | File · symbol | Change |
 |---|---|---|
-| 1 | `backend/app/api/routes_curated.py` | Add `GET /curated-lists/{id}/slices` → `{hydrated: int, total: int, countries: {code: count}, decades: {decade: count}, pairs: {"JP:1970": count}}`, computed from cached rows via `RegionalDeepDiveEngine._slice`'s predicate. |
+| 1 | `backend/app/api/routes_curated.py` | Add `GET /curated-lists/{id}/slices` → `{hydrated: int, total: int, countries: {code: count}, decades: {decade: count}, pairs: {"JP:1970": count}, indexing: bool, indexing_error: string \| null}`, computed from cached rows via `RegionalDeepDiveEngine._slice`'s predicate. The indexing fields stop polling when ephemeral work completes/fails and expose retryable failures. The existing `/curated/lists/{id}/slices` path is an alias. |
 | 2 | `backend/app/api/routes_curated.py` (`sync_curated_list`, and `update_curated_list` when `is_enabled` flips to true) | After a list is enabled or synced, `task_runner.submit_task("canon_hydrate", …)` hydrates missing details in batches (same `fetch_with_backoff` path as `_hydrate`), so Create rarely needs the 90 s inline hydration. Reuses the existing `SystemTask` machinery; no new infrastructure. |
 | 3 | `frontend/src/components/run-creator/mode-config/DiveConfig.tsx` | Fetch the slices (new `useCuratedSlices` in `lib/queries.ts`). Options show counts ("🇯🇵 Japan · 14"), zero-count options are disabled, the decade list narrows to the chosen country (and vice versa), "Indexing N/M films…" shows while hydration runs, and **"🎲 Surprise me"** picks a random pair, weighted towards 5–25 films. |
 
@@ -372,10 +372,12 @@ board is on.
 
 ---
 
-## Phase S10: Career context milestones (Method Actor & Auteur)
+## Phase S10: Career context milestones & semantic tagging quality
 
-**Goal:** a career told through verifiable milestones, with no hallucinated facts.
-**Depends on:** S5 (track length) recommended. **Findings:** S2-04…S2-07.
+**Goal:** a career told through verifiable milestones, with no hallucinated facts, and
+semantic game tags grounded in genres and measurable confidence.
+**Depends on:** S5 (track length) recommended for career work; the tagging guard is independent.
+**Findings:** S2-04…S2-07, S2-19.
 
 | # | File · symbol | Change |
 |---|---|---|
@@ -397,6 +399,30 @@ board is on.
 - `career_eras` survives `PATCH /rules` while `filmography` remains unforgeable.
 
 **Commit:** `feat(method-actor): evidence-backed career milestones and eras`
+
+### S10c. Semantic trope Genre Gate & Confidence Threshold
+
+- In `backend/app/services/movie_features.py`, share one filtering path between
+  `extract_and_store_tropes` and `ensure_tropes`; both currently call the existing Qwen
+  `llm.extract_tropes` pipeline. Route explicit extraction and Semantic Trope Web preparation
+  through the guard so no caller can store or link with unfiltered suggestions.
+- **Genre Gate:** cross-reference proposed normalized tropes with `CachedMovie.genre_ids`
+  using explicit, reviewed concept-to-TMDB-genre compatibility rules. Reject conceptual
+  conflicts (for example, `cyberpunk` without Science Fiction on a Romance/Comedy-only film).
+  Do not treat every trope as genre-exclusive; unknown/missing genres are not invented.
+- **Confidence Threshold:** embed each candidate trope's concise concept description and the
+  film overview using the existing JIT `embeddings.embed_batch` provider, in the same batch/model
+  fingerprint. Use the existing provider-aware similarity normalization (Arctic raw cosine
+  baselines are high); accept only at or above a named strict threshold calibrated with fixture
+  positives and negatives, not arbitrary raw-cosine guesses. Do not compare stale/different-model
+  vectors. No new model, ML dependency, daemon or vector database.
+- Discard rejected tags silently (no UI warning for normal filtering); keep unavailable
+  models/provider errors observable through the established logging/error contracts. Apply
+  the guard to cached tags before game matching as well, without a blanket cache deletion.
+- Add deterministic regression tests in the existing movie-feature/algorithm tests: a pure
+  rom-com cannot retain `cyberpunk`; compatible high-confidence tags survive; low-confidence
+  tags do not; equality at the threshold is covered; missing genres, mismatched fingerprints
+  and unavailable providers cannot admit unverified tags; both extraction callers behave alike.
 
 ---
 
@@ -468,11 +494,16 @@ Recommended order (anti-paralysis first): **S0 → S1 → S2 → S3 → S4 → S
 | S1-19 | S0 | | | S4-05 | S6 |
 | S1-20 | S1c | | | S4-06 | S3 |
 | S1-21 | S1c | | | S4-07 … S4-10 | S7 |
-| | | | | S4-11 … S4-13 | S3 |
+| | | S2-19 | S10c | S4-11 … S4-13 | S3 |
 
 **Backlog (not scheduled):** Meet in the Middle seed pairs with BFS distance ≥ 3 (S1-06
 remainder; needs a time-boxed BFS per roll); Blind Fork "offer a trap" coaching and Golden Veto
 rule-in-place copy (§4.2 P2 rows: fold them into S3 copy if cheap).
+
+**Future architecture:** custom **TVTropes Scraper Hybrid Pipeline**, deferred to a later release.
+Assess source permissions/attribution, bounded respectful fetching, source provenance, genre and
+confidence guards, and merging scraped evidence with the existing local Arctic/Qwen pipeline.
+This is a backlog design note, not authorization to add scraper infrastructure in S0–S11.
 
 ---
 

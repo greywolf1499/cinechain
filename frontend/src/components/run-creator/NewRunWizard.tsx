@@ -46,6 +46,9 @@ export default function NewRunWizard({
     blockers,
     buildPayload,
     toggleRawMode,
+    effectiveRules,
+    seedOptions,
+    seedsReady,
   } = runDraft;
   const unavailableReason = engine?.unavailable_reason;
   const isDirty = JSON.stringify(draft) !== JSON.stringify(initialDraft());
@@ -208,6 +211,9 @@ export default function NewRunWizard({
           onToggleRawMode={toggleRawMode}
           onChangeMode={() => setStep(1)}
           headingRef={headingRef}
+          seedRules={effectiveRules}
+          allowedSeedIds={seedOptions.data?.allowed_ids}
+          seedsReady={seedsReady}
         />
       )}
     </Modal>

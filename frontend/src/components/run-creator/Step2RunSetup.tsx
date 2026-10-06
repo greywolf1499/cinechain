@@ -5,7 +5,7 @@ import ParticipantPicker from "./ParticipantPicker";
 import HeroSeedPreview from "./HeroSeedPreview";
 import ModeConfigPanel from "./ModeConfigPanel";
 import type { RunDraft } from "./useRunDraft";
-import type { CuratedListSummary, EngineMeta, UserSummary } from "../../types/api";
+import type { CuratedListSummary, EngineMeta, UserSummary, RulesConfig, RawRulesConfig } from "../../types/api";
 import { gameModeStyle } from "../../lib/gameModes";
 import { cn } from "../../lib/cn";
 import { Field, inputClass } from "./shared";
@@ -26,6 +26,9 @@ export default function Step2RunSetup({
   onToggleRawMode,
   onChangeMode,
   headingRef,
+  seedRules,
+  allowedSeedIds,
+  seedsReady,
 }: {
   draft: RunDraft;
   update: (changes: Partial<RunDraft>) => void;
@@ -42,12 +45,15 @@ export default function Step2RunSetup({
   onToggleRawMode: () => void;
   onChangeMode: () => void;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
+  seedRules: RulesConfig | RawRulesConfig;
+  allowedSeedIds?: number[] | null;
+  seedsReady: boolean;
 }) {
   const mode = engines?.find((engine) => engine.game_type === draft.gameType);
   const rawAvailable = isAdmin && (mode?.capabilities.includes("json_rules") ?? draft.gameType === "cinechain");
   const style = gameModeStyle(draft.gameType);
   const isVersus = draft.gameType === "tug_of_war" || draft.gameType === "rt_split";
-  const isTunnel = draft.gameType === "meet_in_the_middle";
+  const isTunnel = mode?.seed_policy === "pair";
 
   return (
     <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_420px]">
@@ -155,21 +161,25 @@ export default function Step2RunSetup({
       </div>
 
       <div className={cn("flex flex-col gap-3", isTunnel && "lg:col-span-1")}>
-        {isTunnel ? (
+        {mode?.seed_policy === "none" ? (
+          <p className="rounded-md border border-app-border p-3 text-xs text-zinc-400">
+            This mode starts on its board, without a seed film.
+          </p>
+        ) : isTunnel ? (
           <>
             <p className="rounded-md border border-cyan-400/20 bg-cyan-500/5 p-2 text-[11px] text-cyan-200/80">
               Each partner brings a starting film. Extend both chains until one film connects the two ends.
             </p>
             <div data-blocker-target="seed-head">
-              <HeroSeedPreview value={draft.seedMovie} onChange={(seedMovie) => update({ seedMovie })} gameType={draft.gameType} label="Partner A's seed" />
+              <HeroSeedPreview value={draft.seedMovie} onChange={(seedMovie) => update({ seedMovie })} gameType={draft.gameType} label="Partner A's seed" rules={seedRules} excludeIds={draft.tailSeedMovie ? [draft.tailSeedMovie.tmdb_id] : []} />
             </div>
             <div data-blocker-target="seed-tail">
-              <HeroSeedPreview value={draft.tailSeedMovie} onChange={(tailSeedMovie) => update({ tailSeedMovie })} gameType={draft.gameType} label="Partner B's seed" />
+              <HeroSeedPreview value={draft.tailSeedMovie} onChange={(tailSeedMovie) => update({ tailSeedMovie })} gameType={draft.gameType} label="Partner B's seed" rules={seedRules} excludeIds={draft.seedMovie ? [draft.seedMovie.tmdb_id] : []} />
             </div>
           </>
         ) : (
           <div data-blocker-target="seed-head">
-            <HeroSeedPreview value={draft.seedMovie} onChange={(seedMovie) => update({ seedMovie })} gameType={draft.gameType} label="Seed movie (optional)" />
+            <HeroSeedPreview value={draft.seedMovie} onChange={(seedMovie) => update({ seedMovie })} gameType={draft.gameType} label={mode?.seed_policy === "derived" ? "Seed (from your slice)" : "Seed movie (optional)"} rules={seedRules} allowedIds={allowedSeedIds} enabled={seedsReady} />
           </div>
         )}
       </div>

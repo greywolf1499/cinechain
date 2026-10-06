@@ -3,17 +3,36 @@ sync persistence (via a monkeypatched scraper - no real network), and the
 bulk badges lookup used by movie cards across the app.
 """
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel, create_engine
+import asyncio
+from unittest.mock import AsyncMock
 
+import pytest
+from fastapi import BackgroundTasks
+from fastapi.testclient import TestClient
+from sqlmodel import Session, SQLModel, create_engine, select
+
+from app.api.routes_curated import _queue_canon_hydration
 from app.db import get_session
+from app.engines.regional_deep_dive import RegionalDeepDiveEngine
 from app.main import app
+from app.models.cache import CachedMovie
+from app.models.curated import CanonMovieBadge, CuratedList
+from app.models.system import SystemTask
+from app.models.user import User
 from app.services import letterboxd
+from app.services.tmdb import TMDBClient, TMDBNotFoundError
 
 
 @pytest.fixture()
-def client(config_dir):
+def client(config_dir, monkeypatch):
+    async def movie_detail(_self, movie_id):
+        return {
+            "id": movie_id, "title": f"Film {movie_id}", "release_date": "1975-06-01",
+            "origin_country": ["AU"], "runtime": 100, "genres": [], "overview": "",
+            "tagline": "", "status": "Released",
+        }
+
+    monkeypatch.setattr(TMDBClient, "get_movie", movie_detail)
     engine = create_engine(
         f"sqlite:///{config_dir}/app_test.db", connect_args={"check_same_thread": False}
     )
@@ -60,6 +79,117 @@ def _run_task(client, path, body=None, expected="completed"):
     task = client.get(f"/api/tasks/{resp.json()['id']}").json()
     assert task["status"] == expected, task
     return task
+
+
+def test_slice_counts_match_prepared_checklists_without_network(client, monkeypatch):
+    _register_and_login(client)
+    with Session(client.db_engine) as session:
+        session.add(CuratedList(id="slice", title="Slice", url="https://letterboxd.com/test/list/slice/", badge_prefix="TEST"))
+        session.flush()
+        for movie_id, country, release in (
+            (1, '["AU", "JP"]', "1975-01-01"),
+            (2, '["AU"]', "1980-01-01"),
+            (3, None, "1978-01-01"),
+            (4, "AU", "1979-01-01"),  # unparseable legacy country string
+        ):
+            session.add(CachedMovie(tmdb_id=movie_id, title=f"Film {movie_id}", origin_country=country, release_date=release))
+        for rank, movie_id in enumerate([1, 1, 2, 3, 4, 5], 1):
+            session.add(CanonMovieBadge(curated_list_id="slice", movie_id=movie_id, badge_label="TEST", rank=rank))
+        session.commit()
+    hydrate = AsyncMock(side_effect=AssertionError("Slices must be cache-only"))
+    monkeypatch.setattr(RegionalDeepDiveEngine, "_hydrate", hydrate)
+    response = client.get("/api/curated-lists/slice/slices")
+    assert response.status_code == 200, response.text
+    counts = response.json()
+    assert counts == {
+        "hydrated": 3, "total": 5,
+        "countries": {"AU": 2, "JP": 1},
+        "decades": {"1970": 3, "1980": 1},
+        "pairs": {"AU:1970": 1, "AU:1980": 1, "JP:1970": 1},
+        "indexing": False, "indexing_error": None,
+    }
+    assert client.get("/api/curated/lists/slice/slices").json() == counts
+    hydrate.assert_not_awaited()
+    monkeypatch.setattr(RegionalDeepDiveEngine, "_hydrate", AsyncMock())
+    with Session(client.db_engine) as session:
+        engine = RegionalDeepDiveEngine(session, None)
+        for country, count in counts["countries"].items():
+            prepared = asyncio.run(engine.prepare_run({"curated_list_id": "slice", "target_country": country}, "test"))
+            assert len(prepared["expedition"]["movie_ids"]) == count
+        for decade, count in counts["decades"].items():
+            prepared = asyncio.run(engine.prepare_run({"curated_list_id": "slice", "target_decade": int(decade)}, "test"))
+            assert len(prepared["expedition"]["movie_ids"]) == count
+        for pair, count in counts["pairs"].items():
+            country, decade = pair.split(":")
+            prepared = asyncio.run(engine.prepare_run({
+                "curated_list_id": "slice", "target_country": country, "target_decade": int(decade),
+            }, "test"))
+            assert len(prepared["expedition"]["movie_ids"]) == count
+
+
+def test_enable_queues_hydration_once_and_populates_slices(client):
+    _register_and_login(client)
+    with Session(client.db_engine) as session:
+        session.add(CuratedList(id="enable", title="Enable", url="https://letterboxd.com/test/list/enable/", badge_prefix="TEST", is_enabled=False))
+        session.flush()
+        session.add(CanonMovieBadge(curated_list_id="enable", movie_id=20, badge_label="TEST"))
+        session.commit()
+    for _ in range(2):
+        assert client.patch("/api/curated/lists/enable", json={"is_enabled": True}).status_code == 200
+    with Session(client.db_engine) as session:
+        tasks = session.exec(select(SystemTask).where(SystemTask.name == "canon_hydrate")).all()
+        assert len(tasks) == 1
+        assert tasks[0].status == "completed"
+        assert tasks[0].progress_data["result"] == {"list_id": "enable", "hydrated": 1, "total": 1}
+    assert client.get("/api/curated-lists/enable/slices").json()["pairs"] == {"AU:1970": 1}
+
+
+def test_sync_runs_batched_hydration_after_badges_are_persisted(client, monkeypatch):
+    _register_and_login(client)
+    films = [{"title": f"Film {i}", "year": 1975, "slug": f"film-{i}", "tmdb_id": i, "rank": i} for i in range(1, 24)]
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(films))
+    _run_task(client, "/api/curated/sync/sight-and-sound-2022")
+    with Session(client.db_engine) as session:
+        task = session.exec(select(SystemTask).where(SystemTask.name == "canon_hydrate")).one()
+        assert task.status == "completed"
+        result = task.progress_data["result"]
+        assert result["hydrated"] == result["total"] == 23
+        assert task.progress_data["progress"] == {"current": 23, "total": 23}
+        assert session.get(CachedMovie, 23).origin_country == '["AU"]'
+    assert client.get(f"/api/curated-lists/{result['list_id']}/slices").json()["countries"] == {"AU": 23}
+
+
+def test_hydration_deduplicates_pending_work(client):
+    _register_and_login(client)
+    background = BackgroundTasks()
+    with Session(client.db_engine) as session:
+        curated = CuratedList(id="dedupe", title="Dedupe", url="https://letterboxd.com/test/list/dedupe/", badge_prefix="TEST")
+        session.add(curated)
+        session.commit()
+        user = session.exec(select(User)).one()
+        for _ in range(2):
+            _queue_canon_hydration(background, session, curated, user.id, None)
+        assert len(background.tasks) == 1
+        assert len(session.exec(select(SystemTask).where(SystemTask.name == "canon_hydrate")).all()) == 1
+    asyncio.run(background())
+
+
+def test_unavailable_details_fail_indexing_without_false_progress(client, monkeypatch):
+    _register_and_login(client)
+    monkeypatch.setattr(TMDBClient, "get_movie", AsyncMock(side_effect=TMDBNotFoundError("No film")))
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape([
+        {"title": "Missing", "year": 1975, "slug": "missing", "tmdb_id": 999, "rank": 1},
+    ]))
+    _run_task(client, "/api/curated/sync/sight-and-sound-2022")
+    with Session(client.db_engine) as session:
+        task = session.exec(select(SystemTask).where(SystemTask.name == "canon_hydrate")).one()
+        assert task.status == "failed"
+        assert task.progress_data["progress"] == {"current": 0, "total": 1}
+        list_id = session.exec(select(CuratedList)).one().id
+    counts = client.get(f"/api/curated-lists/{list_id}/slices").json()
+    assert counts["indexing"] is False
+    assert "Indexed 0/1" in counts["indexing_error"]
+    assert counts["pairs"] == {}
 
 
 def test_curated_lists_returns_all_four_presets_unsynced_by_default(client):

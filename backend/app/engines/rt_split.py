@@ -115,6 +115,7 @@ def winning_team(scores: dict[str, int], rules: dict | None) -> str | None:
 
 
 class RottenTomatoesSplitEngine(TrackerEngine):
+    seed_policy = "none"
     game_type = RT_SPLIT
     requires: ClassVar[list[str]] = ["omdb"]
     display_name = "The Rotten Tomatoes Split"

@@ -52,6 +52,7 @@ class EngineMeta(BaseModel):
     description: str
     capabilities: list[str]
     requires: list[str]
+    seed_policy: Literal["none", "free", "derived", "pair"]
     unavailable_reason: str | None = None
 
 
@@ -81,6 +82,7 @@ def list_engines(
             description=cls.description,
             capabilities=cls.capabilities,
             requires=cls.requires,
+            seed_policy=cls.seed_policy,
             unavailable_reason=(
                 "Requires OMDb integration. Ask an admin to configure it in Settings → Integrations."
                 if "omdb" in cls.requires

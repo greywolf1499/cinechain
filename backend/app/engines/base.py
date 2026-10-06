@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from sqlmodel import Session
 
@@ -52,6 +52,7 @@ class BaseChallengeEngine(ABC):
     description: str
     capabilities: ClassVar[list[str]]
     requires: ClassVar[list[str]] = []
+    seed_policy: ClassVar[Literal["none", "free", "derived", "pair"]] = "free"
     # Graph-style engines honour opt-in win/fail conditions in `rules_config`;
     # rigid trackers leave this False and ignore them.
     supports_json_rules: ClassVar[bool] = False
@@ -92,6 +93,10 @@ class BaseChallengeEngine(ABC):
         """Problems with a V2 `rules_config` payload (empty list = valid)."""
         problems = validate_conditions(rules) if self.supports_json_rules else []
         return problems + self.modifier_problems(rules)
+
+    async def seed_candidates(self, rules: dict) -> list[int] | None:
+        """Cache-only seed bounds: None means unrestricted, [] means no legal cached seeds."""
+        return None
 
     def active_modifiers(self, rules: dict | None) -> dict[str, Any]:
         """The pair modifiers in force: this engine's defaults overridden by the run's."""

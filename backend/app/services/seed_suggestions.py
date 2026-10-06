@@ -42,6 +42,9 @@ def suggest_seed(
     exclude_ids: set[int],
     game_type: str | None = None,
     rng: random.Random | None = None,
+    *,
+    allowed_ids: set[int] | None = None,
+    min_runtime: int | None = None,
 ) -> SeedSuggestion | None:
     """Prefers canon-listed and highly rated films, then simply popular ones. Skips
     `exclude_ids` (earlier re-rolls) and, when possible, films the mode can't judge."""
@@ -59,9 +62,15 @@ def suggest_seed(
         return (
             movie is not None
             and movie.tmdb_id not in exclude_ids
-            and bool(movie.poster_path)
+            and (allowed_ids is None or movie.tmdb_id in allowed_ids)
+            and (allowed_ids is not None or bool(movie.poster_path))
             and bool(movie.title)
             and is_reality_eligible(movie)
+            and (
+                not min_runtime
+                or movie.runtime is None
+                or movie.runtime >= min_runtime
+            )
         )
 
     acclaimed = [m for m in (session.get(CachedMovie, i) for i in reasons) if eligible(m)]
@@ -76,11 +85,16 @@ def suggest_seed(
         if eligible(m)
     ]
     needs = MODE_REQUIREMENTS.get(game_type or "", lambda _m: True)
+    allowed = (
+        [m for m in (session.get(CachedMovie, i) for i in sorted(allowed_ids)) if eligible(m)]
+        if allowed_ids is not None
+        else []
+    )
 
-    for pool, label in ((acclaimed, None), (popular, "Popular pick")):
+    for pool, label in ((acclaimed, None), (popular, "Popular pick"), (allowed, "From your slice")):
         for strict in (True, False):
             choices = [m for m in pool if not strict or needs(m)]
             if choices:
                 movie = rng.choice(choices)
-                return SeedSuggestion(movie, label or reasons[movie.tmdb_id])
+                return SeedSuggestion(movie, reasons.get(movie.tmdb_id) or label or "From your slice")
     return None

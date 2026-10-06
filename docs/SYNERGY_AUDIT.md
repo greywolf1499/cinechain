@@ -643,3 +643,18 @@ Five root causes explain most of the findings above:
 
 **Severity count (tabled findings):** P0 × 8 (S1-01, S1-03, S1-11, S1-13, S3-01, S3-04, S4-01, S4-07) · P1 × 33 ·
 P2 × 18, plus the untabled S1-15…S1-20 resilience rows in §1.5. The phased fix order is in [`SYNERGY_IMPLEMENTATION.md`](./SYNERGY_IMPLEMENTATION.md).
+
+## Follow-up finding: Semantic Tropes tagging quality
+
+| ID | Severity | Finding and required fix |
+|---|---|---|
+| S2-19 | **P1** | Player-reported: the existing local Arctic/Qwen pipeline assigns nonsensical tags, such as `cyberpunk` to pure romantic comedies. Introduce a **Genre Gate** against hard TMDB `genre_ids` and a strict **Confidence Threshold** for overview-to-trope cosine similarity. Silently discard conceptually genre-incompatible or below-threshold tags before storing or using them as game links. Schedule with S10; preserve existing JIT model loading/unloading and add no ML models or dependencies. |
+
+This is a follow-up report, not a newly reproduced model evaluation. S10 must verify the
+rom-com/cyberpunk case using deterministic fixture vectors and explicit genre/trope compatibility
+rules; unknown genres must not be invented, and service failures must remain observable.
+
+**Future architecture (not scheduled):** integrate a custom **TVTropes Scraper Hybrid Pipeline**
+in a later release. Evaluate source permissions, attribution, rate limits, provenance and a
+hybrid merge with the existing local pipeline before implementation. No scraper or infrastructure
+change belongs to S1.

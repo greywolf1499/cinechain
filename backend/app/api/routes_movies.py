@@ -1,11 +1,13 @@
-from typing import Any
+import json
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client
 from app.db import get_session
+from app.engines.registry import get_engine
 from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie
 from app.models.user import User
@@ -24,6 +26,7 @@ from app.schemas.movies import (
     TropeExtraction,
 )
 from app.services import (
+    blind_fork,
     cache_repo,
     historical_era,
     llm,
@@ -47,6 +50,95 @@ class GenreOut(BaseModel):
 
 class BulkRatingsRequest(BaseModel):
     tmdb_ids: list[int]
+
+
+class SeedRequest(BaseModel):
+    game_type: str = "cinechain"
+    rules_config: dict[str, Any] = Field(default_factory=dict)
+    exclude: list[int] = Field(default_factory=list)
+
+
+class SeedOptions(BaseModel):
+    seed_policy: Literal["none", "free", "derived", "pair"]
+    allowed_ids: list[int] | None = None
+    reason: str | None = None
+
+
+class SeedSuggestionResponse(BaseModel):
+    suggestion: SeedSuggestionOut | None = None
+    reason: str | None = None
+
+
+async def _seed_options(
+    payload: SeedRequest, session: Session, tmdb: TMDBClient
+) -> tuple[SeedOptions, dict[str, Any]]:
+    engine = get_engine(payload.game_type, session, tmdb)
+    rules = blind_fork.strip_server_rules(payload.rules_config)
+    if engine.seed_policy == "none":
+        return SeedOptions(
+            seed_policy="none", reason=f"{engine.display_name} starts on its board, without a seed film"
+        ), rules
+    problems = engine.validate_rules_config(rules)
+    minimum = rules.get("min_runtime")
+    if minimum is not None and (
+        isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 0
+    ):
+        problems.append("min_runtime must be a non-negative whole number")
+    if problems:
+        raise HTTPException(status_code=422, detail="; ".join(problems))
+    allowed = await engine.seed_candidates(rules)
+    return SeedOptions(
+        seed_policy=engine.seed_policy,
+        allowed_ids=allowed,
+        reason="No indexed films match this slice yet." if allowed == [] else None,
+    ), rules
+
+
+@router.post("/movies/seed-options", response_model=SeedOptions)
+async def seed_options(
+    payload: SeedRequest,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> SeedOptions:
+    """Cache-only bounds for rejecting manual seeds before detail hydration."""
+    options, _ = await _seed_options(payload, session, tmdb)
+    return options
+
+
+async def _suggest_seed(
+    payload: SeedRequest, session: Session, tmdb: TMDBClient
+) -> SeedSuggestionResponse:
+    options, rules = await _seed_options(payload, session, tmdb)
+    if options.seed_policy == "none":
+        return SeedSuggestionResponse(reason=options.reason)
+    suggestion = seed_suggestions.suggest_seed(
+        session,
+        set(payload.exclude),
+        payload.game_type,
+        allowed_ids=set(options.allowed_ids) if options.allowed_ids is not None else None,
+        min_runtime=rules.get("min_runtime"),
+    )
+    if suggestion is None:
+        return SeedSuggestionResponse(
+            reason=options.reason or "No eligible cached films remain for this setup."
+        )
+    return SeedSuggestionResponse(
+        suggestion=SeedSuggestionOut(
+            **_movie_to_summary(suggestion.movie).model_dump(), reason=suggestion.reason
+        ),
+        reason=suggestion.reason,
+    )
+
+
+@router.post("/movies/seed-suggestion", response_model=SeedSuggestionResponse)
+async def post_seed_suggestion(
+    payload: SeedRequest,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    _current_user: User = Depends(get_current_user),
+) -> SeedSuggestionResponse:
+    return await _suggest_seed(payload, session, tmdb)
 
 
 def _movie_to_summary(movie: CachedMovie) -> MovieSummary:
@@ -161,21 +253,31 @@ async def list_genres(
 
 
 @router.get("/movies/seed-suggestion", response_model=SeedSuggestionOut | None)
-def get_seed_suggestion(
+async def get_seed_suggestion(
     exclude: str = Query(default="", description="Comma-separated TMDB ids already offered"),
     game_type: str | None = Query(default=None),
+    rules_config: str | None = Query(default=None, description="JSON rules for derived seed bounds"),
     session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
     _current_user: User = Depends(get_current_user),
 ) -> SeedSuggestionOut | None:
     """A random well-regarded film from the local cache (canon-listed or highly rated,
     else simply popular) to start a run with. Null when the cache has nothing to offer."""
     skipped = {int(part) for part in exclude.split(",") if part.strip().isdigit()}
-    suggestion = seed_suggestions.suggest_seed(session, skipped, game_type)
-    if suggestion is None:
-        return None
-    return SeedSuggestionOut(
-        **_movie_to_summary(suggestion.movie).model_dump(), reason=suggestion.reason
+    rules: dict[str, Any] = {}
+    if rules_config is not None:
+        try:
+            rules = json.loads(rules_config)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, detail="rules_config must be a JSON object") from exc
+        if not isinstance(rules, dict):
+            raise HTTPException(422, detail="rules_config must be a JSON object")
+    response = await _suggest_seed(
+        SeedRequest(game_type=game_type or "cinechain", rules_config=rules, exclude=list(skipped)),
+        session,
+        tmdb,
     )
+    return response.suggestion
 
 
 @router.get("/movies/{tmdb_id}", response_model=MovieDetail)

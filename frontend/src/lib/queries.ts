@@ -10,6 +10,8 @@ import type {
 	CuratedAccount,
 	CuratedAccountLists,
 	CuratedListSummary,
+	CuratedSlices,
+	SeedOptions,
 	ListSort,
 	ListState,
 	Page,
@@ -163,6 +165,33 @@ export function useCuratedLists() {
 	return useQuery({
 		queryKey: queryKeys.curatedLists,
 		queryFn: () => api.get<CuratedListSummary[]>("/curated/lists"),
+	});
+}
+
+export function useCuratedSlices(listId: string | undefined) {
+	return useQuery({
+		queryKey: ["curated", "slices", listId],
+		queryFn: () => api.get<CuratedSlices>(`/curated-lists/${listId}/slices`),
+		enabled: !!listId,
+		refetchInterval: (query) => query.state.data?.indexing ? 2000 : false,
+	});
+}
+
+export function useSeedOptions(
+	gameType: string,
+	rules: RulesConfig | RawRulesConfig,
+	enabled: boolean,
+	indexing = false,
+) {
+	return useQuery({
+		queryKey: ["movies", "seed-options", gameType, rules],
+		queryFn: () => api.post<SeedOptions>("/movies/seed-options", {
+			game_type: gameType,
+			rules_config: rules,
+		}),
+		enabled,
+		retry: false,
+		refetchInterval: indexing ? 2000 : false,
 	});
 }
 

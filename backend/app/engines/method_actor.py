@@ -159,6 +159,7 @@ def build_career_track(
 
 
 class MethodActorEngine(TrackerEngine):
+    seed_policy = "none"
     game_type = METHOD_ACTOR
     display_name = "The Method Actor Marathon"
     description = (

@@ -103,6 +103,7 @@ def build_filmography(
 
 
 class AuteurMarathonEngine(TrackerEngine):
+    seed_policy = "none"
     game_type = AUTEUR_MARATHON
     display_name = "The Auteur Marathon"
     description = (

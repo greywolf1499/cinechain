@@ -7,21 +7,33 @@ import ExpandableText from "../ui/ExpandableText";
 import { useJellyfinLookup, useMovieDetail } from "../../lib/queries";
 import { isoToFlagEmoji, parseOriginCountries } from "../../lib/countries";
 import { countryName } from "../../lib/countryNames";
-import type { MovieSummary } from "../../types/api";
+import type { MovieSummary, RulesConfig, RawRulesConfig } from "../../types/api";
 
 export default function HeroSeedPreview({
   value,
   onChange,
   gameType,
   label,
+  rules,
+  excludeIds = [],
+  allowedIds,
+  enabled = true,
 }: {
   value: MovieSummary | null;
   onChange: (movie: MovieSummary | null) => void;
   gameType: string;
   label: string;
+  rules: RulesConfig | RawRulesConfig;
+  excludeIds?: number[];
+  allowedIds?: number[] | null;
+  enabled?: boolean;
 }) {
-  const { movie, isHydrating } = useMovieDetail(value?.tmdb_id);
-  const { data: jellyfin } = useJellyfinLookup(value ? [value.tmdb_id] : []);
+  const legal = enabled && (!value || (
+    (allowedIds == null || allowedIds.includes(value.tmdb_id)) &&
+    !excludeIds.includes(value.tmdb_id)
+  ));
+  const { movie, isHydrating } = useMovieDetail(value?.tmdb_id, legal);
+  const { data: jellyfin } = useJellyfinLookup(value && legal ? [value.tmdb_id] : []);
   const details = movie ?? value;
   const originCountries = parseOriginCountries(details?.origin_country);
   const onServer = value ? jellyfin?.[String(value.tmdb_id)]?.on_server : undefined;
@@ -29,10 +41,14 @@ export default function HeroSeedPreview({
   return (
     <section className="flex flex-col gap-3 rounded-xl border border-app-border bg-app-bg/60 p-3" aria-label={label}>
       <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">{label}</h3>
-      {!value ? (
+      {!legal ? (
+        <div className="text-xs text-amber-400">
+          <p>Choose valid mode settings and a seed from the eligible slice.</p>
+          {value && <button type="button" onClick={() => onChange(null)} className="mt-2 underline">Remove ineligible seed</button>}
+        </div>
+      ) : !value ? (
         <div className="rounded-lg border border-dashed border-zinc-600 p-3">
           <p className="mb-2 text-xs text-zinc-500">Choose a seed film or get a recommendation.</p>
-          <SeedMoviePicker value={value} onChange={onChange} gameType={gameType} recommendFirst />
         </div>
       ) : (
         <>
@@ -55,9 +71,9 @@ export default function HeroSeedPreview({
             </div>
           </div>
           {movie?.overview && <ExpandableText text={movie.overview} lines={5} className="text-xs leading-relaxed text-zinc-400" />}
-          <SeedMoviePicker value={value} onChange={onChange} gameType={gameType} />
         </>
       )}
+      {legal && <SeedMoviePicker value={value} onChange={onChange} gameType={gameType} rules={rules} excludeIds={excludeIds} allowedIds={allowedIds} recommendFirst={!value} />}
     </section>
   );
 }

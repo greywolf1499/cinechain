@@ -9,11 +9,11 @@ import { DEFAULT_GENRE_CYCLE, DEFAULT_SWING_FREQUENCY, GENRE_PENDULUM } from "..
 import { clearModifiers, modifierPayload } from "../../lib/modifiers";
 import { DEFAULT_TARGET_POINTS, RT_SPLIT } from "../../lib/splitScore";
 import { DEFAULT_TARGET_LEAD, TUG_OF_WAR } from "../../lib/tugOfWar";
-import { MEET_IN_THE_MIDDLE } from "../../lib/tunnel";
 import { RABBIT_HOLE } from "../../lib/rabbitHole";
 import { RULE_PRESETS } from "../RulesetFields";
 import { parseRawRules, RAW_RULES_EXAMPLE } from "../RawRulesEditor";
 import { TRACKER_RULES } from "./shared";
+import { useCuratedSlices, useSeedOptions } from "../../lib/queries";
 import type { CuratedListSummary, EngineMeta, MovieSummary, PersonSummary, RawRulesConfig, RulesConfig, TugDimension } from "../../types/api";
 
 export interface RunDraft {
@@ -79,7 +79,14 @@ function reducer(state: RunDraft, action: DraftAction): RunDraft {
       ...state,
       ...action.changes,
       rules: clearModifiers(state.rules),
+      seedMovie: null,
+      tailSeedMovie: null,
     };
+  }
+  if (["canonListId", "targetDecade", "diveListId", "diveCountry", "diveDecade", "rawText", "rawMode"].some(
+    (key) => key in action.changes,
+  )) {
+    return { ...state, ...action.changes, seedMovie: null, tailSeedMovie: null };
   }
   return { ...state, ...action.changes };
 }
@@ -88,7 +95,7 @@ export interface CreateRunPayload {
   name: string;
   game_type: string;
   participant_user_ids: string[];
-  seed_movie_id: number | null;
+  seed_movie_id?: number | null;
   tail_seed_movie_id: number | null;
   rules_config: RulesConfig | RawRulesConfig;
 }
@@ -105,7 +112,7 @@ export function useRunDraft(
   const rawEnabled = draft.rawMode && isAdmin && engineSupportsRaw;
   const rawParse = parseRawRules(draft.rawText);
   const isTracker = !!engine && !engine.capabilities.includes("discover_candidates");
-  const isTunnel = draft.gameType === MEET_IN_THE_MIDDLE;
+  const isTunnel = engine?.seed_policy === "pair";
   const needsCanonList = draft.gameType === "canon_island";
   const needsDecade = draft.gameType === "decade_sieve";
   const isBracket = draft.gameType === MARCH_MADNESS;
@@ -146,6 +153,24 @@ export function useRunDraft(
         }
       : {}),
   };
+  const effectiveRules = rawEnabled && rawParse.value ? rawParse.value : formRules;
+  const slices = useCuratedSlices(isDive ? draft.diveListId : undefined);
+  const seedSettingsReady = (
+    !needsCanonList || !!effectiveRules.allowed_curated_list_id
+  ) && (
+    !isDive || (!!effectiveRules.curated_list_id && (
+      !!effectiveRules.target_country || effectiveRules.target_decade !== undefined
+    ))
+  ) && (!rawEnabled || !rawParse.error);
+  const seedOptions = useSeedOptions(
+    draft.gameType,
+    effectiveRules,
+    engine?.seed_policy === "derived" && seedSettingsReady,
+    !!slices.data?.indexing,
+  );
+  const seedsReady = engine?.seed_policy !== "derived" || (
+    seedSettingsReady && !!seedOptions.data && !seedOptions.isError
+  );
   const sameSeeds = isTunnel && !!draft.seedMovie && draft.seedMovie.tmdb_id === draft.tailSeedMovie?.tmdb_id;
   const missingMode =
     (needsCanonList && !draft.canonListId) ||
@@ -157,6 +182,7 @@ export function useRunDraft(
 
   const blockers = useMemo(() => {
     const messages: string[] = [];
+    if (!engine) messages.push("Wait for game modes to load.");
     if (!draft.name.trim()) messages.push("Enter a run name.");
     if (needsCanonList && !draft.canonListId) messages.push("Choose a canon list.");
     if (isTunnel && !draft.seedMovie) messages.push("Choose Partner A's starting film.");
@@ -179,8 +205,27 @@ export function useRunDraft(
       messages.push("Set the Rabbit Hole escape depth between 25 and 60.");
     }
     if (rawEnabled && rawParse.error) messages.push(`Fix the raw rules JSON: ${rawParse.error}`);
+    if (engine?.seed_policy === "derived" && seedSettingsReady) {
+      if (seedOptions.isError) messages.push(`Check seed settings: ${seedOptions.error.message}`);
+      else if (!seedOptions.data) messages.push("Checking eligible seed films...");
+      else if (draft.seedMovie && !seedOptions.data.allowed_ids?.includes(draft.seedMovie.tmdb_id)) {
+        messages.push("Choose a seed from your eligible slice.");
+      }
+    }
+    if (isDive && seedSettingsReady) {
+      if (slices.isError) messages.push(`Check slice availability: ${slices.error.message}`);
+      else if (!slices.data) messages.push("Checking slice availability...");
+      else {
+        const country = typeof effectiveRules.target_country === "string" ? effectiveRules.target_country.toUpperCase() : undefined;
+        const decade = typeof effectiveRules.target_decade === "number" ? effectiveRules.target_decade : undefined;
+        const count = country && decade !== undefined
+          ? slices.data.pairs[`${country}:${decade}`]
+          : country ? slices.data.countries[country] : slices.data.decades[String(decade)];
+        if (!count) messages.push("Choose a non-empty indexed slice.");
+      }
+    }
     return messages;
-  }, [draft, isAuteur, isBracket, isDive, isMethodActor, isTunnel, needsCanonList, rawEnabled, rawParse.error, sameSeeds]);
+  }, [draft, engine, isAuteur, isBracket, isDive, isMethodActor, isTunnel, needsCanonList, rawEnabled, rawParse.error, sameSeeds, seedSettingsReady, seedOptions.data, seedOptions.isError, seedOptions.error, slices.data, slices.isError, slices.error, effectiveRules.target_country, effectiveRules.target_decade]);
 
   function buildPayload(): CreateRunPayload {
     const rules = rawEnabled && rawParse.value ? rawParse.value : formRules;
@@ -188,7 +233,7 @@ export function useRunDraft(
       name: draft.name.trim(),
       game_type: draft.gameType,
       participant_user_ids: draft.participantIds,
-      seed_movie_id: draft.seedMovie?.tmdb_id ?? null,
+      ...(engine?.seed_policy !== "none" ? { seed_movie_id: draft.seedMovie?.tmdb_id ?? null } : {}),
       tail_seed_movie_id: isTunnel ? (draft.tailSeedMovie?.tmdb_id ?? null) : null,
       rules_config: rules,
     };
@@ -216,6 +261,9 @@ export function useRunDraft(
     islandLists,
     castLinked,
     formRules,
+    effectiveRules,
+    seedOptions,
+    seedsReady,
     blockers,
     missingMode,
     sameSeeds,

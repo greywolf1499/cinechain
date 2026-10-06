@@ -118,6 +118,8 @@ def test_engine_metadata_has_server_copy_and_rulebooks(rulebook_client):
         assert entry["tagline"] and entry["tags"]
         assert entry["rulebook"]["goal"] and entry["rulebook"]["turn"] and entry["rulebook"]["scoring"]
         assert set(entry["rulebook"]["glossary"]) <= entry["glossary"].keys()
+    rabbit = next(entry for entry in result.json() if entry["game_type"] == "rabbit_hole")
+    assert "New runs instead deal a seeded deck" in " ".join(rabbit["rulebook"]["turn"])
 
 
 @pytest.mark.parametrize("mode", ENGINE_REGISTRY)

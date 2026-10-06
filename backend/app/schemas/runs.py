@@ -58,6 +58,8 @@ class RunRulesUpdate(BaseModel):
     blind_fork: bool | None = None
     max_lives: int | None = None
     allow_reroll: bool | None = None
+    daily: bool | None = None
+    curses: bool | None = None
     target_lead: int | None = None
     sudden_death_enabled: bool | None = None
     steal_enabled: bool | None = None

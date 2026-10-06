@@ -203,8 +203,12 @@ def test_a_run_without_the_toggle_has_no_board_and_forged_state_is_dropped(clien
     assert "active_bounties" not in forged["rules_config"]
 
 
-def test_invalid_and_unsupported_boards_are_refused(client):
+def test_invalid_and_unsupported_boards_are_refused(client, db_engine):
     assert make_run(client, bounty_board="yes").status_code == 422
+    with Session(db_engine) as session:
+        session.add(CachedMovie(tmdb_id=900, title="Tier evidence", runtime=120, popularity=10,
+                                release_date="1990-01-01", status="Released"))
+        session.commit()
     assert make_run(client, "rabbit_hole", bounty_board=True).status_code == 201
     assert make_run(client, "march_madness", bounty_board=True).status_code == 422
 

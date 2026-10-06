@@ -35,6 +35,12 @@ SERVER_OWNED_RULES = (
     "tunnel_distance",
     "tier_override",
     "lives_remaining",
+    "rh_rules_version",
+    "rh_seed",
+    "tier_deck",
+    "relics",
+    "reroll_tokens",
+    "curse_skip",
     # Built by the March Madness / Method Actor / Auteur Marathon / Regional Deep Dive engines
     # when the run is created.
     "bracket",

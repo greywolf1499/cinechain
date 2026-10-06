@@ -57,10 +57,18 @@ export interface RulesConfig {
 	lives_remaining?: number;
 	max_lives?: number;
 	allow_reroll?: boolean;
+	rh_rules_version?: number;
+	rh_seed?: number;
+	tier_deck?: RabbitDeckTier[];
+	daily?: boolean;
+	curses?: boolean;
+	relics?: { skip_curse: number };
+	reroll_tokens?: number;
+	curse_skip?: number;
 	/** The Rabbit Hole: optional depth at which escaping completes the run. */
 	escape_depth?: number | null;
 	/** Server-owned one-depth Rabbit Hole tier override. */
-	tier_override?: { depth: number; tier: number };
+	tier_override?: { depth: number; tier?: number; predicate?: RabbitPredicate };
 	/** Canon-Only Island: the CuratedList every film must belong to. */
 	allowed_curated_list_id?: string;
 	/** Decade Sieve: the decade start (e.g. 1970) every film must fall in. */
@@ -591,6 +599,30 @@ export interface RabbitHoleState {
 	upcoming_tier_warning: string | null;
 	dead_end: boolean;
 	tier_override: number | null;
+	curses: RabbitPredicate[];
+	curse_skipped: boolean;
+	relics: { skip_curse?: number };
+	reroll_tokens: number;
+	daily: boolean;
+}
+
+export interface RabbitPredicate {
+	predicate_id: string;
+	params: Record<string, number>;
+	name: string;
+	rule: string;
+	difficulty: number;
+}
+
+export interface RabbitDeckTier {
+	number: number;
+	name: string;
+	rule: string;
+	start_depth: number;
+	predicate_id?: string;
+	params?: Record<string, number>;
+	difficulty?: number;
+	curses: RabbitPredicate[];
 }
 
 export interface ValidationResult {

@@ -499,11 +499,15 @@ semantic game tags grounded in genres and measurable confidence.
 |---|---|---|
 | 1 | `backend/app/engines/rabbit_hole.py` | New runs get `rh_rules_version = 2`, `rh_seed` (server-generated int) and `tier_deck` (Tier 1 Freefall, then 4–6 predicates drawn by `random.Random(rh_seed)`, ordered by `difficulty`, with jittered params: Retro 1980/1990/2000, Micro-Clock 90/100/110, …). Each draw must pass `feasibility.cache_pass_rate ≥ 0.03`. `tier_for_depth`, `compliance` and `violation_reason` read the deck; **v1 runs keep `TIERS`**. |
 | 2 | curses (input `curses: true`, "Hard mode") | From Tier 4, the previous tier's predicate persists. The combined pass-rate must be ≥ 0.01, else the curse is dropped for that tier. |
-| 3 | relics | At each tier boundary the server grants one of +1 life (capped), a free re-roll token or "skip one curse" (`relics`, server-owned). Stamp `transition_metadata["relic_awarded"]` (server-owned) so undo reverses it. |
+| 3 | relics | At each tier boundary the server grants one of +1 life (capped), a free re-roll token or "skip one curse" (`relics`, server-owned). Only offer spendable reward kinds. Stamp `transition_metadata["relic_awarded"]` and the pre-step `rh_resources_before` snapshot (both server-owned) so undo reverses the award, even after it has been spent. Reward choice is deterministic by seed and boundary depth. |
 | 4 | `routes_runs.reroll_rabbit_hole_tier` | Deterministic `random.Random(f"{rh_seed}:{depth}")`. Exclude predicates that are infeasible for the current frontier's pool. Spend a free re-roll token before a life. |
-| 5 | Daily Dive (input `daily: true`) | `rh_seed = int(sha256(date.isoformat()))`, the same for every household that day. |
-| 6 | server-owned | `rh_seed`, `tier_deck`, `relics`, `rh_rules_version`, `reroll_tokens` → `SERVER_OWNED_RULES`; `relic_awarded` → `SERVER_OWNED_METADATA`. |
+| 5 | Daily Dive (input `daily: true`) | Derive `rh_seed` from the first six SHA-256 bytes of the UTC ISO date: the same 48-bit, JavaScript-safe integer for every household that day. Decks are identical for identical cache/rules; different caches may deal different feasible tiers. Daily/Hard-mode choices are creation-only. |
+| 6 | server-owned | `rh_seed`, `tier_deck`, `relics`, `rh_rules_version`, `reroll_tokens`, `curse_skip` → `SERVER_OWNED_RULES`; `relic_awarded`, `rh_resources_before` → `SERVER_OWNED_METADATA`. |
 | 7 | Frontend `RabbitHoleHud.tsx`, `lib/rabbitHole.ts`, `RabbitHoleGameOver.tsx` | Render the deck's tiers (names and params), curse chips, the relic inventory and a "Daily Dive" badge. The Pick Next tier badge is unchanged. |
+
+**Implementation clarifications:** Creation also checks reality/min-runtime/overlay-eligible evidence, never silently deals an unproven tier, and hydrates a chosen seed before preparation. `POST /runs/{id}/rabbit-hole/skip-curse` deliberately spends one relic to suspend the newest curse for one hop; the primary predicate remains enforced. Re-roll feasibility includes the active curses. Neither resource action can change a pending Blind Fork.
+
+**Completed:** S11 implemented and validated; the approved S0–S11 programme is concluded. Full isolated backend gate: 1293 passed, 1 intentional legacy xfail; final focused gate: 259 passed. Ruff and TypeScript/Vite build passed. Provider-isolated browser acceptance verified creation/persistence, parameterized decks, curses/relic actions, boundary reward undo, legacy display, dynamic Game Over and mobile bounds. No new migrations, dependencies, infrastructure or models.
 
 **Tests**: `tests/test_rabbit_hole.py`
 - the same seed gives the same deck;

@@ -1,6 +1,6 @@
 import { Skull } from "lucide-react";
-import { rabbitSummary } from "../lib/rabbitHole";
-import { Lives } from "./RabbitHoleHud";
+import { rabbitSummary, rabbitTiers } from "../lib/rabbitHole";
+import { Lives, RabbitInventory } from "./RabbitHoleHud";
 import type { RulesConfig, RunStep } from "../types/api";
 
 /** "Run Terminated": the Rabbit Hole's game over screen. */
@@ -13,10 +13,10 @@ export default function RabbitHoleGameOver({
   rules: RulesConfig;
   reason: string | null;
 }) {
-  const summary = rabbitSummary(steps);
+  const summary = rabbitSummary(steps, rules);
   const stats = [
     { label: "Max Depth Reached", value: summary.maxDepth },
-    { label: "Tiers Conquered", value: `${summary.tiersConquered} / 5` },
+    { label: "Tiers Conquered", value: `${summary.tiersConquered} / ${rabbitTiers(rules).length}` },
     { label: "Total Movies Watched", value: summary.moviesWatched },
   ];
   return (
@@ -41,6 +41,7 @@ export default function RabbitHoleGameOver({
       <p className="mt-5 text-xs text-zinc-500">
         Deepest tier: {summary.tierReached.number} - {summary.tierReached.name}
       </p>
+      <div className="mt-4 text-left"><RabbitInventory rules={rules} depth={steps.length} /></div>
     </section>
   );
 }

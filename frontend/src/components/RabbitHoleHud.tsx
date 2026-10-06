@@ -1,6 +1,7 @@
 import { cn } from "../lib/cn";
-import { rabbitHud } from "../lib/rabbitHole";
-import { useRabbitHoleReroll, useRunConstraint, useUpdateRun } from "../lib/queries";
+import { ApiError } from "../lib/api";
+import { rabbitHud, rabbitTiers } from "../lib/rabbitHole";
+import { useRabbitHoleReroll, useRabbitHoleSkipCurse, useRunConstraint, useUpdateRun } from "../lib/queries";
 import type { RulesConfig } from "../types/api";
 
 const TIER_STYLES = [
@@ -10,6 +11,32 @@ const TIER_STYLES = [
   "border-fuchsia-500/50 bg-fuchsia-500/10 text-fuchsia-300",
   "border-red-500/60 bg-red-500/10 text-red-300",
 ];
+
+export function RabbitInventory({ rules, depth }: { rules: RulesConfig; depth: number }) {
+  if (rules.rh_rules_version !== 2) return null;
+  const hud = rabbitHud(rules, depth);
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex flex-wrap gap-2">
+        {rules.daily && <span className="rounded bg-sky-500/15 px-2 py-1 text-sky-200">📅 Daily Dive · shared UTC seed</span>}
+        <span className="rounded bg-amber-500/10 px-2 py-1 text-amber-200">🎲 {rules.reroll_tokens ?? 0} free re-rolls</span>
+        <span className="rounded bg-violet-500/10 px-2 py-1 text-violet-200">🛡️ {rules.relics?.skip_curse ?? 0} skip-curse relics</span>
+        {rules.curse_skip === depth && <span className="text-violet-200">Newest curse skipped for this hop</span>}
+        {hud.tier.curses?.map((curse, index) =>
+          <span key={`${curse.predicate_id}:${index}`} className="rounded border border-red-500/30 px-2 py-1 text-red-200">☠️ Curse: {curse.rule}</span>)}
+      </div>
+      <details className="rounded-md border border-app-border p-2 text-zinc-400">
+        <summary className="cursor-pointer">Procedural deck · {rabbitTiers(rules).length} tiers</summary>
+        <ol className="mt-2 space-y-1">
+          {rabbitTiers(rules).map((tier) =>
+            <li key={tier.number}>Depth {tier.startDepth} · {tier.name}: {tier.rule}
+              {tier.curses?.map((curse, index) => <span key={index} className="ml-2 text-red-300">+ {curse.rule}</span>)}
+            </li>)}
+        </ol>
+      </details>
+    </div>
+  );
+}
 
 /** Hearts: lit while a life remains, a black heart once it is lost. */
 export function Lives({ lives, maxLives, className }: { lives: number; maxLives: number; className?: string }) {
@@ -50,9 +77,10 @@ export default function RabbitHoleHud({
   onSearchManually: () => void;
 }) {
   const hud = rabbitHud(rules, depth);
-  const style = TIER_STYLES[hud.tier.number - 1];
+  const style = TIER_STYLES[Math.min(hud.tier.number - 1, TIER_STYLES.length - 1)];
   const { data: constraint } = useRunConstraint(runId);
   const reroll = useRabbitHoleReroll(runId);
+  const skipCurse = useRabbitHoleSkipCurse(runId);
   const forfeit = useUpdateRun(runId);
   const deadEnd = constraint?.rabbit_hole?.dead_end === true;
   return (
@@ -71,19 +99,32 @@ export default function RabbitHoleHud({
         </span>
         <Lives lives={hud.lives} maxLives={hud.maxLives} className="ml-auto" />
       </div>
-      {!finished && rules.allow_reroll !== false && hud.tier.number > 1 && hud.lives >= 2 && !constraint?.rabbit_hole?.tier_override && (
+      <RabbitInventory rules={rules} depth={depth} />
+      {!finished && (rules.relics?.skip_curse ?? 0) > 0 && (hud.tier.curses?.length ?? 0) > 0 && rules.curse_skip !== depth && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" disabled={skipCurse.isPending || reroll.isPending}
+            onClick={() => skipCurse.mutate()}
+            className="rounded-md border border-violet-500/40 px-3 py-1.5 text-xs text-violet-200 disabled:opacity-60">
+            {skipCurse.isPending ? "Skipping…" : "🛡️ Skip newest curse (one hop)"}
+          </button>
+          {skipCurse.isError && <p role="alert" className="text-xs text-amber-300">
+            {skipCurse.error instanceof ApiError ? skipCurse.error.message : "Could not skip this curse. Try again."}
+          </p>}
+        </div>
+      )}
+      {!finished && rules.allow_reroll !== false && hud.tier.number > 1 && (hud.lives >= 2 || (rules.reroll_tokens ?? 0) > 0) && !hud.tierOverride && (
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            disabled={reroll.isPending}
+            disabled={reroll.isPending || skipCurse.isPending}
             onClick={() => reroll.mutate()}
             className="rounded-md border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-1.5 font-mono text-xs font-semibold text-fuchsia-200 transition-colors hover:bg-fuchsia-500/20 disabled:opacity-60"
           >
-            {reroll.isPending ? "Re-rolling…" : "🎲 Re-roll tier (−1 ❤️)"}
+            {reroll.isPending ? "Re-rolling…" : (rules.reroll_tokens ?? 0) > 0 ? "🎲 Re-roll tier (free relic)" : "🎲 Re-roll tier (−1 ❤️)"}
           </button>
           {reroll.isError && (
             <span role="alert" className="text-xs text-amber-300">
-              Could not re-roll this tier. Refresh and try again.
+              {reroll.error instanceof ApiError ? reroll.error.message : "Could not re-roll this tier. Refresh and try again."}
             </span>
           )}
         </div>

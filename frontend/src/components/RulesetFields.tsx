@@ -35,7 +35,7 @@ export default function RulesetFields({
     castRules || !["no_consecutive_actor", "max_cast_order"].includes(field.key),
   );
   const active = engine.presets.find((preset) => preset.id === value.preset);
-  const immutable = (field: RuleField) => editing && ["track_length", "max_lives"].includes(field.key);
+  const immutable = (field: RuleField) => editing && ["track_length", "max_lives", "daily", "curses"].includes(field.key);
   function update(key: keyof RulesConfig, next: RuleValue) {
     onChange({ ...value, [key]: next, preset: "custom" });
   }

@@ -21,13 +21,20 @@ kept on the instance for the checks the shared pipeline calls.
 
 from __future__ import annotations
 
+import random
+import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
+from hashlib import sha256
 from typing import ClassVar
 
+from sqlmodel import Session
+
+from app.engines.base import RunSetupError
 from app.engines.cinechain import CineChainEngine
 from app.engines.conditions import RunOutcome
-from app.engines.predicates import Predicate, facts_of, predicate
+from app.engines.predicates import MovieFacts, Predicate, facts_of, predicate
 from app.engines.rulebook import RuleSection
 from app.models.cache import CachedMovie
 from app.models.run import RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, Run, RunStep
@@ -40,8 +47,10 @@ from app.schemas.engine import (
     RuleField,
     ValidationResult,
 )
-from app.services.movie_filters import rating_of
+from app.services import feasibility
+from app.services.movie_filters import is_reality_eligible, rating_of
 from app.utils.dates import parse_release_year
+from app.utils.ids import utcnow
 
 RABBIT_HOLE = "rabbit_hole"
 LIVES_KEY = "lives_remaining"
@@ -56,6 +65,9 @@ TIER_OVERRIDE_KEY = "tier_override"
 ESCAPE_DEPTH_KEY = "escape_depth"
 MIN_ESCAPE_DEPTH = 25
 MAX_ESCAPE_DEPTH = 60
+RH_VERSION_KEY = "rh_rules_version"
+RH_SEED_KEY = "rh_seed"
+RESOURCE_KEYS = (LIVES_KEY, "relics", "reroll_tokens", TIER_OVERRIDE_KEY, "curse_skip")
 
 
 @dataclass(frozen=True)
@@ -65,6 +77,8 @@ class Tier:
     rule: str  # short label for badges and warnings
     start_depth: int
     predicate: Predicate | None = None
+    curses: tuple[Predicate, ...] = ()
+    procedural: bool = False
 
 
 TIERS = (
@@ -75,10 +89,140 @@ TIERS = (
     Tier(5, "The B-Movie Abyss", "Rated under 6.0", 20, predicate("rating_lt", value=B_MOVIE_RATING)),
 )
 
+def procedural(rules: dict | None) -> bool:
+    return (rules or {}).get(RH_VERSION_KEY) == 2
+
+
+def daily_seed(day: date) -> int:
+    # Keep the shared seed exactly representable by JavaScript.
+    return int.from_bytes(sha256(day.isoformat().encode("ascii")).digest()[:6], "big")
+
+
+def tier_options() -> list[Predicate]:
+    return [
+        *(predicate("year_lt", value=value) for value in (1980, 1990, 2000)),
+        predicate("non_english"),
+        *(predicate("runtime_lt", value=value) for value in (90, 100, 110)),
+        *(predicate("rating_lt", value=value) for value in (5, 6, 7)),
+        *(predicate("popularity_lt", value=value) for value in (15, 30, 50)),
+        *(predicate("runtime_ge", value=value) for value in (110, 140, 150)),
+        predicate("non_us_non_english"),
+    ]
+
+
+def predicate_data(test: Predicate) -> dict:
+    names = {
+        "year_lt": "The Retro Lock", "non_english": "Tower of Babel",
+        "runtime_lt": "The Micro-Clock", "rating_lt": "The B-Movie Abyss",
+        "popularity_lt": "The Hidden Depths", "runtime_ge": "The Long Haul",
+        "non_us_non_english": "Beyond the Border",
+    }
+    value = test.params.get("value")
+    rule = f"{test.label} {value:g}" if value is not None else test.label
+    if test.id.startswith("runtime"):
+        rule += " mins"
+    return {"predicate_id": test.id, "params": test.params, "name": names[test.id],
+            "rule": rule, "difficulty": test.difficulty}
+
+
+def test_from_data(data: dict) -> Predicate:
+    return predicate(data["predicate_id"], **data["params"])
+
+
+@dataclass(frozen=True)
+class TierPredicates:
+    tests: tuple[Predicate, ...]
+    id = "rabbit_tier"
+    label = "Rabbit Hole tier and curses"
+    emoji = ""
+    difficulty = 3
+    @property
+    def params(self) -> dict[str, float]:
+        return {}
+
+    @property
+    def needs(self) -> frozenset[str]:
+        return frozenset().union(*(test.needs for test in self.tests))
+
+    @property
+    def ranges(self) -> dict[str, tuple[float | None, float | None]]:
+        bounds: dict[str, tuple[float | None, float | None]] = {}
+        for test in self.tests:
+            for field, (low, high) in test.ranges.items():
+                old_low, old_high = bounds.get(field, (None, None))
+                lows = [value for value in (low, old_low) if value is not None]
+                highs = [value for value in (high, old_high) if value is not None]
+                bounds[field] = (max(lows) if lows else None, min(highs) if highs else None)
+        return bounds
+
+    def check(self, movie: CachedMovie | None, facts: MovieFacts) -> bool | None:
+        results = [test.check(movie, facts) for test in self.tests]
+        return False if False in results else None if None in results else True
+
+
+def tier_tests(tier: Tier) -> TierPredicates:
+    return TierPredicates(tuple(test for test in (tier.predicate, *tier.curses) if test is not None))
+
+
+def draw_deck(
+    session: Session, seed: int, curses: bool = False, eligible_ids: Sequence[int] | None = None,
+) -> list[dict]:
+    rng = random.Random(seed)
+    options = [test for test in tier_options()
+               if (feasibility.cache_pass_rate(session, test) or 0) >= 0.03
+               and (eligible_ids is None or (feasibility.pass_rate(session, test, eligible_ids) or 0) >= 0.03)]
+    if len(options) < 4:
+        raise RunSetupError("Rabbit Hole needs cached movie evidence for at least four feasible tier rules. "
+                            "Choose a seed film or browse more films first.")
+    rng.shuffle(options)
+    # Prefer different concepts before reusing a concept with another parameter.
+    unique: list[Predicate] = []
+    repeats: list[Predicate] = []
+    for test in options:
+        (repeats if any(other.id == test.id for other in unique) else unique).append(test)
+    chosen = (unique + repeats)[:rng.randint(4, min(6, len(options)))]
+    chosen.sort(key=lambda test: test.difficulty)
+    deck = [{"number": 1, "name": "Freefall", "rule": "No extra constraints",
+             "start_depth": 0, "curses": []}]
+    for index, test in enumerate(chosen, start=1):
+        inherited: list[dict] = []
+        if curses and index >= 3:
+            previous = deck[-1]
+            for curse in [*previous["curses"], {k: previous[k] for k in predicate_data(test)}]:
+                combined = TierPredicates((test, *(test_from_data(entry) for entry in [*inherited, curse])))
+                if ((feasibility.cache_pass_rate(session, combined) or 0) >= 0.01
+                        and (eligible_ids is None
+                             or (feasibility.pass_rate(session, combined, eligible_ids) or 0) >= 0.01)):
+                    inherited.append(curse)
+        deck.append({**predicate_data(test), "number": index + 1,
+                     "start_depth": index * 5, "curses": inherited})
+    return deck
+
+
+def tiers_of(rules: dict | None) -> tuple[Tier, ...]:
+    if not procedural(rules):
+        return TIERS
+    return tuple(Tier(entry["number"], entry["name"], entry["rule"], entry["start_depth"],
+                      test_from_data(entry) if entry.get("predicate_id") else None,
+                      tuple(test_from_data(curse) for curse in entry["curses"]), True)
+                 for entry in (rules or {})["tier_deck"])
+
 
 def tier_for_depth(depth: int, rules: dict | None = None) -> Tier:
     """The tier governing the film that would become step `depth + 1`."""
     override = (rules or {}).get(TIER_OVERRIDE_KEY)
+    tiers = tiers_of(rules)
+    scheduled = next(t for t in reversed(tiers) if depth >= t.start_depth)
+    if procedural(rules):
+        tier = scheduled
+        if isinstance(override, dict) and override.get("depth") == depth:
+            entry = override["predicate"]
+            tier = Tier(scheduled.number, entry["name"], entry["rule"], scheduled.start_depth,
+                        test_from_data(entry), scheduled.curses, True)
+        if (rules or {}).get("curse_skip") == depth:
+            tier = Tier(tier.number, tier.name, tier.rule, tier.start_depth,
+                        tier.predicate, tier.curses[:-1], True)
+        return tier
     if (
         isinstance(override, dict)
         and override.get("depth") == depth
@@ -88,11 +232,12 @@ def tier_for_depth(depth: int, rules: dict | None = None) -> Tier:
         and 2 <= override["tier"] <= len(TIERS)
     ):
         return TIERS[override["tier"] - 1]
-    return next(t for t in reversed(TIERS) if depth >= t.start_depth)
+    return scheduled
 
 
-def next_tier_of(tier: Tier) -> Tier | None:
-    return TIERS[tier.number] if tier.number < len(TIERS) else None
+def next_tier_of(tier: Tier, rules: dict | None = None) -> Tier | None:
+    tiers = tiers_of(rules)
+    return tiers[tier.number] if tier.number < len(tiers) else None
 
 
 def lives_of(rules: dict | None) -> tuple[int, int]:
@@ -109,10 +254,11 @@ def lives_of(rules: dict | None) -> tuple[int, int]:
 
 def tier_state(depth: int, rules: dict | None) -> RabbitHoleState:
     tier = tier_for_depth(depth, rules)
-    scheduled_tier = tier_for_depth(depth)
-    upcoming = next_tier_of(tier)
+    scheduled_tier = tier_for_depth(depth, {k: v for k, v in (rules or {}).items()
+                                          if k not in (TIER_OVERRIDE_KEY, "curse_skip")})
+    upcoming = next_tier_of(scheduled_tier, rules)
     if tier.number != scheduled_tier.number:
-        upcoming = next_tier_of(scheduled_tier)
+        upcoming = next_tier_of(scheduled_tier, rules)
     remaining, max_lives = lives_of(rules)
     state = RabbitHoleState(
         depth=depth,
@@ -121,7 +267,12 @@ def tier_state(depth: int, rules: dict | None) -> RabbitHoleState:
         tier_rule=tier.rule,
         lives_remaining=remaining,
         max_lives=max_lives,
-        tier_override=tier.number if tier.number != scheduled_tier.number else None,
+        tier_override=tier.number if tier != scheduled_tier and (rules or {}).get(TIER_OVERRIDE_KEY) else None,
+        curses=[predicate_data(test) for test in tier.curses],
+        curse_skipped=(rules or {}).get("curse_skip") == depth,
+        reroll_tokens=(rules or {}).get("reroll_tokens", 0),
+        relics=(rules or {}).get("relics", {}),
+        daily=(rules or {}).get("daily", False),
     )
     if upcoming is not None:
         away = upcoming.start_depth - depth
@@ -137,14 +288,18 @@ def tier_state(depth: int, rules: dict | None) -> RabbitHoleState:
 
 def compliance(session, tier: Tier, row: CachedMovie) -> bool | None:
     """Does `row` satisfy the tier's rule? None = the film's data can't tell (yet)."""
-    if tier.predicate is None:
-        return True
-    rating = rating_of(session, row) if "rating" in tier.predicate.needs else None
-    return tier.predicate.check(row, facts_of(row, [], rating))
+    tests = tier_tests(tier)
+    rating = rating_of(session, row) if "rating" in tests.needs else None
+    return tests.check(row, facts_of(row, [], rating))
 
 
 def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
     prefix = f"Tier {tier.number} ({tier.name}): "
+    if tier.procedural:
+        facts = facts_of(row, [], rating_of(session, row))
+        failed = [predicate_data(test)["rule"] for test in tier_tests(tier).tests
+                  if test.check(row, facts) is False]
+        return f"{prefix}{row.title} must satisfy: {', '.join(failed)}"
     if tier.number == 2:
         return f"{prefix}{row.title} was released in {parse_release_year(row.release_date)} - it must be before {RETRO_CUTOFF_YEAR}"
     if tier.number == 3:
@@ -166,7 +321,7 @@ class RabbitHoleEngine(CineChainEngine):
         bounds = super().bounty_bounds(rules, history)
         tier = tier_for_depth(len(history), rules)
         if tier.predicate:
-            for field, (low, high) in ranges_of(tier.predicate).items():
+            for field, (low, high) in ranges_of(tier_tests(tier)).items():
                 previous_low, previous_high = bounds.get(field, (None, None))
                 lows = [v for v in (low, previous_low) if v is not None]
                 highs = [v for v in (high, previous_high) if v is not None]
@@ -184,14 +339,17 @@ class RabbitHoleEngine(CineChainEngine):
         RuleField(key="max_lives", kind="int", label="Starting lives",
                   min=1, max=MAX_LIVES_LIMIT, default=3),
         RuleField(key="allow_reroll", kind="bool", label="Allow tier re-rolls", default=True),
+        RuleField(key="curses", kind="bool", label="Hard mode: persistent curses", default=False),
+        RuleField(key="daily", kind="bool", label="Daily Dive", default=False,
+                  help="Use today's shared UTC seed; feasible tiers still depend on your movie cache."),
     ]
     presets: ClassVar[list[Preset]] = [
         Preset(id="tourist", label="Tourist", blurb="Five lives and tier re-rolls.",
                values={"max_lives": 5, "allow_reroll": True}),
         Preset(id="spelunker", label="Spelunker", blurb="Three lives for a balanced descent.",
                values={"max_lives": 3, "allow_reroll": True}),
-        Preset(id="ironman", label="Ironman", blurb="One life. No tier re-rolls.",
-               values={"max_lives": 1, "allow_reroll": False}),
+        Preset(id="ironman", label="Ironman", blurb="One life, persistent curses. No tier re-rolls.",
+               values={"max_lives": 1, "allow_reroll": False, "curses": True}),
     ]
     default_preset = "spelunker"
     discovery_filters: ClassVar[list[FilterSpec]] = [
@@ -203,8 +361,9 @@ class RabbitHoleEngine(CineChainEngine):
     tags: ClassVar[list[str]] = ["Shared cast", "3 lives", "Rogue-like"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Survive deeper into the chain; {escape_goal}",
-        ["Link a film and satisfy the current tier; scheduled restrictions are {tier_schedule}.",
-         "Forcing a soft link or tier violation costs one life; inspect the HUD for any active tier re-roll."],
+        ["Link a film and satisfy the current tier shown in the HUD. {tier_schedule}",
+         "Forcing a soft link or tier violation costs one life; inspect the HUD for any active tier re-roll.",
+         "{procedural_rules}"],
         ["Start with {max_lives} lives; {lives_remaining} remain. Legal moves cost no life.", "{win_goal}"],
         ["At zero lives, a dead end or surrender ends the run as failed.", "{fail_goal}"],
         ["Your current pick should leave a filmography suited to the next tier.",
@@ -218,15 +377,27 @@ class RabbitHoleEngine(CineChainEngine):
         return {
             **super().rulebook_values(rules), "max_lives": maximum, "lives_remaining": remaining,
             "escape_goal": f"escape at depth {escape}." if escape else "no escape depth is configured.",
-            "tier_schedule": "; ".join(f"depth {tier.start_depth}: {tier.rule}" for tier in TIERS),
+            "tier_schedule": (
+                "This run's procedural deck: " if procedural(rules) else "Legacy v1 schedule: "
+            ) + "; ".join(f"depth {tier.start_depth}: {tier.rule}" for tier in tiers_of(rules)),
+            "procedural_rules": (
+                "This seeded deck changes every five films. Hard-mode curses persist only when feasible. "
+                "Tier boundaries grant a capped life, free re-roll or skip-curse relic. "
+                "Re-rolls prefer tokens to lives; Skip curse suspends the newest curse for one hop. "
+                "Undo restores the step's resources."
+                if procedural(rules) else (
+                    "New runs instead deal a seeded deck of 5-7 feasible tiers, earn relics at boundaries, "
+                    "and can enable persistent Hard-mode curses or a shared UTC Daily Dive. "
+                    "Legacy v1 runs keep their original five-tier schedule without relics."
+                )
+            ),
         }
     game_type = RABBIT_HOLE
     supports_bounty_board = True
     display_name = "The Rabbit Hole"
     description = (
-        "Survive the descent: classic cast links, but every five films a nastier rule kicks in "
-        "(pre-2000, non-English, under 100 minutes, B-movies). Break a rule and it costs a life - "
-        "you have three."
+        "Survive a seeded deck of feasible tier rules, earn relics every five films, and opt "
+        "into persistent curses or a shared Daily Dive. Breaking a rule costs a life."
     )
     uses_lives: ClassVar[bool] = True
 
@@ -262,6 +433,17 @@ class RabbitHoleEngine(CineChainEngine):
         # A new run always starts on full lives, whatever the client sent.
         return {**rules, MAX_LIVES_KEY: max_lives, LIVES_KEY: max_lives}
 
+    async def prepare_run(self, rules: dict, user_id: str) -> dict:
+        seed = daily_seed(utcnow().date()) if rules.get("daily") else secrets.randbits(48)
+        evidence = feasibility.evidence_for(self.session)
+        bounds = super().bounty_bounds(rules, [])
+        eligible = [movie_id for movie_id, row in evidence.movies.items()
+                    if is_reality_eligible(row) and feasibility.within(evidence.facts[movie_id], bounds)
+                    and super(RabbitHoleEngine, self).bounty_pool_allowed(row, rules, [])]
+        return {**rules, RH_VERSION_KEY: 2, RH_SEED_KEY: seed,
+                "tier_deck": draw_deck(self.session, seed, rules.get("curses", False), eligible),
+                "relics": {"skip_curse": 0}, "reroll_tokens": 0}
+
     def award_bounty(
         self,
         rules: dict,
@@ -283,6 +465,34 @@ class RabbitHoleEngine(CineChainEngine):
         depth = override.get("depth") if isinstance(override, dict) else None
         if isinstance(depth, int) and not isinstance(depth, bool) and len(steps) > depth:
             rules.pop(TIER_OVERRIDE_KEY, None)
+            run.rules_config = rules
+        if procedural(rules):
+            if rules.get("curse_skip", len(steps)) < len(steps):
+                rules.pop("curse_skip", None)
+            if (steps and "rh_resources_before" in (steps[-1].transition_metadata or {})
+                    and len(steps) in {tier.start_depth for tier in tiers_of(rules)[1:]}):
+                step = steps[-1]
+                if not (step.transition_metadata or {}).get("relic_awarded"):
+                    rewards = ["life"]
+                    if rules.get("allow_reroll", True):
+                        rewards.append("reroll")
+                    if rules.get("curses"):
+                        rewards.append("skip_curse")
+                    kind = random.Random(f"{rules[RH_SEED_KEY]}:relic:{len(steps)}").choice(rewards)
+                    lives, maximum = lives_of(rules)
+                    amount = 1
+                    if kind == "life":
+                        amount = int(lives < maximum)
+                        rules[LIVES_KEY] = min(maximum, lives + 1)
+                    elif kind == "reroll":
+                        rules["reroll_tokens"] = rules.get("reroll_tokens", 0) + 1
+                    else:
+                        rules["relics"] = {**rules["relics"],
+                                           "skip_curse": rules["relics"].get("skip_curse", 0) + 1}
+                    step.transition_metadata = {**(step.transition_metadata or {}),
+                                                "relic_awarded": {"kind": kind, "amount": amount,
+                                                                  "depth": len(steps)}}
+                    self.session.add(step)
             run.rules_config = rules
 
     def evaluate_run_outcome(self, run: Run, steps: list[RunStep]) -> RunOutcome | None:

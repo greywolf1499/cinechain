@@ -651,7 +651,18 @@ export function useRabbitHoleReroll(runId: string) {
 		mutationFn: () => api.post<RunDetail>(`/runs/${runId}/rabbit-hole/reroll`),
 		onSuccess: (run) => {
 			queryClient.setQueryData(queryKeys.run(runId), run);
-			queryClient.invalidateQueries({ queryKey: [...queryKeys.run(runId), "constraint"] });
+			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+		},
+	});
+}
+
+export function useRabbitHoleSkipCurse(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => api.post<RunDetail>(`/runs/${runId}/rabbit-hole/skip-curse`),
+		onSuccess: (run) => {
+			queryClient.setQueryData(queryKeys.run(runId), run);
+			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 		},
 	});
 }

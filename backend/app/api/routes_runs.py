@@ -242,6 +242,8 @@ SERVER_OWNED_METADATA = (
     "tug_team",
     "seed",
     "life_lost",
+    "relic_awarded",
+    "rh_resources_before",
     "bounty_life_awarded",
     # Bounty Board awards and Rotten Tomatoes Split settlements: a client could mint wildcards/points.
     "completed_bounty",
@@ -750,6 +752,9 @@ async def create_run(
                 detail="A second seed film is only for Meet in the Middle runs",
             )
         rules_config = engine.prepare_rules_config(rules_config)
+        if isinstance(engine, RabbitHoleEngine) and payload.seed_movie_id is not None:
+            await cache_repo.get_movie(session, tmdb, payload.seed_movie_id, require_detail=True)
+            feasibility.invalidate(session)
         try:
             rules_config = await engine.prepare_run(rules_config, current_user.id)
         except RunSetupError as exc:
@@ -927,7 +932,7 @@ def update_run_rules(
         }
     )
     merged = {**(run.rules_config or {}), **update}
-    for key in ("track_length", "max_lives"):
+    for key in ("track_length", "max_lives", "daily", "curses"):
         if key in update and update[key] != (run.rules_config or {}).get(key):
             raise HTTPException(422, detail=f"{key} can only be chosen when creating a run")
     engine_class = ENGINE_REGISTRY.get(run.game_type)
@@ -1030,6 +1035,10 @@ async def _log_step(
         raise HTTPException(422, detail="No-contest is only available on Rotten Tomatoes Split runs")
     if payload.no_contest and payload.status != "watched":
         raise HTTPException(422, detail="Log a no-contest film as watched")
+    rh_resources = (
+        {key: run.rules_config[key] for key in rabbit_hole.RESOURCE_KEYS if key in run.rules_config}
+        if run.game_type == rabbit_hole.RABBIT_HOLE and rabbit_hole.procedural(run.rules_config) else None
+    )
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id, require_detail=True)
     if split and not payload.no_contest:
         if payload.status != "watched" or payload.household_score is None:
@@ -1074,6 +1083,8 @@ async def _log_step(
     )
     if extra_metadata:
         transition_metadata = {**(transition_metadata or {}), **extra_metadata}
+    if rh_resources is not None:
+        transition_metadata = {**(transition_metadata or {}), "rh_resources_before": rh_resources}
 
     watched_at = payload.watched_at if payload.status == "watched" else None
     if payload.status == "watched" and watched_at is None:
@@ -1287,6 +1298,12 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
             LIVES_KEY: lives,
         }
         run.rules_config = restored_rules
+        if rabbit_hole.procedural(run.rules_config) and "rh_resources_before" in metadata:
+            restored = {key: value for key, value in run.rules_config.items()
+                        if key not in rabbit_hole.RESOURCE_KEYS}
+            restored.update(metadata["rh_resources_before"])
+            restored[LIVES_KEY] = min(restored[rabbit_hole.MAX_LIVES_KEY], restored[LIVES_KEY])
+            run.rules_config = restored
         session.add(run)
     reopen = collided and run.status == RUN_STATUS_COMPLETED
     remaining = _run_history(session, run.id)
@@ -1926,7 +1943,7 @@ async def reroll_rabbit_hole_tier(
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
 ) -> RunDetail:
-    """Spend one life to replace the tier requirement for the next depth only."""
+    """Spend a free token, or one life, to replace the requirement for this depth."""
     if run.game_type != rabbit_hole.RABBIT_HOLE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1942,7 +1959,8 @@ async def reroll_rabbit_hole_tier(
         raise HTTPException(409, detail="Tier re-rolls are disabled for this ruleset")
     depth = len(_run_history(session, run.id))
     lives, _ = lives_of(rules)
-    if lives < 2:
+    tokens = rules.get("reroll_tokens", 0) if rabbit_hole.procedural(rules) else 0
+    if lives < 2 and tokens < 1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="At least two lives are needed to re-roll a tier",
@@ -1959,19 +1977,71 @@ async def reroll_rabbit_hole_tier(
             detail="This depth already has a re-rolled tier",
         )
 
-    current_tier = tier_for_depth(depth).number
+    current_tier = tier_for_depth(depth, rules)
     engine = get_engine(run.game_type, session, tmdb)
+    if rabbit_hole.procedural(rules):
+        _ensure_no_pending_fork(run)
     ids = await _reachable_pool(session, engine, run, off_tier=True)
+    if rabbit_hole.procedural(rules):
+        feasibility.invalidate(session)
+        alternatives = [
+            test for test in rabbit_hole.tier_options()
+            if current_tier.predicate is not None
+            and (test.id, test.params) != (current_tier.predicate.id, current_tier.predicate.params)
+            and (feasibility.pass_rate(
+                session, rabbit_hole.TierPredicates((test, *current_tier.curses)), ids,
+            ) or 0) >= 0.03
+        ]
+        if not alternatives:
+            raise HTTPException(409, detail="No feasible reachable alternative tier; no resource was spent")
+        replacement = random.Random(f"{rules[rabbit_hole.RH_SEED_KEY]}:{depth}").choice(alternatives)
+        rules[TIER_OVERRIDE_KEY] = {"depth": depth, "predicate": rabbit_hole.predicate_data(replacement)}
+        if tokens:
+            rules["reroll_tokens"] = tokens - 1
+        else:
+            rules[LIVES_KEY] = lives - 1
+        run.rules_config = rules
+        session.add(run)
+        session.commit()
+        session.refresh(run)
+        return _to_run_detail(session, run)
     evidence = feasibility.Evidence(session)
     choices = [
         tier.number for tier in rabbit_hole.TIERS
-        if tier.number > 1 and tier.number != current_tier and tier.predicate is not None
+        if tier.number > 1 and tier.number != current_tier.number and tier.predicate is not None
         and evidence.check(tier.predicate, ids).drawable
     ]
     if not choices:
         raise HTTPException(409, detail="No fair reachable alternative tier; no life was spent")
     rules[TIER_OVERRIDE_KEY] = {"depth": depth, "tier": random.choice(choices)}
     rules[LIVES_KEY] = lives - 1
+    run.rules_config = rules
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
+@router.post("/{run_id}/rabbit-hole/skip-curse", response_model=RunDetail)
+def skip_rabbit_hole_curse(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    rules = dict(_run_rules(run))
+    if run.game_type != rabbit_hole.RABBIT_HOLE or not rabbit_hole.procedural(rules):
+        raise HTTPException(400, detail="Skip-curse relics are only available on procedural Rabbit Hole runs")
+    _ensure_run_open(run)
+    _ensure_no_pending_fork(run)
+    depth = len(_run_history(session, run.id))
+    if rules.get("curse_skip") == depth:
+        raise HTTPException(409, detail="A curse is already skipped at this depth")
+    if not tier_for_depth(depth, rules).curses:
+        raise HTTPException(409, detail="No active curse to skip; no relic was spent")
+    relics = rules.get("relics", {})
+    if relics.get("skip_curse", 0) < 1:
+        raise HTTPException(409, detail="No skip-curse relics remaining")
+    rules["relics"] = {**relics, "skip_curse": relics["skip_curse"] - 1}
+    rules["curse_skip"] = depth
     run.rules_config = rules
     session.add(run)
     session.commit()

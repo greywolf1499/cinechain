@@ -156,6 +156,11 @@ class RabbitHoleState(BaseModel):
     upcoming_tier_warning: str | None = None
     dead_end: bool = False
     tier_override: int | None = None
+    curses: list[dict[str, Any]] = []
+    curse_skipped: bool = False
+    reroll_tokens: int = 0
+    relics: dict[str, int] = {}
+    daily: bool = False
 
 
 class ConstraintInfo(BaseModel):

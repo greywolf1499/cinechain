@@ -16,6 +16,7 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import update
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, col, select
 
@@ -40,6 +41,9 @@ class TaskOut(BaseModel):
     progress_data: dict[str, Any] | None
     error: str | None
     user_id: str | None
+    dedupe_key: str | None
+    cancel_requested: bool
+    link: str | None
     created_at: str
     updated_at: str
 
@@ -52,6 +56,9 @@ class TaskOut(BaseModel):
             progress_data=task.progress_data,
             error=task.error,
             user_id=task.user_id,
+            dedupe_key=task.dedupe_key,
+            cancel_requested=task.cancel_requested,
+            link=task.link,
             created_at=_iso(task.created_at),
             updated_at=_iso(task.updated_at),
         )
@@ -145,4 +152,29 @@ def get_task(
     ).first()
     if task is None:  # 404 for both "missing" and "someone else's", like runs
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return TaskOut.from_model(task)
+
+
+@router.post("/{task_id}/cancel", response_model=TaskOut)
+def cancel_task(
+    task_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TaskOut:
+    task = session.exec(
+        _visible(select(SystemTask).where(SystemTask.id == task_id), current_user)
+    ).first()
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Task not found")
+    result = session.execute(
+        update(SystemTask)
+        .where(SystemTask.id == task_id, col(SystemTask.status).in_(ACTIVE_STATUSES))
+        .values(cancel_requested=True, updated_at=utcnow())
+        .returning(SystemTask.id)
+    )
+    if result.scalar_one_or_none() is None:
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Task has already finished")
+    session.commit()
+    session.refresh(task)
     return TaskOut.from_model(task)

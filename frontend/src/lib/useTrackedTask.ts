@@ -1,66 +1,50 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api } from "./api";
-import { runTask, waitForTask, type SystemTask } from "./tasks";
+import { api } from "./api";
+import { useLiveTasks, type SystemTask } from "./tasks";
+import { useAuthStore } from "../store/authStore";
 
 const isFinished = (task: SystemTask<unknown>) => task.status === "completed" || task.status === "failed";
 
-/** Starts a task-backed endpoint and follows it with the shared polling helper.
- * With `resumeNames`, a matching task still running from an earlier visit (or tab)
- * is picked up on mount, so a reload mid-import keeps its live progress bar. */
+/** Follow the global feed; remounts resume only the requested key (or the caller's named job). */
 export function useTrackedTask<R>(options: {
 	onFinished?: (task: SystemTask<R>) => void;
 	resumeNames?: string[];
+	dedupeKey?: string;
 }) {
-	const [task, setTask] = useState<SystemTask<R> | null>(null);
+	const { data: tasks, track, streamError } = useLiveTasks();
+	const userId = useAuthStore((state) => state.user?.id);
+	const [taskId, setTaskId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
-	const controller = useRef<AbortController | null>(null);
+	const delivered = useRef(new Set<string>());
 	const onFinished = useRef(options.onFinished);
 	onFinished.current = options.onFinished;
-
-	const follow = useCallback(async (run: (signal: AbortSignal) => Promise<SystemTask<R>>) => {
-		controller.current?.abort();
-		const abort = new AbortController();
-		controller.current = abort;
+	const task = (tasks?.find((item) =>
+		!isFinished(item) && (options.dedupeKey ? item.dedupe_key === options.dedupeKey :
+			item.user_id === userId && options.resumeNames?.includes(item.name))) ??
+		tasks?.find((item) => item.id === taskId)) as SystemTask<R> | undefined;
+	useEffect(() => {
+		if (!task) return;
+		setTaskId(task.id);
+		if (isFinished(task) && !delivered.current.has(task.id)) {
+			delivered.current.add(task.id);
+			onFinished.current?.(task);
+		}
+	}, [task]);
+	const start = useCallback(async (path: string, body?: unknown) => {
+		setSubmitting(true);
 		setError(null);
 		try {
-			const finished = await run(abort.signal);
-			if (!abort.signal.aborted) onFinished.current?.(finished);
-		} catch (err) {
-			if (abort.signal.aborted) return;
-			setError(err instanceof ApiError || err instanceof Error ? err.message : "Request failed.");
+			const started = await api.post<SystemTask<R>>(path, body);
+			setTaskId(started.id);
+			track(started as SystemTask);
+			return started;
+		} catch (error) {
+			setError(error instanceof Error ? error.message : "Request failed.");
 		} finally {
-			if (!abort.signal.aborted) setSubmitting(false);
+			setSubmitting(false);
 		}
-	}, []);
-
-	const start = useCallback(
-		(path: string, body?: unknown) => {
-			setTask(null);
-			setSubmitting(true);
-			return follow((signal) => runTask<R>(path, body, setTask, signal));
-		},
-		[follow],
-	);
-
-	const resumeKey = options.resumeNames?.join(",");
-	useEffect(() => {
-		if (!resumeKey) return;
-		let cancelled = false;
-		api.get<SystemTask<R>[]>("/tasks?active=true").then((active) => {
-			const running = active.find((t) => resumeKey.split(",").includes(t.name));
-			if (running && !cancelled) {
-				setTask(running);
-				setSubmitting(true);
-				void follow((signal) => waitForTask<R>(running.id, setTask, signal));
-			}
-		}).catch(() => {});
-		return () => {
-			cancelled = true;
-		};
-	}, [resumeKey, follow]);
-
-	useEffect(() => () => controller.current?.abort(), []);
-
-	return { task, error, busy: submitting || (task !== null && !isFinished(task)), start };
+	}, [track]);
+	return { task: task ?? null, error: error ?? streamError,
+		busy: submitting || !!task && !isFinished(task), start };
 }

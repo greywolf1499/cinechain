@@ -184,3 +184,43 @@ def test_failed_scrape_is_a_failed_task_with_error_code(client, monkeypatch):
     assert task["status"] == "failed"
     assert task["error"] == "challenge"
     assert task["progress_data"]["error"]["code"] == "cloudflare_block"
+
+
+def _seed_task(client, **fields):
+    from app.models.system import SystemTask
+
+    with next(app.dependency_overrides[get_session]()) as session:
+        task = SystemTask(name="demo", **fields)
+        session.add(task)
+        session.commit()
+        return task.id
+
+
+def test_cancel_owner_and_admin_permissions(client):
+    _setup_household(client)
+    alice = client.get("/api/auth/me").json()["id"]
+    alice_task = _seed_task(client, user_id=alice, dedupe_key="alice-job", link="/lists")
+    with TestClient(app) as bob:
+        _login(bob, "bob")
+        bob_id = bob.get("/api/auth/me").json()["id"]
+        bob_task = _seed_task(bob, user_id=bob_id, status="running")
+        assert bob.post(f"/api/tasks/{alice_task}/cancel").status_code == 404
+        assert bob.post("/api/tasks/missing/cancel").status_code == 404
+        response = bob.post(f"/api/tasks/{bob_task}/cancel")
+        assert response.status_code == 200
+        assert response.json()["cancel_requested"] is True
+        assert response.json()["status"] == "running"
+    assert client.post(f"/api/tasks/{bob_task}/cancel").status_code == 200
+    own = client.post(f"/api/tasks/{alice_task}/cancel").json()
+    assert own["cancel_requested"] is True
+    assert own["link"] == "/lists" and own["dedupe_key"] == "alice-job"
+    client.post("/api/auth/logout")
+    assert client.post(f"/api/tasks/{alice_task}/cancel").status_code == 401
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_finished_task_cancel_is_conflict(client, status):
+    _setup_household(client)
+    task_id = _seed_task(client, status=status)
+    assert client.post(f"/api/tasks/{task_id}/cancel").status_code == 409
+    assert client.get(f"/api/tasks/{task_id}").json()["cancel_requested"] is False

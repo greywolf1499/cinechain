@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { BadgeCheck, Compass, Loader2, Users } from "lucide-react";
 import Breadcrumbs from "../components/Breadcrumbs";
 import CuratorAvatar from "../components/CuratorAvatar";
@@ -9,10 +9,9 @@ import EmptyState from "../components/EmptyState";
 import { SearchBox, SelectField } from "../components/ListControls";
 import PageHeading from "../components/PageHeading";
 import Pagination from "../components/Pagination";
-import Toast, { type ToastState } from "../components/Toast";
-import { ApiError } from "../lib/api";
 import { useBrowseAccounts } from "../lib/queries";
-import { describeProgress, runTask } from "../lib/tasks";
+import { describeProgress } from "../lib/tasks";
+import { useTrackedTask } from "../lib/useTrackedTask";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { useAuthStore } from "../store/authStore";
 import type { AccountKind, AccountSort } from "../types/api";
@@ -35,39 +34,17 @@ export default function CuratorsPage() {
   const [sort, setSort] = useState<AccountSort>("name");
   const [kind, setKind] = useState<AccountKind>("all");
   const [page, setPage] = useState(1);
-  const [toast, setToast] = useState<ToastState | null>(null);
-  const [discoverProgress, setDiscoverProgress] = useState<string | null>(null);
   const q = useDebouncedValue(search.trim(), 300);
 
   useEffect(() => setPage(1), [q, sort, kind]);
 
   const { data, isLoading, error } = useBrowseAccounts({ q, sort, kind, page });
 
-  const discoverHq = useMutation({
-    mutationFn: () =>
-      runTask<{ discovered: number; new: number; partial: boolean }>(
-        "/curated/accounts/discover-hq?max_pages=5",
-        undefined,
-        (task) => setDiscoverProgress(describeProgress(task, "accounts")),
-      ),
-    onSuccess: (task) => {
-      const result = task.progress_data?.result;
-      if (task.status === "failed" && !result) {
-        setToast({ type: "error", message: `HQ discovery failed: ${task.error ?? "see Tasks & Logs."}` });
-        return;
-      }
-      setToast({
-        type: "success",
-        message: result
-          ? `Found ${result.discovered} HQ accounts (${result.new} new)${result.partial ? " - partial result" : ""}.`
-          : "HQ discovery finished.",
-      });
-      queryClient.invalidateQueries({ queryKey: ["curated"] });
-    },
-    onError: (err) =>
-      setToast({ type: "error", message: err instanceof ApiError ? err.message : "HQ discovery failed." }),
-    onSettled: () => setDiscoverProgress(null),
+  const discoverHq = useTrackedTask<{ discovered: number; new: number; partial: boolean }>({
+    dedupeKey: "discover_hq:directory",
+    onFinished: () => { void queryClient.invalidateQueries({ queryKey: ["curated"] }); },
   });
+  const discoverProgress = discoverHq.busy && discoverHq.task ? describeProgress(discoverHq.task, "accounts") : null;
 
   return (
     <div>
@@ -82,11 +59,11 @@ export default function CuratorsPage() {
           {isAdmin && (
             <button
               type="button"
-              disabled={discoverHq.isPending}
-              onClick={() => discoverHq.mutate()}
+              disabled={discoverHq.busy}
+              onClick={() => void discoverHq.start("/curated/accounts/discover-hq?max_pages=5")}
               className="flex items-center gap-1.5 rounded-md border border-app-border px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {discoverHq.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Compass className="h-3.5 w-3.5" />}
+              {discoverHq.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Compass className="h-3.5 w-3.5" />}
               {discoverProgress ? `Discovering... ${discoverProgress}` : "Discover HQ Accounts"}
             </button>
           )}
@@ -139,7 +116,7 @@ export default function CuratorsPage() {
           </>
         )}
       </div>
-      <Toast toast={toast} onDismiss={() => setToast(null)} />
+      {discoverHq.error && <p role="alert" className="text-xs text-red-300">{discoverHq.error}</p>}
     </div>
   );
 }

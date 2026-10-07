@@ -7,6 +7,8 @@ import { cn } from "../lib/cn";
 import { FILM_TOAST_EVENT } from "../lib/useLogFilm";
 import Toast, { type ToastState } from "../components/Toast";
 import MovieDetailSheet from "../components/MovieDetailSheet";
+import TaskIndicator from "../components/TaskIndicator";
+import { TaskStreamProvider } from "../lib/tasks";
 
 const NAV_ITEMS = [
   { to: "/runs", label: "Runs", icon: Film },
@@ -41,7 +43,7 @@ export default function AppLayout() {
   }
 
   return (
-    <div className="min-h-screen w-full max-w-full min-w-0 bg-app-bg">
+    <TaskStreamProvider><div className="min-h-screen w-full max-w-full min-w-0 bg-app-bg">
       <MovieDetailSheet />
       <header className="sticky top-0 z-20 border-b border-app-border bg-app-bg/95 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
@@ -70,6 +72,7 @@ export default function AppLayout() {
             ))}
           </nav>
 
+          <TaskIndicator />
           <div className="hidden items-center gap-3 text-sm sm:flex">
             <span className="text-zinc-400">{user?.display_name}</span>
             <button
@@ -131,6 +134,6 @@ export default function AppLayout() {
         <Outlet />
       </main>
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-    </div>
+    </div></TaskStreamProvider>
   );
 }

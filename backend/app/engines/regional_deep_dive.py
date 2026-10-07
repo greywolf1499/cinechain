@@ -317,6 +317,8 @@ class RegionalDeepDiveEngine(TrackerEngine):
                 return_exceptions=True,
             )
             for result in results:
+                if progress:
+                    await progress({"current": hydrated, "total": len(movie_ids)})
                 if isinstance(result, DeadlineReached):
                     raise RunSetupError(
                         "Still indexing this list's films from TMDB - try again in a minute", 503

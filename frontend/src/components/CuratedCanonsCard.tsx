@@ -5,7 +5,9 @@ import { Download, Loader2, XCircle } from "lucide-react";
 import Toast, { type ToastState } from "./Toast";
 import SyncBadge from "./SyncBadge";
 import { useCuratedLists } from "../lib/queries";
-import { runTask } from "../lib/tasks";
+import { useTrackedTask } from "../lib/useTrackedTask";
+import { describeProgress } from "../lib/tasks";
+import TaskProgressBar from "./TaskProgressBar";
 import type { CuratedListSummary } from "../types/api";
 
 const linkButtonClass =
@@ -17,7 +19,6 @@ const inputClass =
 export default function CuratedCanonsCard() {
   const queryClient = useQueryClient();
   const { data: lists, isLoading } = useCuratedLists();
-  const [syncingId, setSyncingId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
 
   const [customUrl, setCustomUrl] = useState("");
@@ -48,29 +49,6 @@ export default function CuratedCanonsCard() {
     onError: () => setToast({ type: "error", message: "Failed to add custom list." }),
   });
 
-  async function handleSync(list: CuratedListSummary) {
-    setSyncingId(list.id);
-    try {
-      const task = await runTask<{ matched: number; total_films: number }>(`/curated/sync/${list.id}`);
-      const result = task.progress_data?.result;
-      if (task.status === "failed") {
-        setToast({ type: "error", message: `Sync failed: ${task.error ?? "see server logs."}` });
-      } else {
-        setToast({
-          type: "success",
-          message: result
-            ? `Synced ${result.matched}/${result.total_films} films for ${list.title}.`
-            : "Synced.",
-        });
-      }
-      queryClient.invalidateQueries({ queryKey: ["curated", "lists"] });
-    } catch {
-      setToast({ type: "error", message: "Sync failed." });
-    } finally {
-      setSyncingId(null);
-    }
-  }
-
   return (
     <div className="rounded-xl border border-app-border bg-app-surface">
       <div className="border-b border-app-border px-5 py-3 text-sm font-medium text-zinc-300">
@@ -87,42 +65,7 @@ export default function CuratedCanonsCard() {
         {lists && (
           <div className="flex flex-col gap-2">
             {lists.map((list) => (
-              <div
-                key={list.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-app-border bg-app-bg px-3 py-2.5"
-              >
-                <div className="min-w-0">
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-200">
-                    <span className="truncate">
-                      {list.badge_prefix} - {list.title}
-                    </span>
-                    <SyncBadge syncedAt={list.last_synced_at} />
-                  </p>
-                  <p className="text-[11px] text-zinc-500">
-                    {list.total_items > 0
-                      ? `${list.total_items} films synced`
-                      : "No films synced yet"}
-                  </p>
-                  {list.last_sync_error && (
-                    <p className="flex items-center gap-1 text-[11px] text-red-400">
-                      <XCircle className="h-3 w-3" /> {list.last_sync_error}
-                    </p>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  disabled={syncingId === list.id}
-                  onClick={() => handleSync(list)}
-                  className="flex shrink-0 items-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {syncingId === list.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Download className="h-3.5 w-3.5" />
-                  )}
-                  Sync
-                </button>
-              </div>
+              <CanonSyncRow list={list} key={list.id} />
             ))}
           </div>
         )}
@@ -180,4 +123,50 @@ export default function CuratedCanonsCard() {
       </div>
     </div>
   );
+}
+
+function CanonSyncRow({ list }: { list: CuratedListSummary }) {
+  const queryClient = useQueryClient();
+  const sync = useTrackedTask<{ matched: number; total_films: number }>({
+    dedupeKey: `curated_list_sync:${list.id}`,
+    onFinished: () => { void queryClient.invalidateQueries({ queryKey: ["curated"] }); },
+  });
+  return <div
+                key={list.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-app-border bg-app-bg px-3 py-2.5"
+              >
+                <div className="min-w-0">
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-200">
+                    <span className="truncate">
+                      {list.badge_prefix} - {list.title}
+                    </span>
+                    <SyncBadge syncedAt={list.last_synced_at} />
+                  </p>
+                  <p className="text-[11px] text-zinc-500">
+                    {list.total_items > 0
+                      ? `${list.total_items} films synced`
+                      : "No films synced yet"}
+                  </p>
+                  {list.last_sync_error && (
+                    <p className="flex items-center gap-1 text-[11px] text-red-400">
+                      <XCircle className="h-3 w-3" /> {list.last_sync_error}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={sync.busy}
+                  onClick={() => void sync.start(`/curated/sync/${list.id}`)}
+                  className="flex shrink-0 items-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {sync.busy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
+                  )}
+                  Sync
+                </button>
+                {sync.busy && sync.task && <div className="w-full"><TaskProgressBar task={sync.task} /><p className="text-xs text-zinc-400">{describeProgress(sync.task)}</p></div>}
+                {sync.error && <p role="alert" className="w-full text-xs text-red-300">{sync.error}</p>}
+              </div>;
 }

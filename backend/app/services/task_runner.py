@@ -47,6 +47,10 @@ TaskWork = Callable[["TaskContext"], dict[str, Any] | None | Awaitable[dict[str,
 ErrorDescriber = Callable[[Exception], dict[str, Any]]
 
 
+class TaskCancelled(Exception):
+    """Cooperative stop at a job checkpoint, never a thread interruption."""
+
+
 class TaskContext:
     """Handed to the job: report progress and open short-lived DB sessions.
 
@@ -60,6 +64,8 @@ class TaskContext:
         self._data: dict[str, Any] = dict(initial or {})
         self._last_flush = 0.0
         self._lock = threading.Lock()
+        self._last_cancel_check = float("-inf")
+        self._cancelled = False
 
     @property
     def engine(self) -> Engine:
@@ -68,8 +74,27 @@ class TaskContext:
     def session(self) -> Session:
         return Session(self._engine)
 
+    def cancelled(self, *, force: bool = False) -> bool:
+        with self._lock:
+            if not self._cancelled and (
+                force or time.monotonic() - self._last_cancel_check >= PROGRESS_FLUSH_SECONDS
+            ):
+                with self.session() as session:
+                    task = session.get(SystemTask, self.task_id)
+                    self._cancelled = task is None or task.cancel_requested
+                self._last_cancel_check = time.monotonic()
+            return self._cancelled
+
+    def check_cancelled(self, *, force: bool = False) -> None:
+        if self.cancelled(force=force):
+            raise TaskCancelled("Cancelled at a checkpoint; run it again to resume.")
+
+    async def acheck_cancelled(self) -> None:
+        await anyio.to_thread.run_sync(self.check_cancelled)
+
     def progress(self, payload: dict[str, Any]) -> None:
         """Thread-safe and throttled, so a chatty scraper can't hammer SQLite."""
+        self.check_cancelled()
         with self._lock:
             self._data["progress"] = payload
             if time.monotonic() - self._last_flush < PROGRESS_FLUSH_SECONDS:
@@ -111,6 +136,7 @@ def submit_task(
     user_id: str | None = None,
     dedupe_key: str | None = None,
     label: str | None = None,
+    link: str | None = None,
     describe_error: ErrorDescriber | None = None,
 ) -> tuple[SystemTask, bool]:
     """Creates the task row and schedules `work`; returns `(task, created)`.
@@ -133,6 +159,7 @@ def submit_task(
         status=PENDING,
         user_id=user_id,
         dedupe_key=dedupe_key,
+        link=link,
         progress_data={"label": label} if label else {},
     )
     session.add(task)
@@ -159,8 +186,12 @@ def _load_context(engine: Engine, task_id: str) -> tuple[str, TaskContext] | Non
 def _record_failure(
     ctx: TaskContext, name: str, exc: Exception, describe_error: ErrorDescriber | None
 ) -> None:
-    logger.error("Task %s (%s) failed", ctx.task_id, name, exc_info=exc)
-    described = describe_error(exc) if describe_error else {}
+    if isinstance(exc, TaskCancelled):
+        logger.info("Task %s (%s) cancelled", ctx.task_id, name)
+        described = {"code": "cancelled"}
+    else:
+        logger.error("Task %s (%s) failed", ctx.task_id, name, exc_info=exc)
+        described = describe_error(exc) if describe_error else {}
     ctx.set("error", {"code": "task_failed", "message": str(exc), **described})
     ctx.flush(status=FAILED, error=str(exc))
 
@@ -178,14 +209,24 @@ def _execute(
     if loaded is None:
         return
     name, ctx = loaded
-    with _slots:  # waits (status stays "pending") until a worker slot frees up
+    try:
+        while not _slots.acquire(timeout=PROGRESS_FLUSH_SECONDS):
+            ctx.check_cancelled(force=True)
+    except TaskCancelled as exc:
+        _record_failure(ctx, name, exc, describe_error)
+        return
+    try:
         ctx.flush(status=RUNNING)
         try:
+            ctx.check_cancelled(force=True)
             result = work(ctx)
+            ctx.check_cancelled(force=True)
         except Exception as exc:  # noqa: BLE001 - recorded on the task row, never raised into the worker
             _record_failure(ctx, name, exc, describe_error)
         else:
             _record_success(ctx, result)  # type: ignore[arg-type]
+    finally:
+        _slots.release()
 
 
 async def _execute_async(
@@ -196,12 +237,19 @@ async def _execute_async(
         return
     name, ctx = loaded
     # Poll for a slot instead of blocking a thread on the semaphore while queued.
-    while not _slots.acquire(blocking=False):
-        await asyncio.sleep(0.5)
+    try:
+        while not _slots.acquire(blocking=False):
+            await ctx.acheck_cancelled()
+            await asyncio.sleep(0.5)
+    except TaskCancelled as exc:
+        await anyio.to_thread.run_sync(_record_failure, ctx, name, exc, describe_error)
+        return
     try:
         await anyio.to_thread.run_sync(lambda: ctx.flush(status=RUNNING))
         try:
+            await anyio.to_thread.run_sync(lambda: ctx.check_cancelled(force=True))
             result = await work(ctx)  # type: ignore[misc]
+            await anyio.to_thread.run_sync(lambda: ctx.check_cancelled(force=True))
         except Exception as exc:  # noqa: BLE001 - recorded on the task row
             await anyio.to_thread.run_sync(_record_failure, ctx, name, exc, describe_error)
         else:

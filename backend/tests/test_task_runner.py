@@ -2,7 +2,9 @@
 
 import asyncio
 import time
+from contextlib import nullcontext
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from fastapi import BackgroundTasks
@@ -197,6 +199,221 @@ async def test_worker_slots_cap_concurrency(engine, monkeypatch):
 def _all_tasks(engine):
     with Session(engine) as session:
         return list(session.exec(select(SystemTask)).all())
+
+
+@pytest.mark.parametrize("async_job", [False, True])
+async def test_cancel_stops_at_checkpoint_and_keeps_progress(engine, monkeypatch, async_job):
+    monkeypatch.setattr(task_runner, "PROGRESS_FLUSH_SECONDS", 0)
+    visited = []
+
+    def item(ctx, index):
+        ctx.check_cancelled()
+        visited.append(index)
+        ctx.progress({"current": index, "total": 10})
+        if index == 2:
+            with Session(engine) as session:
+                row = session.get(SystemTask, ctx.task_id)
+                row.cancel_requested = True
+                session.add(row)
+                session.commit()
+
+    def sync_work(ctx):
+        for index in range(10):
+            item(ctx, index)
+
+    async def async_work(ctx):
+        for index in range(10):
+            item(ctx, index)
+            await asyncio.sleep(0)
+
+    background = BackgroundTasks()
+    with Session(engine) as session:
+        task, _ = task_runner.submit_task(
+            background,
+            session,
+            "demo",
+            async_work if async_job else sync_work,
+            link="/passport",
+            describe_error=lambda exc: {"code": "wrong"},
+        )
+    await background()
+    failed = _status(engine, task.id)
+    assert visited == [0, 1, 2]
+    assert failed.status == "failed"
+    assert failed.cancel_requested is True
+    assert failed.link == "/passport"
+    assert failed.progress_data["progress"]["current"] == 2
+    assert failed.progress_data["error"]["code"] == "cancelled"
+    assert "result" not in failed.progress_data
+
+
+async def test_pending_cancellation_never_runs_work(engine):
+    background = BackgroundTasks()
+    visited = []
+    with Session(engine) as session:
+        task, _ = task_runner.submit_task(
+            background, session, "demo", lambda ctx: visited.append(1)
+        )
+        task.cancel_requested = True
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+    await background()
+    assert visited == []
+    assert _status(engine, task.id).progress_data["error"]["code"] == "cancelled"
+
+
+@pytest.mark.parametrize("async_job", [False, True])
+async def test_pending_cancel_does_not_wait_for_busy_workers(engine, monkeypatch, async_job):
+    import threading
+
+    semaphore = threading.BoundedSemaphore(1)
+    semaphore.acquire()
+    monkeypatch.setattr(task_runner, "_slots", semaphore)
+    visited = []
+
+    def work(ctx):
+        visited.append(1)
+
+    async def async_work(ctx):
+        visited.append(1)
+
+    with Session(engine) as session:
+        task, _ = task_runner.submit_task(
+            BackgroundTasks(), session, "demo", async_work if async_job else work
+        )
+        task.cancel_requested = True
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+    thread = None
+    try:
+        if async_job:
+            await asyncio.wait_for(task_runner._execute_async(engine, task.id, async_work, None), 2)
+        else:
+            thread = threading.Thread(
+                target=task_runner._execute, args=(engine, task.id, work, None)
+            )
+            thread.start()
+            thread.join(timeout=2)
+            assert not thread.is_alive()
+        assert _status(engine, task.id).progress_data["error"]["code"] == "cancelled"
+        assert not visited
+    finally:
+        semaphore.release()
+        if thread:
+            thread.join(timeout=2)
+
+
+def test_cancel_polling_is_throttled_but_sticky(engine, monkeypatch):
+    monkeypatch.setattr(task_runner, "PROGRESS_FLUSH_SECONDS", 60)
+    with Session(engine) as session:
+        task = SystemTask(name="demo")
+        session.add(task)
+        session.commit()
+        ctx = task_runner.TaskContext(engine, task.id)
+        assert ctx.cancelled() is False
+        task.cancel_requested = True
+        session.add(task)
+        session.commit()
+    assert ctx.cancelled() is False
+    assert ctx.cancelled(force=True) is True
+    assert ctx.cancelled() is True
+
+
+async def test_cancelled_scrape_keeps_checkpoint_and_resumes(engine, config_dir, monkeypatch):
+    from app.services import letterboxd
+
+    monkeypatch.setattr(task_runner, "PROGRESS_FLUSH_SECONDS", 0)
+    monkeypatch.setattr(letterboxd, "new_session", lambda: nullcontext(object()))
+    monkeypatch.setattr(letterboxd, "fetch_html", lambda *args, **kwargs: "<html></html>")
+    films = [{"title": f"Film {index}", "slug": f"film-{index}"} for index in range(3)]
+    visited = []
+    cancelled_once = False
+    task_id = None
+
+    def enrich(*args, **kwargs):
+        nonlocal cancelled_once
+        entry = args[1]
+        entry["tmdb_id"] = len(visited) + 1
+        visited.append(entry["slug"])
+        if not cancelled_once:
+            cancelled_once = True
+            with Session(engine) as session:
+                row = session.get(SystemTask, task_id)
+                row.cancel_requested = True
+                session.add(row)
+                session.commit()
+
+    monkeypatch.setattr(letterboxd, "enrich_entry", enrich)
+
+    def work(ctx):
+        return letterboxd._scrape_paginated(
+            base_url="https://letterboxd.com/test/list/demo/",
+            mode="test",
+            parse_page=lambda soup: [dict(film) for film in films],
+            detail_mode=False,
+            is_deep=False,
+            tmdb_api_key=None,
+            max_pages=1,
+            no_cache=True,
+            progress_callback=ctx.progress,
+            ranked_output=False,
+        )
+
+    background = BackgroundTasks()
+    with Session(engine) as session:
+        task, _ = task_runner.submit_task(background, session, "demo", work)
+        task_id = task.id
+    await background()
+    assert visited == ["film-0"]
+    assert _status(engine, task_id).progress_data["error"]["code"] == "cancelled"
+    assert list(letterboxd.checkpoint_dir().glob("*.json"))
+    background = BackgroundTasks()
+    with Session(engine) as session:
+        resumed, _ = task_runner.submit_task(background, session, "demo", work)
+    await background()
+    assert visited == ["film-0", "film-1", "film-2"]
+    assert _status(engine, resumed.id).status == "completed"
+    assert not list(letterboxd.checkpoint_dir().glob("*.json"))
+
+
+def test_task_migration_preserves_rows_and_has_one_head(config_dir):
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import text
+
+    from app.config import get_settings
+
+    backend = Path(__file__).resolve().parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "migrations"))
+    assert ScriptDirectory.from_config(config).get_heads() == ["b3c4d5e6f7a8"]
+    command.upgrade(config, "a2b3c4d5e6f7")
+    db = create_engine(get_settings().database_url)
+    with db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO system_tasks (id, name, status, created_at, updated_at, progress_data) "
+                "VALUES ('old', 'demo', 'completed', '2026-01-01', '2026-01-01', '{\"result\":{}}')"
+            )
+        )
+    command.upgrade(config, "head")
+    with db.begin() as connection:
+        row = connection.execute(
+            text(
+                "SELECT status, cancel_requested, link, progress_data FROM system_tasks WHERE id='old'"
+            )
+        ).one()
+        assert tuple(row) == ("completed", 0, None, '{"result":{}}')
+    command.downgrade(config, "a2b3c4d5e6f7")
+    with db.begin() as connection:
+        assert (
+            connection.execute(text("SELECT status FROM system_tasks WHERE id='old'")).scalar()
+            == "completed"
+        )
+    db.dispose()
 
 
 async def test_async_work_runs_on_the_event_loop_and_reports_progress(engine):

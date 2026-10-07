@@ -394,6 +394,8 @@ def _download_llm_model(ctx: task_runner.TaskContext) -> dict:
     def report(done: int, total: int) -> None:
         ctx.progress(
             {
+                "current": done,
+                "total": total,
                 "bytes_downloaded": done,
                 "total_bytes": total,
                 "percent": round(done * 100 / total, 1),
@@ -433,6 +435,7 @@ def start_llm_download(
             user_id=admin.id,
             dedupe_key=LLM_DOWNLOAD_TASK,
             label="Downloading Qwen 0.8B",
+            link="/settings/integrations",
         )
     return _llm_download_status(session)
 

@@ -38,6 +38,7 @@ from curl_cffi import requests as curl_requests
 from defusedxml import ElementTree as SafeET
 
 from app.config import get_settings
+from app.services.task_runner import TaskCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -814,7 +815,7 @@ def extract_deep_metadata(
             )
             if external and external.get("imdb_id"):
                 meta["imdb_id"] = external["imdb_id"]
-    except CloudflareBlock:
+    except (CloudflareBlock, TaskCancelled):
         raise
     except Exception:
         logger.warning("Deep metadata fetch failed for %s", slug, exc_info=True)
@@ -965,6 +966,13 @@ def _scrape_paginated(
                 for entry in page_entries:
                     if checkpoint.has(entry):
                         continue
+                    report_progress(
+                        progress_callback,
+                        "enrich",
+                        len(checkpoint.items),
+                        total_films,
+                        f"Resolving {entry.get('title', 'film')}",
+                    )
                     entry.setdefault("directors", [])
                     enrich_entry(
                         client,

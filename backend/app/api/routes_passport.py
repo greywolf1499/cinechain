@@ -95,10 +95,14 @@ async def import_csv(
         user_id=current_user.id,
         dedupe_key=f"diary_import:{current_user.id}",
         label=f"Importing {file.filename or 'diary.csv'}",
+        link="/passport",
         describe_error=_import_error,
     )
     if not created:  # another import is already running for this user
         path.unlink(missing_ok=True)
+    else:
+        # A cancellation while pending skips the job's own finally block.
+        background_tasks.add_task(path.unlink, missing_ok=True)
     return TaskOut.from_model(task)
 
 
@@ -125,6 +129,7 @@ async def import_rss(
         user_id=current_user.id,
         dedupe_key=f"diary_import:{current_user.id}",
         label=f"Importing {username}'s RSS diary",
+        link="/passport",
         describe_error=_import_error,
     )
     return TaskOut.from_model(task)
@@ -155,6 +160,7 @@ def backfill_directors(
         done = failed = 0
         with ctx.session() as db:
             for index, movie_id in enumerate(missing, start=1):
+                await ctx.acheck_cancelled()
                 try:
                     found = await fetch_with_backoff(
                         lambda movie_id=movie_id: cache_repo.get_movie_directors(
@@ -181,5 +187,6 @@ def backfill_directors(
         user_id=user_id,
         dedupe_key=f"passport_backfill_directors:{user_id}",
         label=f"Looking up directors for {len(missing)} films",
+        link="/passport",
     )
     return TaskOut.from_model(task)

@@ -33,7 +33,7 @@ from sqlmodel import Session, select
 
 from app.models.run import IMPORT_GAME_TYPE, Run, RunParticipant, RunStep
 from app.services import cache_repo, letterboxd
-from app.services.task_runner import TaskContext
+from app.services.task_runner import TaskCancelled, TaskContext
 from app.services.tmdb import TMDBClient, TMDBError
 from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
 from app.services.tmdb_resolver import resolve_movie_id
@@ -257,6 +257,7 @@ class DiaryImporter:
 
         async def resolve(entry: DiaryEntry) -> int | None:
             async with gate:
+                await self.ctx.acheck_cancelled()
                 return await resolve_movie_id(
                     self.tmdb,
                     entry.title,
@@ -270,6 +271,8 @@ class DiaryImporter:
             *(resolve(e) for e in pending.values()), return_exceptions=True
         )
         for key, outcome in zip(pending, outcomes, strict=True):
+            if isinstance(outcome, TaskCancelled):
+                raise outcome
             if isinstance(outcome, DeadlineReached):
                 self._failed_lookups[key] = "rate_limited"
                 continue
@@ -314,10 +317,12 @@ class DiaryImporter:
 
             iterator = iter(entries)
             while chunk := list(itertools.islice(iterator, CHUNK_SIZE)):
+                await self.ctx.acheck_cancelled()
                 await self._resolve_chunk(chunk)
                 steps: list[RunStep] = []
                 try:
                     for entry in chunk:
+                        await self.ctx.acheck_cancelled()
                         self.processed += 1
                         step = await self._entry_to_step(session, entry, run_id, seen)
                         if step is not None:
@@ -326,7 +331,8 @@ class DiaryImporter:
                     if steps:
                         await anyio.to_thread.run_sync(_persist_steps, session, steps)
                         self.imported += len(steps)
-                    await self.ctx.aprogress(self._payload())
+                    self.ctx.set("progress", self._payload())
+                    await anyio.to_thread.run_sync(self.ctx.flush)
 
         for task in list(self._background):
             await task

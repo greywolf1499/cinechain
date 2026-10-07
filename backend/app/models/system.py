@@ -35,5 +35,7 @@ class SystemTask(SQLModel, table=True):
     user_id: str | None = Field(default=None, foreign_key="users.id", index=True)
     # Only one active task per key (stops double-clicks from scraping twice).
     dedupe_key: str | None = Field(default=None, index=True)
+    cancel_requested: bool = False
+    link: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow, index=True)

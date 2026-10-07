@@ -146,6 +146,7 @@ def _queue_canon_hydration(
         user_id=user_id,
         dedupe_key=f"canon_hydrate:{list_id}",
         label=f"Indexing {title}",
+        link="/lists",
     )
 
 
@@ -486,6 +487,7 @@ def sync_curated_list(
                     db.add(failed)
                     db.commit()
             raise
+        ctx.check_cancelled(force=True)
         with ctx.session() as db:
             row = db.get(CuratedList, row_id)
             if row is None:
@@ -507,6 +509,7 @@ def sync_curated_list(
         user_id=user_id,
         dedupe_key=f"curated_list_sync:{row_id}",
         label=f"Syncing {title}",
+        link="/lists",
         describe_error=_error_payload,
     )
     return TaskOut.from_model(task)
@@ -630,6 +633,7 @@ def sync_watchlist(
                     f"Failed to save watchlist sync warning: {persist_error.__class__.__name__}"
                 ) from persist_error
             raise
+        ctx.check_cancelled(force=True)
         try:
             with ctx.session() as db:
                 matched = _persist_watchlist(db, user_id, username, result["films"])
@@ -646,6 +650,7 @@ def sync_watchlist(
         user_id=user_id,
         dedupe_key=f"watchlist_sync:{user_id}:{username}",
         label=f"Letterboxd watchlist ({username})",
+        link="/settings/integrations#watchlist",
         describe_error=_error_payload,
     )
     return TaskOut.from_model(task)
@@ -1212,6 +1217,7 @@ def discover_hq(
         new_accounts = 0
         with ctx.session() as db:
             for account in found["accounts"]:
+                ctx.check_cancelled()
                 _, created = _upsert_account(db, account["username"].lower(), account)
                 new_accounts += int(created)
         return {
@@ -1229,6 +1235,7 @@ def discover_hq(
         user_id=admin.id,
         dedupe_key=f"discover_hq:{target or 'directory'}",
         label="Discovering HQ accounts" + (f" (via {target})" if target else ""),
+        link="/curators",
         describe_error=_error_payload,
     )
     return TaskOut.from_model(task)

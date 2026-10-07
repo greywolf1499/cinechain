@@ -159,6 +159,53 @@ def test_csv_header_validation(tmp_path):
 # ---------------------------------------------------------------- CSV import API
 
 
+def test_cancelled_import_keeps_finished_entries_and_can_resume(client, monkeypatch):
+    from app.models.system import SystemTask
+    from app.services import task_runner
+
+    monkeypatch.setattr(task_runner, "PROGRESS_FLUSH_SECONDS", 0)
+    original = passport_import.DiaryImporter._entry_to_step
+    stopped = False
+
+    async def cancel_after_first(importer, *args):
+        nonlocal stopped
+        step = await original(importer, *args)
+        if step is not None and not stopped:
+            stopped = True
+            with importer.ctx.session() as session:
+                task = session.get(SystemTask, importer.ctx.task_id)
+                task.cancel_requested = True
+                session.add(task)
+                session.commit()
+        return step
+
+    monkeypatch.setattr(passport_import.DiaryImporter, "_entry_to_step", cancel_after_first)
+    with respx.mock:
+        _mock_tmdb()
+        failed = _task(
+            client,
+            client.post(
+                "/api/passport/import/csv", files={"file": ("diary.csv", DIARY_CSV, "text/csv")}
+            ),
+            expected="failed",
+        )
+    assert failed["status"] == "failed"
+    assert failed["progress_data"]["error"]["code"] == "cancelled"
+    assert failed["progress_data"]["progress"]["current"] == 1
+    with Session(client.db_engine) as session:
+        assert len(session.exec(select(RunStep)).all()) == 1
+    with respx.mock:
+        _mock_tmdb()
+        resumed = _task(
+            client,
+            client.post(
+                "/api/passport/import/csv", files={"file": ("diary.csv", DIARY_CSV, "text/csv")}
+            ),
+        )
+    assert resumed["status"] == "completed"
+    assert resumed["progress_data"]["result"]["skipped_duplicates"] >= 1
+
+
 def test_csv_import_creates_hidden_import_run_and_passport(client):
     with respx.mock:
         _mock_tmdb()

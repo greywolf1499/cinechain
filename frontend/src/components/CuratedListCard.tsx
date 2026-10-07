@@ -8,7 +8,9 @@ import SyncBadge from "./SyncBadge";
 import ExpandableText from "./ui/ExpandableText";
 import type { ToastState } from "./Toast";
 import { ApiError, api } from "../lib/api";
-import { runTask } from "../lib/tasks";
+import { useTrackedTask } from "../lib/useTrackedTask";
+import { describeProgress } from "../lib/tasks";
+import TaskProgressBar from "./TaskProgressBar";
 import type { CuratedListSummary } from "../types/api";
 
 const buttonClass =
@@ -41,8 +43,13 @@ export default function CuratedListCard({
   onToast: (toast: ToastState) => void;
 }) {
   const queryClient = useQueryClient();
-  const [busy, setBusy] = useState(false);
+  const [updating, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const syncTask = useTrackedTask<{ matched: number; total_films: number }>({
+    dedupeKey: `curated_list_sync:${list.id}`,
+    onFinished: () => { void queryClient.invalidateQueries({ queryKey: ["curated"] }); },
+  });
+  const busy = updating || syncTask.busy;
 
   async function run(action: () => Promise<string>, failure: string) {
     setBusy(true);
@@ -59,15 +66,6 @@ export default function CuratedListCard({
     }
   }
 
-  async function sync(): Promise<string> {
-    const task = await runTask<{ matched: number; total_films: number }>(`/curated/sync/${list.id}`);
-    if (task.status === "failed") {
-      throw new Error(`Sync failed for ${list.title}: ${task.error ?? "unknown error"}`);
-    }
-    const result = task.progress_data?.result;
-    return result ? `Synced ${result.matched}/${result.total_films} films for ${list.title}.` : "Synced.";
-  }
-
   const toggle = () =>
     run(async () => {
       if (list.is_enabled) {
@@ -75,7 +73,9 @@ export default function CuratedListCard({
         return `${list.title} disabled.`;
       }
       await api.patch(`/curated/lists/${list.id}`, { is_enabled: true });
-      return sync();
+      const started = await syncTask.start(`/curated/sync/${list.id}`);
+      if (!started) throw new Error(`${list.title} enabled, but its sync could not start.`);
+      return `${list.title} enabled; sync started.`;
     }, "Update failed.");
 
   return (
@@ -115,6 +115,8 @@ export default function CuratedListCard({
         </div>
         {list.description && <Description text={list.description} />}
         {list.last_sync_error && <p className="mt-1.5 break-words text-[11px] text-red-400">{list.last_sync_error}</p>}
+        {syncTask.busy && syncTask.task && <div className="mt-2"><TaskProgressBar task={syncTask.task} /><p className="text-xs text-zinc-400">{describeProgress(syncTask.task)}</p></div>}
+        {syncTask.error && <p role="alert" className="text-xs text-red-300">{syncTask.error}</p>}
       </div>
       {isAdmin && (
         <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col">
@@ -126,7 +128,7 @@ export default function CuratedListCard({
             <button
               type="button"
               disabled={busy}
-              onClick={() => run(sync, "Sync failed.")}
+              onClick={() => void syncTask.start(`/curated/sync/${list.id}`)}
               className={buttonClass}
             >
               Re-sync

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
-import Toast, { type ToastState } from "../Toast";
 import SyncBadge from "../SyncBadge";
 import { useTrackedTask } from "../../lib/useTrackedTask";
 import { describeProgress } from "../../lib/tasks";
@@ -17,7 +16,6 @@ export default function WatchlistSyncCard() {
   const { data: status } = useWatchlistStatus();
   const [username, setUsername] = useState("");
   const [usernameEdited, setUsernameEdited] = useState(false);
-  const [toast, setToast] = useState<ToastState | null>(null);
   const [hideStoredError, setHideStoredError] = useState(false);
 
   useEffect(() => {
@@ -37,18 +35,9 @@ export default function WatchlistSyncCard() {
           return;
         }
         setHideStoredError(true);
-        const detail = error?.message ?? task.error;
-        setToast({ type: "error", message: `Watchlist sync failed${detail ? `: ${detail}` : "."}` });
         return;
       }
-      const result = task.progress_data?.result;
       setHideStoredError(false);
-      setToast({
-        type: "success",
-        message: result
-          ? `Synced ${result.matched}/${result.total_films} watchlist films.`
-          : "Watchlist synced.",
-      });
     },
   });
 
@@ -112,7 +101,8 @@ export default function WatchlistSyncCard() {
             {storedError}
           </p>
         )}
-        {toast && <Toast toast={toast} onDismiss={() => setToast(null)} />}
+        {sync.task?.status === "failed" && sync.task.progress_data?.error?.code !== "watchlist_not_found" &&
+          <p role="alert" className="text-xs text-red-300">{sync.task.error ?? "Watchlist sync failed."}</p>}
       </div>
     </section>
   );

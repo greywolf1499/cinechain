@@ -1,9 +1,12 @@
-import { TUG_DIMENSIONS } from "../../../lib/tugOfWar";
+import { TUG_DIMENSIONS, tugTargetDefault } from "../../../lib/tugOfWar";
+import { useEngines } from "../../../lib/queries";
 import type { TugDimension } from "../../../types/api";
 import { cn } from "../../../lib/cn";
 import type { ModeConfigProps } from "./types";
 
 export default function TugConfig({ draft, update }: ModeConfigProps) {
+  const { data: engines } = useEngines();
+  const target = draft.rules.target_lead ?? tugTargetDefault(engines);
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-lime-400/30 bg-lime-500/5 p-3">
       <div className="flex flex-col gap-1.5">
@@ -36,7 +39,7 @@ export default function TugConfig({ draft, update }: ModeConfigProps) {
       </div>
       <p className="text-[11px] text-zinc-500">
         You are Team A; the next participant you add is Team B. Home films build momentum, invasions
-        steal ground, and neutral films set an anchor. First to lead by {draft.rules.target_lead ?? 7} wins.
+        steal ground, and neutral films set an anchor. First to lead by {target} wins.
       </p>
     </div>
   );

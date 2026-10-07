@@ -70,6 +70,38 @@ def _canon_ids(session: Session, list_id: str) -> list[int]:
     )
 
 
+def _index_outcomes(session: Session, movie_ids: list[int]) -> dict[str, int]:
+    """Per-film outcome of a canon indexing pass. A slice needs both a country and a date, so a
+    film missing either is counted (and left out of the slices) rather than failing the list."""
+    outcomes = {"indexed": 0, "no_country": 0, "undated": 0, "not_found": 0}
+    for movie_id in movie_ids:
+        movie = session.get(CachedMovie, movie_id)
+        if movie is None:
+            outcomes["not_found"] += 1
+        elif not parse_countries(movie.origin_country):
+            outcomes["no_country"] += 1
+        elif _decade_of(movie.release_date) is None:
+            outcomes["undated"] += 1
+        else:
+            outcomes["indexed"] += 1
+    return outcomes
+
+
+def _index_message(outcomes: dict[str, int], total: int) -> str:
+    skipped = total - outcomes["indexed"]
+    message = f"Indexed {outcomes['indexed']}/{total} films"
+    if not skipped:
+        return f"{message}."
+    reasons = [
+        (outcomes["no_country"], "without a production country"),
+        (outcomes["undated"], "without a release date"),
+        (outcomes["not_found"], "not found on TMDB"),
+    ]
+    detail = ", ".join(f"{count} {label}" for count, label in reasons if count)
+    plural = "" if skipped == 1 else "s"
+    return f"{message}; {skipped} film{plural} not indexable ({detail})."
+
+
 def _queue_canon_hydration(
     background_tasks: BackgroundTasks,
     session: Session,
@@ -89,19 +121,22 @@ def _queue_canon_hydration(
             ids = _canon_ids(db, list_id)
             engine = RegionalDeepDiveEngine(db, tmdb)
             await engine._hydrate(ids, None, None, progress=ctx.aprogress, index_all=True)
-            hydrated = sum(
-                1
-                for movie_id in ids
-                if (movie := db.get(CachedMovie, movie_id)) is not None
-                and movie.origin_country is not None
-                and _decade_of(movie.release_date) is not None
-            )
-            if hydrated < len(ids):
+            outcomes = _index_outcomes(db, ids)
+            indexed = outcomes["indexed"]
+            # Partial success is success: a film TMDB can't place is reported, not fatal. Only a
+            # list nothing could be indexed from (an auth/key failure, an empty answer) fails.
+            if ids and not indexed:
                 raise RunSetupError(
-                    f"Indexed {hydrated}/{len(ids)} films; some TMDB details are unavailable. "
+                    f"Indexed 0/{len(ids)} films; TMDB details are unavailable. "
                     "Sync this list again to retry."
                 )
-            return {"list_id": list_id, "hydrated": hydrated, "total": len(ids)}
+            return {
+                "list_id": list_id,
+                "hydrated": indexed,
+                "total": len(ids),
+                **outcomes,
+                "message": _index_message(outcomes, len(ids)),
+            }
 
     task_runner.submit_task(
         background_tasks,
@@ -151,7 +186,8 @@ def curated_slices(
     ).first()
     return CuratedSlices(
         hydrated=sum(
-            movie.origin_country is not None and _decade_of(movie.release_date) is not None
+            bool(parse_countries(movie.origin_country))
+            and _decade_of(movie.release_date) is not None
             for movie in movies.values()
         ),
         total=len(_canon_ids(session, list_id)),
@@ -370,38 +406,56 @@ def _get_or_create_list(session: Session, list_id: str) -> CuratedList:
     return curated_list
 
 
+def _badge_label(curated_list: CuratedList, rank: int | None) -> str:
+    return f"{curated_list.badge_prefix} #{rank}" if rank else curated_list.badge_prefix
+
+
 def _persist_sync_result(
     session: Session, curated_list: CuratedList, result: dict
-) -> tuple[int, int]:
+) -> dict[str, int]:
+    """Replaces the list's badges in a single transaction: surviving badges are updated, the
+    ones no longer on the list are deleted and the list row is stamped, all committed once. A
+    failed scrape never reaches this function, so the previous snapshot survives untouched."""
     films = result["films"]
-    matched = [f for f in films if f.get("tmdb_id")]
+    tv_titles = sum(1 for film in films if film.get("tmdb_type") == "tv")
+    wanted: dict[int, int | None] = {}
+    for film in films:
+        # A `tv` TMDB id is a series id, never a movie id: it must not become a movie badge.
+        if not film.get("tmdb_id") or film.get("tmdb_type") == "tv":
+            continue
+        wanted.setdefault(film["tmdb_id"], film.get("rank") if result["is_ranked"] else None)
 
+    kept: set[int] = set()
     for badge in session.exec(
         select(CanonMovieBadge).where(CanonMovieBadge.curated_list_id == curated_list.id)
     ).all():
-        session.delete(badge)
-    session.commit()
-
-    for film in matched:
-        rank = film["rank"] if result["is_ranked"] else None
-        label = f"{curated_list.badge_prefix} #{rank}" if rank else curated_list.badge_prefix
+        if badge.movie_id in wanted and badge.movie_id not in kept:
+            kept.add(badge.movie_id)
+            badge.rank = wanted[badge.movie_id]
+            badge.badge_label = _badge_label(curated_list, badge.rank)
+            session.add(badge)
+        else:
+            session.delete(badge)
+    for movie_id, rank in wanted.items():
+        if movie_id in kept:
+            continue
         session.add(
             CanonMovieBadge(
                 curated_list_id=curated_list.id,
-                movie_id=film["tmdb_id"],
-                badge_label=label,
+                movie_id=movie_id,
+                badge_label=_badge_label(curated_list, rank),
                 rank=rank,
             )
         )
 
     curated_list.is_ranked = result["is_ranked"]
-    curated_list.total_items = len(matched)
+    curated_list.total_items = len(wanted)
     curated_list.is_enabled = True
     curated_list.last_synced_at = utcnow()
     curated_list.last_sync_error = None
     session.add(curated_list)
     session.commit()
-    return len(matched), len(films)
+    return {"matched": len(wanted), "total": len(films), "tv_titles": tv_titles}
 
 
 @router.post("/sync/{list_id}", status_code=status.HTTP_202_ACCEPTED, response_model=TaskOut)
@@ -436,9 +490,14 @@ def sync_curated_list(
             row = db.get(CuratedList, row_id)
             if row is None:
                 raise RunSetupError("This canon list no longer exists")
-            matched, total = _persist_sync_result(db, row, result)
+            counts = _persist_sync_result(db, row, result)
             _queue_canon_hydration(background_tasks, db, row, user_id, tmdb)
-        return {"matched": matched, "total_films": total, "is_ranked": result["is_ranked"]}
+        return {
+            "matched": counts["matched"],
+            "total_films": counts["total"],
+            "tv_titles": counts["tv_titles"],
+            "is_ranked": result["is_ranked"],
+        }
 
     task, _ = task_runner.submit_task(
         background_tasks,

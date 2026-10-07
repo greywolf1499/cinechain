@@ -1,5 +1,6 @@
 """Phase 26b: The Rabbit Hole - escalating tiers, a 3-life survival budget and tier-filtered Pick Next."""
 
+import asyncio
 import random
 from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
@@ -17,6 +18,7 @@ from app.models.cache import CachedActor, CachedMovie, CachedMovieCast, CachedMo
 from app.models.run import Run, RunStep
 from app.services import feasibility
 from app.services.movie_filters import is_reality_eligible
+from app.services.tmdb import TMDBClient
 from app.utils.ids import utcnow
 from tests.test_graph_mutators import TMDB_BASE, client, create_run, db_engine, log
 
@@ -1159,3 +1161,81 @@ def test_deleting_boundary_after_spending_its_reward_cannot_keep_the_token(
     rules = run_detail(client, run_id)["rules_config"]
     assert rules["reroll_tokens"] == 0 and "tier_override" not in rules
     assert rules["lives_remaining"] == 3
+
+
+# --- Phase F0: the tier verdict is the last pass ---
+
+
+def _engine_pool(session, run_id, rules):
+    history = session.exec(select(RunStep).where(RunStep.run_id == run_id)).all()
+
+    async def run():
+        async with httpx.AsyncClient() as http:
+            engine = RabbitHoleEngine(session, TMDBClient(http))
+            pool = await engine.discover_candidates(ANCHOR, rules=rules, history=history)
+            return engine, pool
+
+    engine, pool = asyncio.run(run())
+    return engine, history, pool
+
+
+def test_the_tier_verdict_is_stamped_after_the_pool_is_final(client, world):
+    """A film whose runtime only arrives in a later hydration pass is judged on that runtime."""
+    add_candidates(world)
+    run_id = rabbit_run(client)
+    put_at_depth(world, run_id, 15)  # Micro-Clock: under 100 minutes
+    with Session(world) as session:
+        session.get(CachedMovie, 14).runtime = None
+        session.commit()
+        rules = session.get(Run, run_id).rules_config
+        engine, history, pool = _engine_pool(session, run_id, rules)
+        candidate = next(c for c in pool if c.movie_id == 14)
+        assert candidate.tier_compliant is None  # discovery keeps it, but judges nothing
+
+        session.get(CachedMovie, 14).runtime = 90  # a later pass hydrates the film
+        session.commit()
+        engine.annotate_candidates(pool, rules, history)
+
+    assert candidate.tier_compliant is True
+    assert candidate.constraint_unverified is False
+
+
+def test_a_film_hydrated_by_pool_shaping_is_never_both_timed_and_unverified(client, world):
+    """The chaser pass fetches missing runtimes; the card must not say "rule unverified" after."""
+    add_candidates(world)
+    run_id = rabbit_run(client)
+    put_at_depth(world, run_id, 15)
+    with Session(world) as session:
+        film = session.get(CachedMovie, 14)
+        film.runtime = None
+        film.genre_ids = None
+        session.commit()
+
+    with respx.mock:
+        respx.get(f"{TMDB_BASE}/movie/14").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 14,
+                    "title": "Short",
+                    "release_date": "2015-06-01",
+                    "runtime": 90,
+                    "original_language": "en",
+                    "vote_average": 7.0,
+                    "vote_count": 100,
+                    "genres": [{"id": 35, "name": "Comedy"}],
+                    "origin_country": ["US"],
+                    "status": "Released",
+                },
+            )
+        )
+        respx.route(host="api.themoviedb.org").mock(return_value=httpx.Response(200, json={}))
+        resp = client.get(
+            f"/api/runs/{run_id}/discover",
+            params={"frontier_movie_id": ANCHOR, "chaser": True},
+        )
+    assert resp.status_code == 200, resp.text
+    card = next(c for c in resp.json() if c["movie_id"] == 14)
+    assert card["runtime"] == 90
+    assert card["constraint_unverified"] is False
+    assert card["tier_compliant"] is True

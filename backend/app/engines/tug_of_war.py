@@ -35,7 +35,7 @@ TugTeam = Literal["team_a", "team_b"]
 TugEffect = Literal["home", "invasion", "neutral", "sudden_neutral"]
 
 DEFAULT_DIMENSION = DIMENSION_ERA
-DEFAULT_TARGET_LEAD = 4
+DEFAULT_TARGET_LEAD = 7
 MAX_TARGET_LEAD = 50
 DEFAULT_ERA_A_BEFORE = 1975
 DEFAULT_ERA_B_AFTER = 2005
@@ -531,7 +531,7 @@ class TugOfWarEngine(CineChainEngine):
             label="Target lead",
             min=2,
             max=MAX_TARGET_LEAD,
-            default=7,
+            default=DEFAULT_TARGET_LEAD,
         ),
         RuleField(
             key="sudden_death_enabled",

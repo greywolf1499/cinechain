@@ -6,7 +6,7 @@ import MoviePoster from "./MoviePoster";
 import { ApiError } from "../lib/api";
 import { auteurProgress, formatRuntime } from "../lib/auteurTrack";
 import { marathonPacing, trackStatuses } from "../lib/careerTrack";
-import { CareerEraHeading, MarathonWrap, MilestoneBadge, MissingMilestones } from "./CareerTrack";
+import { CareerEraHeading, MarathonWrap, MilestoneBadge, MissingMilestones, QueuedFilm } from "./CareerTrack";
 import { cn } from "../lib/cn";
 import { useCreateStep } from "../lib/queries";
 import type { AuteurFilm, RunDetail } from "../types/api";
@@ -89,15 +89,18 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
                   <MilestoneBadge key={milestone} milestone={milestone} evidence={film.evidence?.[milestone]} />)}</div>
                 <p className="text-[11px] text-zinc-500">{runtime ?? "Runtime unknown"}</p>
               </div>
-              {state === "watched" || state === "planned" ? (
-                <span
-                  className={cn(
-                    "flex shrink-0 items-center gap-1 text-[11px] font-medium",
-                    state === "watched" ? "text-emerald-300" : "text-sky-300",
-                  )}
-                >
-                  <Check className="h-3.5 w-3.5" /> {state === "watched" ? "Watched" : "Queued"}
+              {state === "watched" ? (
+                <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-300">
+                  <Check className="h-3.5 w-3.5" /> Watched
                 </span>
+              ) : state === "planned" ? (
+                <QueuedFilm
+                  run={run}
+                  movieId={film.movie_id}
+                  locked={locked}
+                  disabled={pendingId !== null}
+                  onError={setMessage}
+                />
               ) : (
                 !locked && (
                   <LogFilmButtons

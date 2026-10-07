@@ -821,6 +821,13 @@ def extract_deep_metadata(
     return meta
 
 
+def _drop_non_movie(entry: dict[str, Any]) -> None:
+    """Letterboxd also lists TV titles. A `tv` TMDB id is not a movie id: keeping it would file
+    a series under a movie badge, so the id is dropped and only the type is kept for counting."""
+    if entry.get("tmdb_type") == "tv":
+        entry["tmdb_id"] = None
+
+
 def enrich_entry(
     client: curl_requests.Session,
     entry: dict[str, Any],
@@ -839,10 +846,13 @@ def enrich_entry(
             progress_callback=progress_callback,
         )
         entry.update({k: v for k, v in meta.items() if v is not None})
+        _drop_non_movie(entry)
         return
 
     if entry.get("tmdb_id"):
-        entry.setdefault("tmdb_type", "movie")
+        if entry.get("tmdb_type") is None:
+            entry["tmdb_type"] = "movie"
+        _drop_non_movie(entry)
         return
 
     if tmdb_api_key:
@@ -856,6 +866,7 @@ def enrich_entry(
         )
         if match:
             entry.update({k: v for k, v in match.items() if v is not None})
+            _drop_non_movie(entry)
         else:
             entry["tmdb_id"], entry["tmdb_type"] = None, None
 
@@ -1001,6 +1012,7 @@ def _scrape_paginated(
         "is_ranked": is_ranked,
         "total_films": len(films),
         "total_pages": total_pages,
+        "tv_titles": sum(1 for item in films if item.get("tmdb_type") == "tv"),
         "films": films,
     }
 

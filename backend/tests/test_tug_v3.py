@@ -8,11 +8,15 @@ import respx
 from sqlmodel import Session
 
 from app.engines.tug_of_war import (
+    DEFAULT_TARGET_LEAD,
     TEAM_A,
     TEAM_B,
+    TUG_RULES_VERSION_KEY,
+    TugOfWarEngine,
     compute_scores,
     preview_pull,
     tally,
+    tug_config,
     winner,
 )
 from app.models.cache import CachedActor, CachedMovie, CachedMovieCast
@@ -247,3 +251,35 @@ def test_v3_seed_planned_and_client_state_do_not_score(client):
     assert state["rope"] == 0 and state["rounds"] == 0
     assert state["streaks"] == {TEAM_A: 0, TEAM_B: 0}
     assert state["banks"] == {TEAM_A: False, TEAM_B: False}
+
+
+# --- Phase F0: one target_lead default, legacy targets untouched ---
+
+LEGACY_TARGET = 4
+THREE_A_BUILDS = [
+    step(1, TEAM_A, 1950),
+    step(2, TEAM_B, 1990),
+    step(3, TEAM_A, 1950),
+    step(4, TEAM_B, 1990),
+    step(5, TEAM_A, 1950),
+    step(6, TEAM_B, 1990),
+]
+
+
+def test_the_default_target_lead_is_seven_everywhere():
+    assert DEFAULT_TARGET_LEAD == 7
+    assert tug_config({TUG_RULES_VERSION_KEY: 3})["target_lead"] == DEFAULT_TARGET_LEAD
+    field = next(f for f in TugOfWarEngine.rule_fields if f.key == "target_lead")
+    assert field.default == DEFAULT_TARGET_LEAD
+    bare = {k: v for k, v in V3.items() if k != "target_lead"}
+    assert tally([], bare, PLAYERS).effective_target == DEFAULT_TARGET_LEAD
+
+
+def test_a_run_that_stored_the_old_target_still_wins_at_that_target():
+    legacy = tally(THREE_A_BUILDS, {**V3, "target_lead": LEGACY_TARGET}, PLAYERS)
+    assert legacy.rope == 6 and legacy.effective_target == LEGACY_TARGET
+    assert winner(legacy) == TEAM_A
+
+    current = tally(THREE_A_BUILDS, V3, PLAYERS)
+    assert current.rope == 6 and current.effective_target == DEFAULT_TARGET_LEAD
+    assert winner(current) is None

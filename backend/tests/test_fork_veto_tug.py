@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.db import get_session
+from app.engines.tug_of_war import DEFAULT_TARGET_LEAD
 from app.main import app
 from app.models.user import User
 from app.services.veto import refresh_veto_tokens
@@ -430,9 +431,9 @@ def test_tug_rules_are_validated_and_defaulted(client):
     assert bad.status_code == 422 and "dimension" in bad.json()["detail"]
     assert low.status_code == 422 and "target_lead" in low.json()["detail"]
     rules = bare.json()["rules_config"]
-    assert rules["dimension"] == "era" and rules["target_lead"] == 4
+    assert rules["dimension"] == "era" and rules["target_lead"] == DEFAULT_TARGET_LEAD
     assert rules["tug_rules_version"] == 3
-    assert rules["tug_momentum"]["effective_target"] == 4
+    assert rules["tug_momentum"]["effective_target"] == DEFAULT_TARGET_LEAD
     assert rules["tug_momentum"]["next_team"] == "team_a"
     assert rules["steal_enabled"] is True
     assert rules["momentum_cap"] == 3

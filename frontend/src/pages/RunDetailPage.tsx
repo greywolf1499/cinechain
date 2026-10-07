@@ -72,7 +72,7 @@ import {
   useUsers,
 } from "../lib/queries";
 import { useAuthStore } from "../store/authStore";
-import { TUG_DIMENSIONS, TUG_OF_WAR } from "../lib/tugOfWar";
+import { TUG_DIMENSIONS, TUG_OF_WAR, tugTargetDefault } from "../lib/tugOfWar";
 import { GENRE_PENDULUM } from "../lib/pendulum";
 import { RABBIT_HOLE } from "../lib/rabbitHole";
 import { MARCH_MADNESS } from "../lib/bracket";
@@ -86,6 +86,7 @@ import { HISTORICAL_TIME_TRAVEL } from "../lib/historicalEra";
 import { MEET_IN_THE_MIDDLE } from "../lib/tunnel";
 import type {
   CuratedListSummary,
+  EngineMeta,
   RulesConfig,
   RunDetail,
   RunStats,
@@ -213,7 +214,7 @@ export default function RunDetailPage() {
               <ModeChip
                 gameType={run.game_type}
                 label={engine?.display_name ?? run.game_type}
-                detail={modeDetail(run.game_type, run.rules_config, curatedLists)}
+                detail={modeDetail(run.game_type, run.rules_config, curatedLists, engines)}
               />
             )}
           </div>
@@ -536,6 +537,7 @@ function modeDetail(
   gameType: string,
   rules: RulesConfig,
   lists: CuratedListSummary[] | undefined,
+  engines: EngineMeta[] | undefined,
 ): string | null {
   if (gameType === "chrono_climb") {
     const label = rules.direction === "descent" ? "Descent" : "Climb";
@@ -551,7 +553,7 @@ function modeDetail(
     return (rules.genre_cycle ?? []).slice(0, 4).join(" → ") + ((rules.genre_cycle?.length ?? 0) > 4 ? " …" : "");
   }
   if (gameType === TUG_OF_WAR) {
-    return `${TUG_DIMENSIONS[rules.dimension ?? "era"].label}, lead of ${rules.target_lead ?? 4}`;
+    return `${TUG_DIMENSIONS[rules.dimension ?? "era"].label}, lead of ${rules.target_lead ?? tugTargetDefault(engines)}`;
   }
   if (gameType === "canon_island" && rules.allowed_curated_list_id) {
     return lists?.find((l) => l.id === rules.allowed_curated_list_id)?.title ?? null;

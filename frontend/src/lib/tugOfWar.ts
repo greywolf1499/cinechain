@@ -1,7 +1,9 @@
-import type { DiscoveryCandidate, RulesConfig, TugDimension } from "../types/api";
+import type { DiscoveryCandidate, EngineMeta, RulesConfig, TugDimension } from "../types/api";
 
 export const TUG_OF_WAR = "tug_of_war";
-export const DEFAULT_TARGET_LEAD = 4;
+/** Only a stand-in until `/engines` loads: the real default is the backend `target_lead`
+ * `RuleField`, which `tugTargetDefault` reads. */
+export const TUG_TARGET_LEAD_FALLBACK = 7;
 export const DEFAULT_ERA_A_BEFORE = 1975;
 export const DEFAULT_ERA_B_AFTER = 2005;
 
@@ -23,8 +25,16 @@ export const TUG_DIMENSIONS: Record<
   },
 };
 
-export function tugTarget(rules: RulesConfig): number {
-  return rules.tug_momentum?.effective_target ?? rules.target_lead ?? DEFAULT_TARGET_LEAD;
+/** The winning target the backend would apply to a run that never stored one. */
+export function tugTargetDefault(engines: EngineMeta[] | undefined): number {
+  const field = engines
+    ?.find((engine) => engine.game_type === TUG_OF_WAR)
+    ?.rule_fields.find((rule) => rule.key === "target_lead");
+  return typeof field?.default === "number" ? field.default : TUG_TARGET_LEAD_FALLBACK;
+}
+
+export function tugTarget(rules: RulesConfig, fallback = TUG_TARGET_LEAD_FALLBACK): number {
+  return rules.tug_momentum?.effective_target ?? rules.target_lead ?? fallback;
 }
 
 /** Momentum on the number line: positive pulls towards Team A, negative towards Team B. */

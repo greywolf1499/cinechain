@@ -2720,4 +2720,4 @@ async def discover_next_movies(
         candidate.existing_step_number = step_number_by_movie_id.get(candidate.movie_id)
         row = session.get(CachedMovie, candidate.movie_id)
         candidate.runtime = row.runtime if row is not None else None
-    return candidates
+    return engine.annotate_candidates(candidates, rules, _run_history(session, run.id))

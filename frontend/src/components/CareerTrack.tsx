@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import MoviePoster from "./MoviePoster";
+import QueuedFilmActions from "./QueuedFilmActions";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { MILESTONES, careerGroup, decadeOf, marathonPacing, trackStatuses } from "../lib/careerTrack";
@@ -135,6 +136,34 @@ export function CareerEraHeading({ run, track, index }: {
   );
 }
 
+/** The Stage-2 affordances for a queued film on a board: log it watched, or take it back off
+ * the queue. A finished run keeps the static label. */
+export function QueuedFilm({
+  run,
+  movieId,
+  locked,
+  disabled,
+  onError,
+}: {
+  run: RunDetail;
+  movieId: number;
+  locked: boolean;
+  disabled?: boolean;
+  onError: (message: string | null) => void;
+}) {
+  const step = run.steps.find((entry) => entry.movie_id === movieId && entry.status !== "watched");
+  if (locked || step === undefined) {
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-sky-300">
+        <Check className="h-3.5 w-3.5" /> Queued
+      </span>
+    );
+  }
+  return (
+    <QueuedFilmActions runId={run.id} stepId={step.id} disabled={disabled} onError={onError} />
+  );
+}
+
 /** The actor's career, oldest film first: age and decade at each film, milestone badges and the
  * log buttons that walk the marathon forward. */
 export default function CareerTrack({ run }: { run: RunDetail }) {
@@ -217,15 +246,18 @@ export default function CareerTrack({ run }: { run: RunDetail }) {
                     {film.character ? ` · as ${film.character}` : ""}
                   </p>
                 </div>
-                {state === "watched" || state === "planned" ? (
-                  <span
-                    className={cn(
-                      "flex shrink-0 items-center gap-1 text-[11px] font-medium",
-                      state === "watched" ? "text-emerald-300" : "text-sky-300",
-                    )}
-                  >
-                    <Check className="h-3.5 w-3.5" /> {state === "watched" ? "Watched" : "Queued"}
+                {state === "watched" ? (
+                  <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-300">
+                    <Check className="h-3.5 w-3.5" /> Watched
                   </span>
+                ) : state === "planned" ? (
+                  <QueuedFilm
+                    run={run}
+                    movieId={film.movie_id}
+                    locked={locked}
+                    disabled={pendingId !== null}
+                    onError={setMessage}
+                  />
                 ) : (
                   !locked && (
                     <div className="flex shrink-0 gap-1.5">

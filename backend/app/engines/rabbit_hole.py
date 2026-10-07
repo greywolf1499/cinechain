@@ -793,7 +793,7 @@ class RabbitHoleEngine(CineChainEngine):
         include_off_tier: bool = False,
     ) -> list[DiscoveryCandidate]:
         """Cast-linked films that already satisfy the active tier's rule (films whose data can't
-        be checked yet stay, flagged unverified)."""
+        be checked yet stay; `annotate_candidates` stamps the verdict once the pool is final)."""
         self._depth = len(history or [])
         state = tier_state(self._depth, rules)
         tier = tier_for_depth(self._depth, rules)
@@ -807,13 +807,31 @@ class RabbitHoleEngine(CineChainEngine):
                 row = rows.get(candidate.movie_id)
                 if row is None:
                     continue
-                verdict = compliance(self.session, tier, row)
-                if verdict is False and not include_off_tier:
+                if compliance(self.session, tier, row) is False and not include_off_tier:
                     continue
-                candidate.tier_compliant = verdict
-                candidate.constraint_unverified = verdict is None
-            else:
-                candidate.tier_compliant = True
             candidate.upcoming_tier_warning = state.upcoming_tier_warning
             kept.append(candidate)
         return kept
+
+    def annotate_candidates(
+        self,
+        candidates: list[DiscoveryCandidate],
+        rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
+    ) -> list[DiscoveryCandidate]:
+        """Stamps the tier verdict on the final pool. Running after every hydration pass and
+        after `shape_pool` means a film whose facts arrived late is judged on those facts, so a
+        card can never carry both a cached runtime and "Rule unverified"."""
+        depth = len(history) if history is not None else self._depth
+        tier = tier_for_depth(depth, rules)
+        for candidate in candidates:
+            if tier.number == 1:
+                candidate.tier_compliant = True
+                continue
+            row = self.session.get(CachedMovie, candidate.movie_id)
+            verdict = compliance(self.session, tier, row) if row is not None else None
+            candidate.tier_compliant = verdict
+            candidate.constraint_unverified = verdict is None or (
+                row is not None and self._modifiers_need_detail(row, rules)
+            )
+        return candidates

@@ -788,3 +788,14 @@ class BaseChallengeEngine(ABC):
         capability rather than a 500.
         """
         raise NotImplementedError
+
+    def annotate_candidates(
+        self,
+        candidates: list[DiscoveryCandidate],
+        rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
+    ) -> list[DiscoveryCandidate]:
+        """Last pass over the pool the player will actually see, after every hydration and
+        pool-shaping step. Engines stamp render-time verdicts here so a card can never show a
+        fact and "unverified" at the same time. The base implementation is a no-op."""
+        return candidates

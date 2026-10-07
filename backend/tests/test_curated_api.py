@@ -11,6 +11,7 @@ from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine, select
 
+from app.api import routes_curated
 from app.api.routes_curated import _queue_canon_hydration
 from app.db import get_session
 from app.engines.regional_deep_dive import RegionalDeepDiveEngine
@@ -189,7 +190,16 @@ def test_enable_queues_hydration_once_and_populates_slices(client):
         tasks = session.exec(select(SystemTask).where(SystemTask.name == "canon_hydrate")).all()
         assert len(tasks) == 1
         assert tasks[0].status == "completed"
-        assert tasks[0].progress_data["result"] == {"list_id": "enable", "hydrated": 1, "total": 1}
+        assert tasks[0].progress_data["result"] == {
+            "list_id": "enable",
+            "hydrated": 1,
+            "total": 1,
+            "indexed": 1,
+            "no_country": 0,
+            "undated": 0,
+            "not_found": 0,
+            "message": "Indexed 1/1 films.",
+        }
     assert client.get("/api/curated-lists/enable/slices").json()["pairs"] == {"AU:1970": 1}
 
 
@@ -331,7 +341,12 @@ def test_sync_preset_persists_badges_and_updates_list_metadata(client, monkeypat
 
     task = _run_task(client, "/api/curated/sync/sight-and-sound-2022")
     assert task["name"] == "curated_list_sync"
-    assert task["progress_data"]["result"] == {"matched": 2, "total_films": 2, "is_ranked": True}
+    assert task["progress_data"]["result"] == {
+        "matched": 2,
+        "total_films": 2,
+        "tv_titles": 0,
+        "is_ranked": True,
+    }
     assert task["progress_data"]["progress"]["stage"] == "page_done"
 
     lists_resp = client.get("/api/curated/lists")
@@ -1067,3 +1082,129 @@ def test_blank_stored_titles_are_never_serialized_empty():
         slug="hidden-gems",
     )
     assert CuratedListOut.from_model(row).title == "Hidden Gems"
+
+
+# --- Phase F0: partial success, TV entries and atomic list persistence ---
+
+
+def _detail_with(movie_id, **overrides):
+    return {
+        "id": movie_id,
+        "title": f"Film {movie_id}",
+        "release_date": "1975-06-01",
+        "origin_country": ["AU"],
+        "runtime": 100,
+        "genres": [],
+        "overview": "",
+        "tagline": "",
+        "status": "Released",
+        **overrides,
+    }
+
+
+def test_indexing_reports_per_film_outcomes_and_still_completes(client, monkeypatch):
+    """98 of 100 films are indexable: the task completes and names the two that aren't."""
+    _register_and_login(client)
+
+    async def movie_detail(_self, movie_id):
+        if movie_id == 50:
+            return _detail_with(movie_id, origin_country=[])
+        if movie_id == 51:
+            return _detail_with(movie_id, release_date=None)
+        return _detail_with(movie_id)
+
+    monkeypatch.setattr(TMDBClient, "get_movie", movie_detail)
+    films = [
+        {"title": f"Film {i}", "year": 1975, "slug": f"film-{i}", "tmdb_id": i, "rank": i}
+        for i in range(1, 101)
+    ]
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(films))
+
+    _run_task(client, "/api/curated/sync/sight-and-sound-2022")
+    with Session(client.db_engine) as session:
+        task = session.exec(select(SystemTask).where(SystemTask.name == "canon_hydrate")).one()
+        assert task.status == "completed"
+        result = task.progress_data["result"]
+    assert result["total"] == 100
+    assert result["indexed"] == result["hydrated"] == 98
+    assert (result["no_country"], result["undated"], result["not_found"]) == (1, 1, 0)
+    assert "2 films not indexable" in result["message"]
+    counts = client.get(f"/api/curated-lists/{result['list_id']}/slices").json()
+    assert counts["hydrated"] == 98 and counts["indexing_error"] is None
+
+
+def test_indexing_fails_only_when_no_film_can_be_placed(client, monkeypatch):
+    _register_and_login(client)
+    monkeypatch.setattr(
+        TMDBClient, "get_movie", AsyncMock(side_effect=TMDBNotFoundError("No film"))
+    )
+    films = [
+        {"title": f"Film {i}", "year": 1975, "slug": f"film-{i}", "tmdb_id": i, "rank": i}
+        for i in range(1, 101)
+    ]
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(films))
+
+    _run_task(client, "/api/curated/sync/sight-and-sound-2022")
+    with Session(client.db_engine) as session:
+        task = session.exec(select(SystemTask).where(SystemTask.name == "canon_hydrate")).one()
+        assert task.status == "failed"
+        assert "Indexed 0/100" in task.error
+
+
+def test_tv_entries_are_counted_but_never_become_movie_badges(client, monkeypatch):
+    _register_and_login(client)
+    films = [
+        {
+            "title": "Parasite",
+            "year": 2019,
+            "slug": "parasite-2019",
+            "tmdb_id": 496243,
+            "tmdb_type": "movie",
+            "rank": 1,
+        },
+        {
+            "title": "Twin Peaks",
+            "year": 1990,
+            "slug": "twin-peaks",
+            "tmdb_id": 1920,
+            "tmdb_type": "tv",
+            "rank": 2,
+        },
+    ]
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(films))
+
+    task = _run_task(client, "/api/curated/sync/sight-and-sound-2022")
+    assert task["progress_data"]["result"] == {
+        "matched": 1,
+        "total_films": 2,
+        "tv_titles": 1,
+        "is_ranked": True,
+    }
+    with Session(client.db_engine) as session:
+        badges = session.exec(select(CanonMovieBadge)).all()
+        assert [badge.movie_id for badge in badges] == [496243]
+
+
+def test_a_failure_after_the_scrape_keeps_the_previous_badges(client, monkeypatch):
+    _register_and_login(client)
+    first = [
+        {"title": "Parasite", "year": 2019, "slug": "parasite-2019", "tmdb_id": 496243, "rank": 1},
+        {"title": "Stalker", "year": 1979, "slug": "stalker-1979", "tmdb_id": 10543, "rank": 2},
+    ]
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(first))
+    _run_task(client, "/api/curated/sync/sight-and-sound-2022")
+
+    replacement = [
+        {"title": "Vertigo", "year": 1958, "slug": "vertigo", "tmdb_id": 426, "rank": 1},
+    ]
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(replacement))
+    monkeypatch.setattr(
+        routes_curated, "utcnow", lambda: (_ for _ in ()).throw(RuntimeError("disk full"))
+    )
+    _run_task(client, "/api/curated/sync/sight-and-sound-2022", expected="failed")
+
+    with Session(client.db_engine) as session:
+        badges = session.exec(select(CanonMovieBadge)).all()
+        assert sorted(badge.movie_id for badge in badges) == [10543, 496243]
+        row = session.exec(select(CuratedList).where(CuratedList.preset_key is not None)).first()
+        assert row.total_items == 2

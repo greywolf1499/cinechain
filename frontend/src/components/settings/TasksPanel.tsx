@@ -54,6 +54,7 @@ function resultSummary(task: SystemTask): string {
   const result = task.progress_data?.result;
   if (!result) return "-";
   const { matched, total_films: total, discovered, new: added } = result as Record<string, number>;
+  if (typeof result.message === "string") return result.message;
   if (matched !== undefined && total !== undefined) return `${matched}/${total} films matched`;
   if (discovered !== undefined) return `${discovered} accounts (${added ?? 0} new)`;
   return Object.entries(result).map(([key, value]) => `${key}: ${String(value)}`).join(", ");

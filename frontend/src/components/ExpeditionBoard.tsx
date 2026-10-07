@@ -4,6 +4,7 @@ import CanonBadge from "./CanonBadge";
 import LogFilmButtons from "./LogFilmButtons";
 import MarathonProgressBar from "./MarathonProgressBar";
 import MoviePoster from "./MoviePoster";
+import { QueuedFilm } from "./CareerTrack";
 import { api, ApiError } from "../lib/api";
 import { checklistProgress, formatRuntime } from "../lib/auteurTrack";
 import CountryFlags from "./CountryFlags";
@@ -125,15 +126,18 @@ export default function ExpeditionBoard({ run }: { run: RunDetail }) {
                     onWatch={() => void log(film, true)}
                   />
                 )
-              ) : (
-                <span
-                  className={cn(
-                    "flex shrink-0 items-center gap-1 text-[11px] font-medium",
-                    state === "watched" ? "text-emerald-300" : "text-sky-300",
-                  )}
-                >
-                  <Check className="h-3.5 w-3.5" /> {state === "watched" ? "Watched" : "Queued"}
+              ) : state === "watched" ? (
+                <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-300">
+                  <Check className="h-3.5 w-3.5" /> Watched
                 </span>
+              ) : (
+                <QueuedFilm
+                  run={run}
+                  movieId={film.movie_id}
+                  locked={locked}
+                  disabled={pendingId !== null}
+                  onError={setMessage}
+                />
               )}
             </li>
           );

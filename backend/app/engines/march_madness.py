@@ -147,7 +147,7 @@ class MarchMadnessEngine(TrackerEngine):
     tags: ClassVar[list[str]] = ["Tournament", "Watchlist", "Partner voting"]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Crown a champion from a 16-film bracket.",
-        ["Compare each matchup and advance your winner, round by round; there is no seed chain."],
+        ["Compare two films and choose a winner.", "Repeat until one film wins the final."],
         ["Each decision eliminates one film; the final winner is the champion."],
         ["Eliminated films leave the tournament; there is no points-based loss."],
         [

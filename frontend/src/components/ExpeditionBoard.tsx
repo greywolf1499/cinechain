@@ -56,7 +56,7 @@ export default function ExpeditionBoard({ run }: { run: RunDetail }) {
                 state === "todo" && "border-app-border bg-app-bg/60",
               )}
             >
-              <MoviePoster path={film.poster_path} title={film.title} className="w-12 shrink-0" />
+              <MoviePoster movieId={film.movie_id} detailOptions={{ runId: run.id, step }} path={film.poster_path} title={film.title} className="w-12 shrink-0" />
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <p className="truncate text-sm font-medium text-zinc-100">{film.title}</p>
                 <div className="flex flex-wrap items-center gap-1.5">

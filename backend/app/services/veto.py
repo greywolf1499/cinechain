@@ -6,10 +6,11 @@ from app.engines.rulebook import RuleSection
 
 RULEBOOK = RuleSection(
     "Overrule a partner's latest decision.",
+    ["Spend a Golden Veto to undo their latest pick or cancel their fork."],
     [
-        "Spend an available Golden Veto to undo their latest contested step or cancel their pending fork."
+        "You hold one token. It refills every 30 days.",
+        "Undo gives back the progress that step spent.",
     ],
-    ["Your account holds one token, refilled every 30 days; undo rebuilds derived progress."],
     ["You cannot veto your own step or a seed; co-op tunnel steps use Undo instead."],
     ["Save the token for a decision that closes valuable future options."],
     ["veto", "fork"],

@@ -170,7 +170,7 @@ export default function SplitBoard({
                   key={candidate.movie_id}
                   className="flex items-center gap-3 rounded-xl border border-app-border bg-app-bg/60 p-2.5"
                 >
-                  <MoviePoster path={candidate.poster_path} title={candidate.title} className="w-12 shrink-0" />
+                  <MoviePoster movieId={candidate.movie_id} path={candidate.poster_path} title={candidate.title} className="w-12 shrink-0" />
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                     <p className="truncate text-sm font-medium text-zinc-100">
                       {candidate.title}

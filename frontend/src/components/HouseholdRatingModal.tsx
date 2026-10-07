@@ -15,12 +15,14 @@ export default function HouseholdRatingModal({
   onClose,
   onRatingsFailed,
   step,
+  watchedAt,
 }: {
   runId: string;
   film: SplitCandidate | null;
   onClose: () => void;
   onRatingsFailed: (film: SplitCandidate, reason: string) => void;
   step?: RunStep;
+  watchedAt?: string;
 }) {
   const createStep = useLogFilm(runId);
   const [score, setScore] = useState("");
@@ -43,7 +45,7 @@ export default function HouseholdRatingModal({
     setError(null);
     try {
       const logged = step
-        ? await createStep.markWatched(step, { household_score: rating })
+        ? await createStep.markWatched(step, { household_score: rating, watched_at: watchedAt })
         : await createStep.logWatched(film.movie_id, { household_score: rating });
       const point = settlementOf(logged)?.point_to ?? winner;
       setAwarded(point ? `Point to ${SPLIT_TEAMS[point].label}!` : "Logged.");

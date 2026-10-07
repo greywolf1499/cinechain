@@ -318,16 +318,14 @@ class SemanticTropeEngine(FeatureEngine):
     tagline = "Follow the plot, not the cast"
     tags: ClassVar[list[str]] = ["Any film", "Plot similarity"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Connect films by plot similarity or a shared extracted trope.",
-        [
-            "Pick a film sharing a trope or exceeding {similarity_threshold}% normalized plot similarity."
-        ],
+        "Link films with plots or themes in common.",
+        ["Pick a shared theme or a plot match above {similarity_threshold}%."],
         ["{win_goal}"],
         ["A measured weak match with no shared trope blocks the hop.", "{fail_goal}"],
         [
             "Broad themes give more onward routes than a single narrow premise.",
-            "Shared tags must pass genre compatibility and at least {trope_threshold}% normalized overview-to-concept confidence.",
-            "Inspect the shared trope and synopsis rather than treating model tags as certainty.",
+            "Shared themes need matching genres and a plot fit of at least {trope_threshold}%.",
+            "Check the theme and plot. Suggested tags can be wrong.",
         ],
         ["seed"],
     )

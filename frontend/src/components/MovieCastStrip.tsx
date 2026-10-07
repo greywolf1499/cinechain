@@ -10,7 +10,7 @@ export default function MovieCastStrip({
   onActorClick,
 }: {
   movieId: number;
-  onActorClick: (actor: ActorClickPayload) => void;
+  onActorClick?: (actor: ActorClickPayload) => void;
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ["movies", movieId, "cast"],
@@ -33,7 +33,7 @@ export default function MovieCastStrip({
           type="button"
           title={member.name}
           onClick={() =>
-            onActorClick({
+            onActorClick?.({
               actorId: member.actor_id,
               actorName: member.name,
               profilePath: member.profile_path,
@@ -42,6 +42,7 @@ export default function MovieCastStrip({
             })
           }
           className="overflow-hidden rounded-full border border-app-border transition-transform hover:scale-110 hover:border-accent"
+          disabled={!onActorClick}
         >
           {member.profile_path ? (
             <img

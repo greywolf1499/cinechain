@@ -473,14 +473,16 @@ class RabbitHoleEngine(CineChainEngine):
     tagline = "Descend. Survive. Don't blink."
     tags: ClassVar[list[str]] = ["Shared cast", "3 lives", "Rogue-like"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Survive deeper into the chain; {escape_goal}",
+        "Survive the dive; {escape_goal}",
         [
-            "Link a film and satisfy the current tier shown in the HUD. {tier_schedule}",
-            "Forcing a soft link or tier violation costs one life; inspect the HUD for any active tier re-roll.",
-            "{procedural_rules}",
+            "Link a film that meets the current tier's rule.",
+            "Spend one life to skip a missing link or a tier rule.",
+            "Check the tier card before you pick.",
         ],
         [
             "Start with {max_lives} lives; {lives_remaining} remain. Legal moves cost no life.",
+            "{tier_schedule}",
+            "{procedural_rules}",
             "{win_goal}",
         ],
         ["At zero lives, a dead end or surrender ends the run as failed.", "{fail_goal}"],
@@ -502,23 +504,23 @@ class RabbitHoleEngine(CineChainEngine):
             "escape_goal": f"escape at depth {escape}."
             if escape
             else "no escape depth is configured.",
-            "tier_schedule": (
-                "This run's procedural deck: " if procedural(rules) else "Legacy v1 schedule: "
-            )
+            "tier_schedule": ("This run's tier rules: ")
             + "; ".join(f"depth {tier.start_depth}: {tier.rule}" for tier in tiers_of(rules)),
             "procedural_rules": (
-                "This seeded deck changes every five films. Hard-mode curses persist only when feasible. "
-                "Tier boundaries grant a capped life, free re-roll or skip-curse relic. "
-                "Re-rolls prefer tokens to lives; Skip curse suspends the newest curse for one hop. "
-                "Undo restores the step's resources."
+                "Tiers change every five films. Hard-mode curses last while they can be met. "
+                "A new tier grants a life or a relic. Lives cannot exceed your cap. "
+                "Re-roll uses a token first, then a life. Skip curse lifts the newest curse for one hop. "
+                "Undo gives back what that step spent."
                 if procedural(rules)
-                else (
-                    "New runs instead deal a seeded deck of 5-7 feasible tiers, earn relics at boundaries, "
-                    "and can enable persistent Hard-mode curses or a shared UTC Daily Dive. "
-                    "Legacy v1 runs keep their original five-tier schedule without relics."
-                )
+                else ("Follow this run's five-tier schedule. This run has no relics.")
             ),
         }
+
+    def coach_line(self, run: Run, steps: Sequence[RunStep]) -> str | None:
+        state = tier_state(len(steps), run.rules_config)
+        if state.next_tier_rule and state.steps_until_next == 1:
+            return f"Tier {state.next_tier} starts next hop: {state.next_tier_rule}"
+        return f"Next film: {state.tier_rule}"
 
     game_type = RABBIT_HOLE
     supports_bounty_board = True

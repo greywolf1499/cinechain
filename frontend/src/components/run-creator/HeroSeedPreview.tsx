@@ -53,7 +53,7 @@ export default function HeroSeedPreview({
       ) : (
         <>
           <div className="flex gap-3">
-            <MoviePoster path={details?.poster_path ?? null} title={value.title} className="w-24 shrink-0 shadow-lg" />
+            <MoviePoster movieId={value.tmdb_id} path={details?.poster_path ?? null} title={value.title} className="w-24 shrink-0 shadow-lg" />
             <div className="min-w-0 flex-1">
               <p className="break-words text-base font-semibold text-zinc-100">{details?.title ?? value.title}</p>
               <p className="mt-1 text-xs text-zinc-500">

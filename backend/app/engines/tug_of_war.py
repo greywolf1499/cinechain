@@ -605,9 +605,14 @@ class TugOfWarEngine(CineChainEngine):
     tagline = "Pull the rope your way"
     tags: ClassVar[list[str]] = ["Shared cast", "Two teams", "Era or geography"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Win by leading the rope by {target_lead} points (current target: {effective_target}).",
-        ["{tug_first_turn} Team A is {territory_a}; Team B is {territory_b}.", "{tug_turn}"],
-        ["{tug_scoring}", "{sudden_rule}"],
+        "Lead by {target_lead} points to win (now: {effective_target}).",
+        ["Link a film through shared cast.", "{tug_turn}"],
+        [
+            "{tug_first_turn}",
+            "Team A: {territory_a}. Team B: {territory_b}.",
+            "{tug_scoring}",
+            "{sudden_rule}",
+        ],
         ["The other team wins if it reaches the lead target first.", "{fail_goal}"],
         [
             "Your pick sets your opponent's options: leave a frontier they cannot easily exploit.",
@@ -634,27 +639,27 @@ class TugOfWarEngine(CineChainEngine):
             else "the rest of the world",
             "tug_first_turn": "Log shared-cast films."
             if legacy
-            else "Each round gives both teams one shared-cast pull; victory is settled after both pulls."
+            else "Each team pulls once per round. Check for a win after both pulls."
             if v3
             else "Take alternating shared-cast turns.",
-            "tug_tip": "Choose actors with routes back into your territory; logging an opposing-territory film helps that side."
+            "tug_tip": "Choose actors with routes back home. Their home films help their side."
             if legacy
             else "Raid to break their streak; bank to double your next scoring pull without resetting their streak."
             if v3
             else "A raid removes only available points; bank when the doubled next pull outweighs waiting.",
-            "tug_turn": "Each watched film scores for its territory, regardless of who logged it; neutral films score neither team."
+            "tug_turn": "Watch a home film to score for that side. Neutral films score no points."
             if legacy
-            else "Build on your territory, raid the opponent's, or bank with a neutral film.",
-            "tug_scoring": "Legacy scoring: each watched territory film gives its territory one point; neutral films score neither team."
+            else "Build at home, raid their home, or bank a neutral film.",
+            "tug_scoring": "Each watched home film gives its side 1 point. Neutral films score no points."
             if legacy
             else (
-                f"Build grows your own streak up to {config['momentum_cap']}, independent of the other team's builds. "
+                f"Build grows your streak up to {config['momentum_cap']}. Their builds do not reset yours. "
                 + (
                     "Raid moves the rope 2 points and resets their streak. "
                     if config["steal_enabled"]
                     else "Raids are disabled; opposing films are neutral. "
                 )
-                + "Bank moves it 0, resets your streak and doubles your next scoring pull; each team keeps its own bank."
+                + "Bank scores 0 and resets your streak. It doubles your next scoring pull. Each team keeps its own bank."
             )
             if v3
             else (
@@ -665,14 +670,33 @@ class TugOfWarEngine(CineChainEngine):
                     else "Raids are disabled: opposing-territory films count as neutral."
                 )
             ),
-            "sudden_rule": "Legacy scoring has no momentum or Sudden Death."
+            "sudden_rule": "This run has no streak bonus or Sudden Death."
             if legacy
             else "Sudden Death is disabled; the target stays fixed."
             if not config["sudden_death_enabled"]
-            else f"After {config['sudden_death_after']} pulls, Sudden Death shrinks the target every {config['sudden_death_every']} pulls, only at complete round boundaries. Trailing team pulls first; ties alternate initiative. Banks remain zero-point pulls."
+            else f"After {config['sudden_death_after']} pulls, shrink the target every {config['sudden_death_every']} pulls. Finish the round first. The team behind goes first. Ties swap who starts. Banks still score 0."
             if v3
             else f"Sudden Death begins after {config['sudden_death_after']} pulls: neutral films give the opponent 1 point and the target shrinks every {config['sudden_death_every']} pulls.",
         }
+
+    def coach_line(self, run: Run, steps: Sequence[RunStep]) -> str | None:
+        rules = run.rules_config or {}
+        if rules.get(TUG_RULES_VERSION_KEY) not in (2, 3):
+            return None
+        players = self.team_players(run)
+        result = tally(steps, rules, players)
+        if rules.get("steal_enabled", True):
+            streaks = (
+                result.streaks
+                if rules.get(TUG_RULES_VERSION_KEY) == 3
+                else {result.streak[0]: result.streak[1]}
+            )
+            for team in (TEAM_A, TEAM_B):
+                streak = streaks.get(team, 0)
+                if streak >= 2:
+                    name = self.team_name(run, team)
+                    return f"{name}'s streak is ×{streak} — a Raid breaks it."
+        return f"{self.team_name(run, result.next_team)} pulls next."
 
     game_type = TUG_OF_WAR
     display_name = "Tug of War"

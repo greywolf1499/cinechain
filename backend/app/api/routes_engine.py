@@ -15,7 +15,7 @@ from app.db import get_session
 from app.engines import chaos
 from app.engines.modifier_registry import ModifierSpec
 from app.engines.registry import ENGINE_REGISTRY, get_engine
-from app.engines.rulebook import GLOSSARY, RuleSection, render
+from app.engines.rulebook import RuleSection, glossary, render
 from app.engines.trackers import RouletteEngine, SpinFilters
 from app.models.curated import CuratedList
 from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
@@ -176,7 +176,7 @@ def list_engines(
                     }
                 ),
             ),
-            glossary={key: GLOSSARY[key] for key in cls.rulebook.glossary},
+            glossary={key: glossary()[key] for key in cls.rulebook.glossary},
             unavailable_reason=(
                 "Requires OMDb integration. Ask an admin to configure it in Settings → Integrations."
                 if "omdb" in cls.requires
@@ -208,8 +208,8 @@ def run_rulebook(
     if run.engine_version <= 1:
         values.update(
             {
-                "win_goal": "Legacy run: complete it manually when you are done.",
-                "fail_goal": "Legacy run: configured automatic fail conditions are not enforced.",
+                "win_goal": "Finish this run by hand when you are done.",
+                "fail_goal": "This run does not end on its own.",
             }
         )
     active = engine.active_modifiers(rules)
@@ -269,7 +269,7 @@ def run_rulebook(
             section,
             scoring=[
                 *section.scoring,
-                "Legacy engine: progress is recorded, but automatic win/fail completion is not enforced; finish the run manually.",
+                "Finish this run by hand when you are done.",
             ],
         )
     terms = dict.fromkeys(
@@ -277,7 +277,6 @@ def run_rulebook(
     )
     settings = {
         "Seed policy": engine.seed_policy,
-        "Engine version": str(run.engine_version),
         "Repeat policy": str(values["allow_repeats"]),
         "Minimum runtime": f"{values['min_runtime']} minutes",
         "Wildcard budget": "Unlimited"
@@ -337,7 +336,7 @@ def run_rulebook(
         display_name=engine.display_name,
         rulebook=section,
         overlays=overlays,
-        glossary={key: GLOSSARY[key] for key in terms},
+        glossary={key: glossary(render_rules)[key] for key in terms},
         settings=settings,
     )
 

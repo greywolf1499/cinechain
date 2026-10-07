@@ -360,24 +360,22 @@ function FilmPicker({
         const on = pickedIds.has(film.movie_id);
         return (
           <li key={film.movie_id}>
-            <button
-              type="button"
-              onClick={() => onToggle(film)}
-              aria-pressed={on}
+            <div
               title={`${film.title}${film.year ? ` (${film.year})` : ""}`}
               className={cn(
                 "group relative block w-full overflow-hidden rounded-md border text-left transition-colors",
                 on ? "border-accent ring-2 ring-accent" : "border-app-border hover:border-zinc-500",
               )}
             >
-              <MoviePoster path={film.poster_path} title={film.title} className="w-full" />
-              <span className="block truncate bg-app-bg px-1.5 py-1 text-[11px] text-zinc-300">{film.title}</span>
+              <MoviePoster movieId={film.movie_id} path={film.poster_path} title={film.title} className="w-full" />
+              <button type="button" onClick={() => onToggle(film)} aria-pressed={on}
+                className="block w-full truncate bg-app-bg px-1.5 py-1 text-left text-[11px] text-zinc-300">{on ? "Remove" : "Select"} · {film.title}</button>
               {on && (
                 <span className="absolute right-1 top-1 rounded-full bg-accent px-1.5 text-[10px] font-bold text-zinc-950">
                   {"\u2713"}
                 </span>
               )}
-            </button>
+            </div>
           </li>
         );
       })}
@@ -432,7 +430,7 @@ function OptimizedSequence({
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-bold text-zinc-950">
                   {index + 1}
                 </span>
-                <MoviePoster path={film.poster_path} title={film.title} className="w-16 shrink-0" />
+                <MoviePoster movieId={film.movie_id} path={film.poster_path} title={film.title} className="w-16 shrink-0" />
                 <div className="min-w-0">
                   <h3 className="min-w-0 text-sm font-semibold text-zinc-100">
                     <ClampedLabel text={film.title} lines={1} as="span" />

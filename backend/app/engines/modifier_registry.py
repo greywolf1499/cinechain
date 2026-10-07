@@ -378,10 +378,11 @@ TITLE_MODIFIERS = [
         RuleSection(
             "Conquer the alphabet in title order.",
             [
-                "Pick the next letter shown in the progress chip; configured wild letters and digit-leading titles can stand in."
+                "Pick the next letter on the chip.",
+                "Chosen wild letters and titles that start with digits can stand in.",
             ],
             [
-                "Only watched films advance progress; seeds count only when seed_sets_start is enabled."
+                "Only watched films count. Your starting film counts if that choice is on.",
             ],
             [
                 "A wrong letter blocks the pick. A wildcard can stand in only when no legal reachable title fits."
@@ -401,10 +402,11 @@ TITLE_MODIFIERS = [
         RuleSection(
             "Watch numbered titles.",
             [
-                "Choose titles with digits, number words, ordinals or standalone uppercase Roman numerals II to XX."
+                "Choose titles with digits, number words, or words like First.",
+                "Roman numerals II to XX also count.",
             ],
             ["This is a film filter, not a separate victory condition."],
-            ["Years from 1900 to 2099 do not count unless allow_years is enabled."],
+            ["Years from 1900 to 2099 count only if you turn on years."],
             ["Se7en and Rocky II qualify; I, Robot and Mix do not."],
             [],
         ),
@@ -419,8 +421,8 @@ TITLE_MODIFIERS = [
         AscendingParams,
         RuleSection(
             "Climb the numbers in film titles.",
-            ["Choose a larger number, or exactly the next number in count_up mode."],
-            ["Only watched non-seed films advance progress; count_up wins at the target."],
+            ["Choose a larger number.", "For Count up, choose the next number."],
+            ["Only watched films after the start count.", "Count up wins at the target."],
             [
                 "Wrong numbers block the pick. A wildcard can stand in only when no reachable title fits."
             ],

@@ -197,6 +197,7 @@ export default function CareerTrack({ run }: { run: RunDetail }) {
       )}
       <ol className="relative flex flex-col gap-3 border-l border-app-border pl-5">
         {track.map((film, index) => {
+          const step = run.steps.find((entry) => entry.movie_id === film.movie_id);
           const state = statuses.get(film.movie_id) ?? "upcoming";
           return (
             <li key={film.movie_id} className="flex flex-col gap-1.5">
@@ -217,7 +218,7 @@ export default function CareerTrack({ run }: { run: RunDetail }) {
                     state === "watched" ? "bg-emerald-400" : state === "next" ? "bg-accent" : "bg-zinc-700",
                   )}
                 />
-                <MoviePoster path={film.poster_path} title={film.title} className="w-12 shrink-0" />
+                <MoviePoster movieId={film.movie_id} detailOptions={{ runId: run.id, step }} path={film.poster_path} title={film.title} className="w-12 shrink-0" />
                 <div className="min-w-0 flex-1 basis-36 sm:basis-auto">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <p className="truncate text-sm font-medium text-zinc-100">{film.title}</p>

@@ -110,6 +110,14 @@ export function useRunRulebook(runId: string | undefined) {
 	});
 }
 
+export function useRunCoach(runId: string | undefined) {
+	return useQuery({
+		queryKey: ["runs", runId ?? "", "coach"],
+		queryFn: () => api.get<{ line: string | null }>(`/runs/${runId}/coach`),
+		enabled: !!runId,
+	});
+}
+
 export function useRunStats(runId: string | undefined) {
 	return useQuery({
 		queryKey: queryKeys.runStats(runId ?? ""),
@@ -339,6 +347,8 @@ export function useMovieDetail(movieId: number | undefined, enabled = true) {
 	return {
 		movie: hydrated.data ?? base.data,
 		isHydrating: needsHydration && hydrated.isFetching,
+		error: base.error ?? hydrated.error,
+		refetch: () => needsHydration ? hydrated.refetch() : base.refetch(),
 	};
 }
 

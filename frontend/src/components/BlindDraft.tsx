@@ -138,6 +138,8 @@ export default function BlindDraft({
             >
               <div className="relative overflow-hidden rounded-md">
                 <MoviePoster
+                  movieId={movie.tmdb_id}
+                  concealed={masked}
                   path={movie.poster_path}
                   title={masked ? "Hidden poster" : movie.title}
                   className={cn(

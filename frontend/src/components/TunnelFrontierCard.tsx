@@ -53,7 +53,7 @@ export default function TunnelFrontierCard({
           return (
             <div key={side} className="flex flex-wrap items-center gap-3">
               {frontier ? (
-                <MoviePoster path={frontier.movie_poster_path} title={frontier.movie_title} className="w-10 shrink-0" />
+                <MoviePoster movieId={frontier.movie_id} detailOptions={{ runId, step: frontier }} path={frontier.movie_poster_path} title={frontier.movie_title} className="w-10 shrink-0" />
               ) : (
                 <div className="aspect-[2/3] w-10 shrink-0 rounded-md bg-app-surface-hover" />
               )}

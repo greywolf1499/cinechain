@@ -41,6 +41,7 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
       )}
       <ol className="relative flex flex-col gap-3 border-l border-app-border pl-5">
         {films.map((film, index) => {
+          const step = run.steps.find((entry) => entry.movie_id === film.movie_id);
           const state = statuses.get(film.movie_id) ?? "upcoming";
           const runtime = formatRuntime(film.runtime);
           return (
@@ -65,7 +66,7 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
               <span className="w-11 shrink-0 text-center text-sm font-bold tabular-nums text-zinc-400">
                 {film.year}
               </span>
-              <MoviePoster path={film.poster_path} title={film.title} className="w-12 shrink-0" />
+              <MoviePoster movieId={film.movie_id} detailOptions={{ runId: run.id, step }} path={film.poster_path} title={film.title} className="w-12 shrink-0" />
               <div className="min-w-0 flex-1 basis-36 sm:basis-auto">
                 <p className="truncate text-sm font-medium text-zinc-100">{film.title}</p>
                 <div className="flex flex-wrap gap-1">{film.milestones?.map((milestone) =>

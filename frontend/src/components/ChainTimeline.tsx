@@ -8,7 +8,7 @@ import ChainLink from "./ChainLink";
 import ColorSwatch from "./ColorSwatch";
 import EditSettingYearModal from "./EditSettingYearModal";
 import MarkWatchedModal from "./MarkWatchedModal";
-import MovieDetailModal from "./MovieDetailModal";
+import { useMovieDetail } from "../store/movieDetailStore";
 import { CanonBadgeList } from "./CanonBadge";
 import { cn } from "../lib/cn";
 import { parseOriginCountries } from "../lib/countries";
@@ -53,7 +53,6 @@ export default function ChainTimeline({
   steps,
   keystoneActorIds,
   onActorClick,
-  onRequestDeleteStep,
   locked = false,
   castLinked = true,
   gameType,
@@ -74,7 +73,7 @@ export default function ChainTimeline({
     if (typeof window === "undefined") return "story";
     return (localStorage.getItem(ORDER_STORAGE_KEY) as Order | null) ?? "story";
   });
-  const [selectedStep, setSelectedStep] = useState<RunStep | null>(null);
+  const openDetail = useMovieDetail((state) => state.open);
   const [markWatchedStep, setMarkWatchedStep] = useState<RunStep | null>(null);
   const [editEraStep, setEditEraStep] = useState<RunStep | null>(null);
   const timeTravel = gameType === HISTORICAL_TIME_TRAVEL;
@@ -88,7 +87,6 @@ export default function ChainTimeline({
   if (steps.length === 0) return null;
 
   const orderedSteps = order === "story" ? steps : [...steps].reverse();
-  const tailStepId = steps[steps.length - 1].id;
   const rows = buildRows(orderedSteps, order);
 
   return (
@@ -123,8 +121,9 @@ export default function ChainTimeline({
             <StationRow
               key={`station-${row.step.id}`}
               step={row.step}
+              onActorClick={onActorClick}
               badges={badgesMap?.[String(row.step.movie_id)]}
-              onOpen={() => setSelectedStep(row.step)}
+              onOpen={() => openDetail(row.step.movie_id, { runId, step: row.step, onActorClick })}
               onQuickMarkWatched={() =>
                 void quickMarkWatched.markWatched(row.step).catch(() => {
                   setMarkWatchedStep(row.step);
@@ -154,26 +153,6 @@ export default function ChainTimeline({
         )}
       </div>
 
-      {selectedStep && (
-        <MovieDetailModal
-          open={!!selectedStep}
-          onClose={() => setSelectedStep(null)}
-          runId={runId}
-          step={selectedStep}
-          isTailStep={selectedStep.id === tailStepId}
-          locked={locked}
-          onActorClick={onActorClick}
-          onRequestMarkWatched={() => {
-            setMarkWatchedStep(selectedStep);
-            setSelectedStep(null);
-          }}
-          onRequestDelete={() => {
-            onRequestDeleteStep(selectedStep.id);
-            setSelectedStep(null);
-          }}
-        />
-      )}
-
       {editEraStep && (
         <EditSettingYearModal
           open
@@ -201,6 +180,7 @@ export default function ChainTimeline({
 
 function StationRow({
   step,
+  onActorClick,
   badges,
   onOpen,
   onQuickMarkWatched,
@@ -210,6 +190,7 @@ function StationRow({
   onEditEra,
 }: {
   step: RunStep;
+  onActorClick: (actor: ActorClickPayload) => void;
   badges: CanonBadge[] | undefined;
   onOpen: () => void;
   onQuickMarkWatched: () => void;
@@ -239,13 +220,13 @@ function StationRow({
           isPlanned && "border-dashed border-accent/40 bg-accent/5",
         )}
       >
-        <button
-          type="button"
-          onClick={onOpen}
+        <div
           className="flex min-w-0 items-start gap-3 text-left transition-opacity hover:opacity-90"
         >
           <div className="relative w-16 shrink-0">
             <MoviePoster
+              movieId={step.movie_id}
+              detailOptions={{ runId: step.run_id, step, onActorClick }}
               path={step.movie_poster_path}
               title={step.movie_title}
               className={cn("w-16", isPlanned && "opacity-60")}
@@ -256,12 +237,12 @@ function StationRow({
           </div>
 
           <div className="min-w-0 flex-1">
-            <ClampedLabel
+            <button type="button" onClick={onOpen} className="text-left"><ClampedLabel
               text={step.movie_title}
               lines={2}
               as="p"
               className="text-sm font-medium text-zinc-100"
-            />
+            /></button>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
               <span>{step.movie_release_year ?? "—"}</span>
               {decade !== null && (
@@ -290,7 +271,7 @@ function StationRow({
             <RuleFlags meta={step.transition_metadata} />
             <LinkBonusBadges meta={step.transition_metadata} className="mt-1.5" />
           </div>
-        </button>
+        </div>
 
         {step.user_notes && (
           <ExpandableText

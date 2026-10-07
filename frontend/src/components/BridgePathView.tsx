@@ -71,21 +71,20 @@ export default function BridgePathView({
                 swapIndex === index && "border-accent/60 bg-accent/5",
               )}
             >
-              <button
-                type="button"
-                onClick={() => onMovieClick?.(node.movie_id)}
-                disabled={!onMovieClick}
+              <div
                 title={node.title}
                 className="flex w-full min-w-0 flex-col items-center transition-opacity hover:opacity-80 disabled:cursor-default disabled:hover:opacity-100"
               >
-                <MoviePoster path={node.poster_path} title={node.title} className="w-28" />
+                <MoviePoster movieId={node.movie_id} path={node.poster_path} title={node.title} className="w-28" />
+                <button type="button" onClick={() => onMovieClick?.(node.movie_id)} disabled={!onMovieClick}>
                 <ClampedLabel
                   text={node.title}
                   lines={2}
                   as="span"
                   className="mt-1.5 min-h-[2lh] w-full text-xs font-medium leading-tight text-zinc-200"
                 />
-              </button>
+                </button>
+              </div>
               <p className="mt-0.5 h-4 text-[11px] text-zinc-500">{node.release_year ?? ""}</p>
               <div className="mt-1 flex min-h-5 flex-col items-center gap-1">
                 {canSwap && (

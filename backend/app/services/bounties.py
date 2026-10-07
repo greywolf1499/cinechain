@@ -24,7 +24,8 @@ RULEBOOK = RuleSection(
     "Earn rewards by completing film side quests.",
     [
         "Match a film to an active bounty while obeying your mode's rules.",
-        "Discard one quest for free per run; impossible quests expire and are replaced for free.",
+        "Swap one quest for free per run.",
+        "Quests you cannot meet are replaced for free.",
     ],
     [
         "At most one bounty completes per logged step. Reward: {bounty_reward}; a feasible quest replaces it when available."
@@ -32,7 +33,7 @@ RULEBOOK = RuleSection(
     ["A bounty does not waive the main mode's restrictions."],
     [
         "Choose a film satisfying both a bounty and a useful onward route.",
-        "A rewarded wildcard only buys soft violations; hard-only modes still keep their restrictions.",
+        "Use a rewarded wildcard to skip a missing cast link. Other film rules still apply.",
     ],
     ["bounty", "wildcard", "life", "hint", "star"],
 )

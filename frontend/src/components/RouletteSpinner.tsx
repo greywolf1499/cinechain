@@ -237,7 +237,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
           )}
         >
           <div className="flex gap-3">
-            <MoviePoster path={pick.poster_path} title={pick.title} className="w-20 shrink-0" />
+            <MoviePoster movieId={pick.tmdb_id} path={pick.poster_path} title={pick.title} className="w-20 shrink-0" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold leading-tight text-zinc-100">{pick.title}</p>
               <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-zinc-500">

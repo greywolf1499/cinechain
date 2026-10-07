@@ -290,7 +290,7 @@ export default function BingoPage() {
                   <ul className="flex max-h-96 flex-col gap-2 overflow-y-auto">
                     {selectedFilms.map((film) => (
                       <li key={film.movie_id} className="flex items-center gap-2.5 rounded-lg bg-app-bg p-2">
-                        <MoviePoster path={film.poster_path} title={film.title} className="w-9 shrink-0" />
+                        <MoviePoster movieId={film.movie_id} path={film.poster_path} title={film.title} className="w-9 shrink-0" />
                         <div className="min-w-0">
                           <p className="truncate text-xs font-medium text-zinc-100">{film.title}</p>
                           <p className="text-[11px] text-zinc-500">

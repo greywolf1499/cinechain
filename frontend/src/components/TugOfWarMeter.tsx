@@ -11,11 +11,13 @@ export default function TugOfWarMeter({
   participants,
   users,
   finished,
+  glossary,
 }: {
   rules: RulesConfig;
   participants: RunParticipant[];
   users: UserSummary[] | undefined;
   finished: boolean;
+  glossary: Record<string, string>;
 }) {
   const target = tugTarget(rules);
   const dimension = TUG_DIMENSIONS[rules.dimension ?? "era"];
@@ -131,31 +133,32 @@ export default function TugOfWarMeter({
         <span>First to lead by {target} wins.</span>
         {v3 && <>
           <span>Round {(tugState?.rounds ?? 0) + (finished ? 0 : 1)} · victory after both pulls</span>
-          {(["team_a", "team_b"] as const).map((team) => <GlossaryChip key={team} term="streak" className="text-orange-300">
+          {(["team_a", "team_b"] as const).map((team) => <GlossaryChip glossary={glossary} key={team} term="streak" className="text-orange-300">
             🔥 {team === "team_a" ? nameA : nameB} streak ×{tugState?.streaks?.[team] ?? 0}
           </GlossaryChip>)}
-          {(["team_a", "team_b"] as const).filter((team) => tugState?.banks?.[team]).map((team) => <GlossaryChip key={team} term="bank" className="text-amber-300">
+          {(["team_a", "team_b"] as const).filter((team) => tugState?.banks?.[team]).map((team) => <GlossaryChip glossary={glossary} key={team} term="bank" className="text-amber-300">
             ⚓ {team === "team_a" ? nameA : nameB} Bank (next pull ×2)
           </GlossaryChip>)}
         </>}
         {tugState?.streak_team && tugState.streak > 0 && (
-          <GlossaryChip term="streak" className="text-orange-300">
+          <GlossaryChip glossary={glossary} term="streak" className="text-orange-300">
             🔥 {tugState.streak_team === "team_a" ? nameA : nameB} streak ×{tugState.streak}
           </GlossaryChip>
         )}
         {tugState?.anchor && (
-          <GlossaryChip term="bank" className="text-amber-300">
+          <GlossaryChip glossary={glossary} term="bank" className="text-amber-300">
             ⚓ {tugState.anchor === "team_a" ? nameA : nameB} Bank (next pull ×2)
           </GlossaryChip>
         )}
         {tugState?.sudden_death && (
-          <GlossaryChip term="sudden_death" className="font-semibold text-red-300">Sudden Death · target shrinks every {rules.sudden_death_every ?? 2} pulls{v3 ? " at round boundaries · Trailing team pulls first" : ""}</GlossaryChip>
+          <GlossaryChip glossary={glossary} term="sudden_death" className="font-semibold text-red-300">Sudden Death · target shrinks every {rules.sudden_death_every ?? 2} pulls{v3 ? " at round boundaries · Trailing team pulls first" : ""}</GlossaryChip>
         )}
       </div>
       {tugState?.pulls.length ? (
         <div aria-label="Recent Tug pulls" className="mt-2 flex flex-wrap justify-center gap-1">
           {tugState.pulls.slice(-8).map((pull, index) => (
             <GlossaryChip
+              glossary={glossary}
               term={pull.kind === "invasion" ? "raid" : pull.kind === "neutral" ? "bank" : pull.kind === "home" ? "build" : "sudden_death"}
               key={pull.step_id}
               className={cn(

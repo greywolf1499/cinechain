@@ -22,8 +22,8 @@ class CanonIslandEngine(CineChainEngine):
     tagline = "Stay on the canon"
     tags: ClassVar[list[str]] = ["Shared cast", "One curated list"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Explore a shared-cast chain entirely inside your chosen canon list.",
-        ["Pick a list member linked to the current film; even the seed must belong to the list."],
+        "Link films inside your chosen list.",
+        ["Pick a list film linked to the current film.", "Start with a film from the list."],
         ["{win_goal}"],
         ["Films outside the list are blocked, even with a wildcard.", "{fail_goal}"],
         [

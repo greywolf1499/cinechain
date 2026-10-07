@@ -141,12 +141,15 @@ class BaseChallengeEngine(ABC):
             **config,
             "win_goal": conditions(wins, "reach")
             if cls.supports_json_rules and wins
-            else "Keep exploring; complete the run manually when you are done.",
+            else "Keep exploring. Finish the run when you are done.",
             "fail_goal": conditions(failures, "exceed")
             if cls.supports_json_rules and failures
-            else "There is no automatic loss unless a mode-specific rule says otherwise.",
+            else "Check this mode's rules for ways to lose.",
             "cast_depth": config.get("max_cast_order") or "all credited actors",
         }
+
+    def coach_line(self, run: Run, steps: Sequence[RunStep]) -> str | None:
+        return None
 
     @classmethod
     def modifier_problems(cls, rules: dict | None) -> list[str]:

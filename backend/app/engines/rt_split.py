@@ -125,8 +125,9 @@ class RottenTomatoesSplitEngine(TrackerEngine):
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Be the first side to {target_points} points.",
         [
-            "Choose a film with at least {divergence} points between RT critics and IMDb audience (IMDb x10).",
-            "Watch it, then give a household rating; retry missing scores or log it as no-contest.",
+            "Choose a film with a score gap of at least {divergence} on the chips.",
+            "Watch it, then agree on a score from 1 to 100.",
+            "Retry missing scores or choose no-contest.",
         ],
         [
             "The side closer to the household rating gains 1 point; ties go to audience.",

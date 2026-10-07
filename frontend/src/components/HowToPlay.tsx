@@ -1,8 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 import Modal from "./Modal";
 import Popover from "./ui/Popover";
-import { useEngines, useRunRulebook } from "../lib/queries";
+import { useEngines, useRunCoach, useRunRulebook } from "../lib/queries";
 import type { EngineMeta, RuleSection } from "../types/api";
+
+const MECHANIC_CHIPS: Record<string, string> = {
+  wildcard: "🃏", life: "❤️", tier: "🕳️", bounty: "🎯", hint: "💡", star: "⭐",
+  raid: "⚔️", build: "🏠", bank: "⚓", streak: "🔥", sudden_death: "⏳",
+  veto: "✋", fork: "🔱", checklist: "✅", track: "🎬", no_contest: "🤝", seed: "🌱",
+};
 
 export function HowToPlayCard({ section }: { section: RuleSection }) {
   return (
@@ -32,7 +38,7 @@ export function GlossaryChip({
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const { data: engines, error } = useEngines();
-  const definition = glossary?.[term] ?? engines?.flatMap((engine) =>
+  const definition = glossary ? glossary[term] : engines?.flatMap((engine) =>
     engine.glossary?.[term] ? [engine.glossary[term]] : [],
   )[0];
   return (
@@ -66,7 +72,7 @@ function FullSection({ section, glossary }: { section: RuleSection; glossary: Re
       ))}
       <div className="flex flex-wrap gap-3" aria-label="Glossary">
         {section.glossary.map((term) => (
-          <GlossaryChip key={term} term={term} glossary={glossary}>{term.replaceAll("_", " ")}</GlossaryChip>
+          <GlossaryChip key={term} term={term} glossary={glossary}>{MECHANIC_CHIPS[term]} {term.replaceAll("_", " ")}</GlossaryChip>
         ))}
       </div>
     </div>
@@ -77,14 +83,32 @@ export function HowToPlayDrawer({
   open, onClose, engine, runId,
 }: { open: boolean; onClose: () => void; engine?: EngineMeta; runId?: string }) {
   const { data, error, isFetching, refetch } = useRunRulebook(runId);
+  const coach = useRunCoach(open ? runId : undefined);
+  const [tip, setTip] = useState<{ term: string; text: string } | null>(null);
   const [tab, setTab] = useState<"rules" | "settings">("rules");
   const tabId = useId();
   useEffect(() => { setTab("rules"); }, [runId, engine?.game_type, open]);
   const section = runId ? data?.rulebook : engine?.rulebook;
   const glossary = data?.glossary ?? engine?.glossary ?? {};
+  const mode = data?.game_type ?? engine?.game_type;
+  useEffect(() => {
+    if (!open || !mode || !coach.data?.line) { setTip(null); return; }
+    const line = coach.data.line.toLowerCase();
+    const term = ["raid", "tier", "bounty", "bank", "streak"].find((key) => line.includes(key) && glossary[key]);
+    if (!term) { setTip(null); return; }
+    const key = `cinechain.rulebook.seen.${mode}.${term}`;
+    if (localStorage.getItem(key)) { setTip(null); return; }
+    setTip({ term, text: glossary[term] });
+    localStorage.setItem(key, "1");
+  }, [open, mode, coach.data?.line, data?.glossary, engine?.glossary]);
   return (
     <Modal open={open} onClose={onClose} title={`How to play: ${data?.display_name ?? engine?.display_name ?? "this run"}`}
       widthClassName="ml-auto h-full max-w-xl rounded-l-xl" bodyClassName="max-h-[80vh] overflow-y-auto px-5 py-4">
+      {coach.data?.line && <section aria-label="Right now" className="mb-4 rounded-lg border border-sky-900 bg-sky-950/20 p-3 text-sm text-sky-200">
+        <p><strong>Right now:</strong> {coach.data.line}</p>
+        {tip && <p role="status" className="mt-2 text-xs text-zinc-300">{MECHANIC_CHIPS[tip.term]} {tip.text}</p>}
+      </section>}
+      {coach.error && <p role="alert" className="mb-3 text-xs text-amber-300">Could not load the current tip. <button onClick={() => void coach.refetch()} className="underline">Retry</button></p>}
       {runId && (
         <div className="mb-4 flex gap-3" role="tablist" aria-label="Rulebook view">
           {(["rules", "settings"] as const).map((value) => (
@@ -115,7 +139,7 @@ export function HowToPlayDrawer({
           {Object.entries(data?.settings ?? {}).map(([label, value]) => (
             <div key={label}><dt className="font-semibold text-zinc-200">{label}</dt><dd className="text-zinc-400">{value}</dd></div>
           ))}
-          <dt className="font-semibold text-zinc-200">Active overlays</dt>
+          <dt className="font-semibold text-zinc-200">Extra rules</dt>
           <dd className="text-zinc-400">{data?.overlays.map((overlay) => overlay.title).join(", ") || "None"}</dd>
         </dl>
       ) : (

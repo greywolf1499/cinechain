@@ -255,7 +255,7 @@ function OfferCard({
   const { movie, isHydrating } = useMovieDetail(movieId);
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-app-border bg-app-bg p-3">
-      <MoviePoster path={movie?.poster_path ?? null} title={movie?.title ?? "Loading"} className="w-full" />
+      <MoviePoster movieId={movieId} path={movie?.poster_path ?? null} title={movie?.title ?? "Loading"} className="w-full" />
       <div>
         <p className="text-sm font-semibold text-zinc-100">{movie?.title ?? "Loading..."}</p>
         <p className="text-[11px] text-zinc-500">

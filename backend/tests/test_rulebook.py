@@ -10,7 +10,7 @@ from app.api.deps import get_current_user
 from app.db import get_session
 from app.engines import chaos, modifiers
 from app.engines.registry import ENGINE_REGISTRY
-from app.engines.rulebook import GLOSSARY, render
+from app.engines.rulebook import glossary, render
 from app.main import app
 from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant
 from app.models.user import User
@@ -47,7 +47,7 @@ CUSTOM_RULES = {
 def assert_section(section):
     assert section.goal and section.turn and section.scoring and section.tips
     assert all(section.turn) and all(section.scoring) and all(section.tips)
-    assert all(term in GLOSSARY for term in section.glossary)
+    assert all(term in glossary() for term in section.glossary)
     for line in [section.goal, *section.turn, *section.scoring, *section.lose, *section.tips]:
         assert not re.search(r"\{[^{}]+\}", line)
 
@@ -146,7 +146,7 @@ def test_engine_metadata_has_server_copy_and_rulebooks(rulebook_client):
         )
         assert set(entry["rulebook"]["glossary"]) <= entry["glossary"].keys()
     rabbit = next(entry for entry in result.json() if entry["game_type"] == "rabbit_hole")
-    assert "New runs instead deal a seeded deck" in " ".join(rabbit["rulebook"]["turn"])
+    assert "Check the tier card" in " ".join(rabbit["rulebook"]["turn"])
 
 
 @pytest.mark.parametrize("mode", ENGINE_REGISTRY)
@@ -164,7 +164,7 @@ def test_run_endpoint_renders_all_modes(rulebook_client, mode):
         assert "Max Lives" not in data["settings"]
     if mode == "tug_of_war":
         assert "7 points" in data["rulebook"]["goal"]
-        assert "1960" in " ".join(data["rulebook"]["turn"])
+        assert "1960" in " ".join(data["rulebook"]["scoring"])
         assert "Target Points" not in data["settings"]
 
 
@@ -226,13 +226,166 @@ def test_legacy_tug_copy_and_life_bounty_reward(rulebook_client):
     client, db, user = rulebook_client
     legacy = new_run(db, user, "tug_of_war")
     data = client.get(f"/api/runs/{legacy}/rulebook").json()
-    assert "Legacy scoring" in data["rulebook"]["scoring"][0]
-    assert "neutral films score neither" in data["rulebook"]["turn"][1]
+    assert "1 point" in " ".join(data["rulebook"]["scoring"])
+    assert "Neutral films score no points" in " ".join(data["rulebook"]["turn"])
     modern = new_run(db, user, "tug_of_war", {**CUSTOM_RULES, "tug_rules_version": 2})
     data = client.get(f"/api/runs/{modern}/rulebook").json()
-    assert "4" in data["rulebook"]["scoring"][0]
-    assert "20 pulls" in data["rulebook"]["scoring"][1]
+    assert "4" in " ".join(data["rulebook"]["scoring"])
+    assert "20 pulls" in " ".join(data["rulebook"]["scoring"])
     rabbit = new_run(db, user, "rabbit_hole", {**CUSTOM_RULES, "bounty_board": True})
     data = client.get(f"/api/runs/{rabbit}/rulebook").json()
-    assert "one life" in data["overlays"][0]["rulebook"]["scoring"][0]
-    assert "5 lives; 2 remain" in data["rulebook"]["scoring"][0]
+    assert "one life" in " ".join(data["overlays"][0]["rulebook"]["scoring"])
+    assert "5 lives" in data["rulebook"]["scoring"][0]
+    assert "2 remain" in data["rulebook"]["scoring"][1]
+
+
+def syllables(word):
+    word = re.sub(r"[^a-z]", "", word.lower())
+    if not word:
+        return 1
+    groups = len(re.findall(r"[aeiouy]+", word))
+    return max(1, groups - int(word.endswith("e") and not word.endswith("le")))
+
+
+def assert_readable(section, definitions):
+    lines = [section.goal, *section.turn, *section.scoring, *section.lose, *section.tips]
+    words = lambda text: re.findall(r"\b[\w'-]+\b", text)
+    assert len(words(section.goal)) <= 14, section.goal
+    assert len(section.turn) <= 3, section.turn
+    assert all(len(words(line)) <= 16 for line in section.turn), section.turn
+    assert all(len(words(line)) <= 25 for line in lines[1:]), lines
+    copy = " ".join([*lines, *(definitions[key] for key in section.glossary)])
+    assert not re.search(
+        r"\b(v1|v2|v3|legacy|server|metadata|predicate|overlay|modifier|soft violation|fold)\b",
+        copy,
+        re.IGNORECASE,
+    ), copy
+    for text in (" ".join([section.goal, section.turn[0], section.scoring[0]]), " ".join(lines)):
+        tokens = words(text)
+        sentences = max(1, len(re.findall(r"[.!?](?:\s|$)", text)))
+        grade = (
+            0.39 * len(tokens) / sentences
+            + 11.8 * sum(map(syllables, tokens)) / len(tokens)
+            - 15.59
+        )
+        assert grade <= 8, (round(grade, 2), text)
+
+
+READABILITY_CASES = (
+    [
+        (
+            mode,
+            cls,
+            {
+                **DEFAULT_RULES_CONFIG,
+                **cls.default_modifiers,
+                **{
+                    field.key: field.default
+                    for field in cls.rule_fields
+                    if field.default is not None
+                },
+                **preset.values,
+            },
+        )
+        for mode, cls in ENGINE_REGISTRY.items()
+        for preset in cls.presets
+    ]
+    + [
+        (mode, cls, rules)
+        for mode, cls in ENGINE_REGISTRY.items()
+        for rules in [DEFAULT_RULES_CONFIG, CUSTOM_RULES]
+    ]
+    + [
+        (
+            "tug_of_war",
+            ENGINE_REGISTRY["tug_of_war"],
+            {**CUSTOM_RULES, "tug_rules_version": version},
+        )
+        for version in [1, 2, 3]
+    ]
+)
+
+
+@pytest.mark.parametrize("mode,cls,rules", READABILITY_CASES)
+def test_player_copy_readability(mode, cls, rules):
+    assert_readable(render(cls.rulebook, cls.rulebook_values(rules)), glossary(rules))
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_tug_glossary_is_variant_specific(version):
+    terms = glossary({"tug_rules_version": version})
+    if version == 2:
+        assert "shared streak" in terms["streak"]
+        assert "up to 1" in terms["raid"]
+    elif version == 3:
+        assert "own run" in terms["streak"]
+        assert "rope by 2" in terms["raid"]
+        assert "no points" in terms["bank"]
+    else:
+        assert "no streak" in terms["streak"]
+        assert "no raids" in terms["raid"]
+
+
+def test_extra_rule_copy_readability():
+    from app.engines.modifier_registry import registry
+
+    values = {
+        "chaos_label": "Pre-1970",
+        "bounty_reward": "one life, capped at your maximum",
+        "chrono_word": "before",
+        "runtime_word": "shorter",
+        "country_cooldown": 4,
+    }
+    for section in [
+        bounties.RULEBOOK,
+        chaos.RULEBOOK,
+        blind_fork.RULEBOOK,
+        veto.RULEBOOK,
+        *(spec.rulebook for spec in registry().values()),
+    ]:
+        assert_readable(render(section, values), glossary())
+
+
+@pytest.mark.parametrize("curses", [False, True])
+def test_procedural_rabbit_copy_readability(rulebook_client, curses):
+    from app.engines.rabbit_hole import RabbitHoleEngine, draw_deck
+
+    _, db, _ = rulebook_client
+    with Session(db) as session:
+        from app.models.cache import CachedMovie
+
+        session.add(
+            CachedMovie(
+                tmdb_id=1,
+                title="Tier evidence",
+                release_date="1960-01-01",
+                runtime=80,
+                original_language="fr",
+                origin_country='["FR"]',
+                popularity=1,
+                vote_average=4,
+                vote_count=100,
+            )
+        )
+        session.commit()
+        rules = {
+            **CUSTOM_RULES,
+            "rh_rules_version": 2,
+            "tier_deck": draw_deck(session, 42, curses=curses),
+        }
+        section = render(RabbitHoleEngine.rulebook, RabbitHoleEngine.rulebook_values(rules))
+        assert_readable(section, glossary(rules))
+        copy = " ".join([*section.turn, *section.scoring])
+        assert "relic" in copy and "no relics" not in copy
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_run_tug_copy_selects_actual_variant(rulebook_client, version):
+    client, db, user = rulebook_client
+    run_id = new_run(db, user, "tug_of_war", {**CUSTOM_RULES, "tug_rules_version": version})
+    data = client.get(f"/api/runs/{run_id}/rulebook").json()
+    section = ENGINE_REGISTRY["tug_of_war"].rulebook
+    assert_readable(replace(section, **data["rulebook"]), data["glossary"])
+    if version == 3:
+        assert "own run" in data["glossary"]["streak"]
+        assert "shared streak" not in str(data)

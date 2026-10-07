@@ -136,6 +136,7 @@ export default function BridgeSwapPanel({
                     )}
                   >
                     <MoviePoster
+                      movieId={candidate.node.movie_id}
                       path={candidate.node.poster_path}
                       title={candidate.node.title}
                       className="w-12 shrink-0"

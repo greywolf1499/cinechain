@@ -132,7 +132,7 @@ function TunnelCard({
         collided ? "border-fuchsia-400 shadow-[0_0_24px_-8px] shadow-fuchsia-500/60" : style.ring,
       )}
     >
-      <MoviePoster path={step.movie_poster_path} title={step.movie_title} className="w-full" />
+      <MoviePoster movieId={step.movie_id} detailOptions={{ runId: step.run_id, step }} path={step.movie_poster_path} title={step.movie_title} className="w-full" />
       <div className="min-w-0">
         <ClampedLabel
           text={step.movie_title}

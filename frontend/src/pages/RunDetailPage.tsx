@@ -266,6 +266,7 @@ export default function RunDetailPage() {
 
       {run.game_type === TUG_OF_WAR && (
         <TugOfWarMeter
+          glossary={rulebook.data?.glossary ?? {}}
           rules={run.rules_config}
           participants={run.participants}
           users={users}
@@ -752,7 +753,7 @@ function ActiveFrontierCard({
 
       {tailStep ? (
         <div className="mb-4 flex items-center gap-3">
-          <MoviePoster path={tailStep.movie_poster_path} title={tailStep.movie_title} className="w-14" />
+          <MoviePoster movieId={tailStep.movie_id} detailOptions={{ runId, step: tailStep }} path={tailStep.movie_poster_path} title={tailStep.movie_title} className="w-14" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-zinc-100">{tailStep.movie_title}</p>
             <p className="text-xs text-zinc-500">{tailStep.movie_release_year ?? "—"}</p>

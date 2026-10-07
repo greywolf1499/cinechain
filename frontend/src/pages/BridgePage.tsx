@@ -17,7 +17,7 @@ import EmptyState from "../components/EmptyState";
 import MoviePoster from "../components/MoviePoster";
 import MovieSearchAutocomplete from "../components/MovieSearchAutocomplete";
 import AntiCheatBanner from "../components/AntiCheatBanner";
-import MoviePreviewModal from "../components/MoviePreviewModal";
+import { useMovieDetail } from "../store/movieDetailStore";
 import BridgePathView, { PathTagChips } from "../components/BridgePathView";
 import BridgeSwapPanel, { type SwapState, type SwapTabState } from "../components/BridgeSwapPanel";
 import { ApiError, api } from "../lib/api";
@@ -136,7 +136,7 @@ export default function BridgePage() {
   // Highest "Search Deeper" hop target that already came back empty.
   const [deeperFloor, setDeeperFloor] = useState(0);
   const [activePathIndex, setActivePathIndex] = useState(0);
-  const [previewMovieId, setPreviewMovieId] = useState<number | null>(null);
+  const openDetail = useMovieDetail((state) => state.open);
   const [exhausted, setExhausted] = useState<ExhaustedEvent | null>(null);
   const [timedOut, setTimedOut] = useState<TimeoutEvent | null>(null);
   const [rateLimitNotice, setRateLimitNotice] = useState<RateLimitedEvent | null>(null);
@@ -857,7 +857,7 @@ export default function BridgePage() {
                 path={activePath?.path ?? result.path}
                 connections={activePath?.connections ?? result.connections}
                 onServerMap={onServerMap}
-                onMovieClick={setPreviewMovieId}
+                onMovieClick={openDetail}
                 onSwapNode={solveEngine?.capabilities.includes("bridge_swap") ? handleSwap : undefined}
                 swapIndex={swap?.index ?? null}
               />
@@ -959,14 +959,6 @@ export default function BridgePage() {
           </div>
         )}
 
-        {previewMovieId !== null && (
-          <MoviePreviewModal
-            open={previewMovieId !== null}
-            onClose={() => setPreviewMovieId(null)}
-            movieId={previewMovieId}
-          />
-        )}
-
         {status === "idle" && !result && (
           <EmptyState
             icon={GitBranch}
@@ -1011,7 +1003,7 @@ function MovieSlot({
       <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
       {movie && !editing ? (
         <div className="flex items-center gap-3 rounded-lg border border-app-border bg-app-bg p-3">
-          <MoviePoster path={movie.poster_path} title={movie.title} className="w-10" />
+          <MoviePoster movieId={movie.tmdb_id} path={movie.poster_path} title={movie.title} className="w-10" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-zinc-100">
               {movie.title}

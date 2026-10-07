@@ -337,7 +337,7 @@ def marathon_order_rule(rules: dict | None, default: int = DEFAULT_MAX_SKIP) -> 
     return (
         "Pick any unwatched on-track film in any order."
         if skip is None
-        else (f"Advance along the track; skip at most {skip} entries between picks.")
+        else (f"Move along the track. Skip at most {skip} films between picks.")
     )
 
 
@@ -348,7 +348,7 @@ def marathon_completion_rule(rules: dict | None) -> str:
         )
     if marathon_skip(rules) is None:
         return "Watch every track film to complete the marathon."
-    return "Reaching the last track entry completes the marathon."
+    return "Watch the last track film to finish."
 
 
 def marathon_finished(rules: dict, steps: list[RunStep]) -> bool:
@@ -547,10 +547,10 @@ class MethodActorEngine(TrackerEngine):
     tagline = "One career, in order"
     tags: ClassVar[list[str]] = ["One actor", "Chronological", "Milestones"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Explore {person_name}'s chronological career track.",
+        "Watch {person_name}'s films through the years.",
         ["{order_rule}"],
         ["{completion_rule}"],
-        ["Off-track films are blocked; order violations require a soft-rule override."],
+        ["Films off the track are blocked.", "Use a wildcard to skip too far ahead."],
         [
             "Use skips to avoid an unavailable film without jumping past a milestone.",
             "Compare early and late roles to notice how the actor's craft changes.",

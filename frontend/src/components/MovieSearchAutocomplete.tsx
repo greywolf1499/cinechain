@@ -137,7 +137,7 @@ export default function MovieSearchAutocomplete({
     return (
       <div className="rounded-lg border border-app-border bg-app-bg p-3">
         <div className="flex items-start gap-3">
-          <MoviePoster path={picked.poster_path} title={picked.title} className="w-12" />
+          <MoviePoster movieId={picked.tmdb_id} path={picked.poster_path} title={picked.title} className="w-12" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <p className="truncate text-sm font-medium text-zinc-100">
@@ -341,10 +341,9 @@ export default function MovieSearchAutocomplete({
             <p className="px-3 py-3 text-sm text-zinc-500">No films found.</p>
           )}
           {results.map((movie, index) => (
-            <button
+            <div
               key={movie.tmdb_id}
               id={`${resultsId}-option-${index}`}
-              type="button"
               role="option"
               tabIndex={-1}
               aria-selected={index === activeResultIndex}
@@ -354,14 +353,14 @@ export default function MovieSearchAutocomplete({
                 index === activeResultIndex ? "bg-app-surface-hover" : ""
               }`}
             >
-              <MoviePoster path={movie.poster_path} title={movie.title} className="w-9" />
+              <MoviePoster movieId={movie.tmdb_id} path={movie.poster_path} title={movie.title} className="w-9" />
               <span className="min-w-0 truncate text-sm text-zinc-200">
                 {movie.title}
                 {movie.release_year && (
                   <span className="ml-1.5 text-zinc-500">({movie.release_year})</span>
                 )}
               </span>
-            </button>
+            </div>
           ))}
         </div>
       </Popover>

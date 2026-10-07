@@ -518,8 +518,8 @@ class WorldPassportEngine(MutatorEngine):
     tagline = "A new country every film"
     tags: ClassVar[list[str]] = ["Any film", "Country"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Collect stamps by changing the primary production country each film.",
-        ["Choose a film whose first country differs from the frontier; obey the active cooldown."],
+        "Visit a new country with each film.",
+        ["Choose a film from a different country.", "Avoid countries on the recent list."],
         ["{win_goal}"],
         ["Same-country hops are blocked when both countries are known.", "{fail_goal}"],
         [

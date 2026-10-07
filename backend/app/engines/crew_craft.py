@@ -114,9 +114,7 @@ class CrewCraftEngine(CineChainEngine):
     ]
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Follow shared creative people from film to film.",
-        [
-            "Link via an actor, director, writer, composer or cinematographer; cross-role links count."
-        ],
+        ["Link through a shared cast or crew member. They may change jobs between films."],
         ["{win_goal}"],
         ["{fail_goal}"],
         [

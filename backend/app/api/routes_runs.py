@@ -916,6 +916,21 @@ def get_run(session: Session = Depends(get_session), run: Run = Depends(run_part
     return _to_run_detail(session, run)
 
 
+@router.get("/{run_id}/coach")
+def get_run_coach(
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> dict[str, str | None]:
+    engine = get_engine(run.game_type, session, tmdb)
+    line = (
+        engine.coach_line(run, _play_history(session, run.id))
+        if run.status == RUN_STATUS_ACTIVE
+        else None
+    )
+    return {"line": line}
+
+
 @router.patch("/{run_id}", response_model=RunDetail)
 def update_run(
     payload: RunUpdate,

@@ -146,13 +146,13 @@ class AuteurMarathonEngine(TrackerEngine):
     tagline = "One director, every feature"
     tags: ClassVar[list[str]] = ["One director", "Release order", "Filmography"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Explore {person_name}'s feature filmography in release order.",
+        "Watch {person_name}'s films through the years.",
         ["{order_rule}"],
         ["{completion_rule}"],
-        ["Off-track films are blocked; order violations require a soft-rule override."],
+        ["Films off the track are blocked.", "Use a wildcard to skip too far ahead."],
         [
-            "Save skips for hard-to-find features rather than rushing to familiar favourites.",
-            "Watch for recurring collaborators and themes across the career.",
+            "Save skips for films you cannot find.",
+            "Look for cast and themes that return across the years.",
         ],
         ["track", "seed", "wildcard"],
     )

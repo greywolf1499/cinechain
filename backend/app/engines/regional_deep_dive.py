@@ -131,9 +131,9 @@ class RegionalDeepDiveEngine(TrackerEngine):
     tagline = "Conquer one corner of the canon"
     tags: ClassVar[list[str]] = ["Canon list", "Country", "Decade"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Complete the {slice_name} expedition checklist.",
-        ["Watch the prepared slice of your canon list in any order; cast links are not required."],
-        ["Log every checklist film to finish the expedition."],
+        "Watch the films on your {slice_name} list.",
+        ["Watch list films in any order.", "You do not need cast links."],
+        ["Log watched for every list film to finish."],
         ["Films outside the expedition are blocked."],
         [
             "Start with an available film; no chronological route needs to be preserved.",

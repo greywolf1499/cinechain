@@ -93,15 +93,13 @@ export default function BracketSeedPicker({
             <ul className="mt-1 max-h-56 overflow-y-auto rounded-md border border-app-border bg-app-surface">
               {data.results.slice(0, 6).map((movie) => (
                 <li key={movie.tmdb_id}>
-                  <button
-                    type="button"
-                    onClick={() => add(movie)}
+                  <div
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-100 hover:bg-app-surface-hover"
                   >
-                    <MoviePoster path={movie.poster_path} title={movie.title} className="w-6 shrink-0" />
-                    <span className="truncate">{movie.title}</span>
+                    <MoviePoster movieId={movie.tmdb_id} path={movie.poster_path} title={movie.title} className="w-6 shrink-0" />
+                    <button type="button" onClick={() => add(movie)} className="truncate">{movie.title} · Add</button>
                     <span className="ml-auto text-xs text-zinc-500">{movie.release_year ?? ""}</span>
-                  </button>
+                  </div>
                 </li>
               ))}
             </ul>

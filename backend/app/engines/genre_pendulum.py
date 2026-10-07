@@ -149,7 +149,7 @@ class GenrePendulumEngine(MutatorEngine):
     tagline = "The genre swings as you go"
     tags: ClassVar[list[str]] = ["Any film", "Genre cycle", "Genre overlap"]
     rulebook: ClassVar[RuleSection] = RuleSection(
-        "Follow the genre cycle while keeping an overlap between consecutive films.",
+        "Follow the genre cycle. Keep one genre in common.",
         [
             "Carry the target genre and share a genre with the previous film.",
             "The cycle is {genre_cycle}; the target changes every {swing_frequency} steps.",

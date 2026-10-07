@@ -77,7 +77,7 @@ export default function SeedMoviePicker({
   if (value) {
     return (
       <div className="flex items-center gap-3 rounded-lg border border-app-border bg-app-bg p-2.5">
-        <MoviePoster path={value.poster_path} title={value.title} className="w-11 shrink-0" />
+        <MoviePoster movieId={value.tmdb_id} path={value.poster_path} title={value.title} className="w-11 shrink-0" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-zinc-100">
             {value.title}

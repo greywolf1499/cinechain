@@ -111,7 +111,7 @@ function ChampionBanner({
       aria-label="Tournament champion"
       className="flex flex-col gap-4 rounded-xl border border-amber-300/60 bg-amber-400/10 p-4 shadow-[0_0_30px_-8px_rgba(251,191,36,0.35)] sm:flex-row"
     >
-      <MoviePoster path={film.poster_path} title={film.title} className="mx-auto w-28 shrink-0 sm:mx-0" />
+      <MoviePoster movieId={movieId} path={film.poster_path} title={film.title} className="mx-auto w-28 shrink-0 sm:mx-0" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <p className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-amber-300">
           <Trophy className="h-4 w-4" /> March Madness Champion
@@ -239,7 +239,7 @@ function Podium({
         <Trophy className={cn("h-8 w-8", film ? "text-amber-300" : "text-zinc-700")} />
         {film ? (
           <>
-            <MoviePoster path={film.poster_path} title={film.title} className="w-24" />
+            <MoviePoster movieId={champion ?? undefined} path={film.poster_path} title={film.title} className="w-24" />
             <p className="text-sm font-semibold text-amber-100">{film.title}</p>
             <p className="text-[11px] text-amber-200/70">{film.release_year ?? ""}</p>
             <OnServerBadge onServer={champion === null ? undefined : server?.[String(champion)]?.on_server} />
@@ -348,7 +348,7 @@ function MatchupCard({
                   onServerCardClass(availability?.on_server),
                 )}
               >
-                <MoviePoster path={film.poster_path} title={film.title} className="mx-auto w-36" />
+                <MoviePoster movieId={id} path={film.poster_path} title={film.title} className="mx-auto w-36" />
                 <div className="text-center">
                   <h4 className="text-sm font-semibold text-zinc-100">{film.title}</h4>
                   <p className="text-[11px] text-zinc-500">

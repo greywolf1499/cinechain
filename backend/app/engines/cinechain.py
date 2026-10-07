@@ -7,7 +7,9 @@ from collections.abc import Sequence
 from typing import ClassVar
 
 import httpx
+from sqlmodel import select
 
+from app.config import get_settings
 from app.engines.base import BaseChallengeEngine
 from app.engines.reunions import (
     CHARACTER_HOP_KEY,
@@ -18,7 +20,8 @@ from app.engines.reunions import (
     find_golden_reunion,
 )
 from app.engines.rulebook import RuleSection
-from app.models.run import RunStep
+from app.models.cache import CachedMovieCast
+from app.models.run import Run, RunStep
 from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
 from app.schemas.engine import (
     KeystoneActor,
@@ -30,7 +33,7 @@ from app.schemas.engine import (
     SuggestionFilters,
     ValidationResult,
 )
-from app.services import cache_repo, pathfinder
+from app.services import bounties, cache_repo, feasibility, pathfinder
 from app.services.bridge_paths import parse_countries
 from app.services.movie_filters import is_reality_eligible, passes_filters
 from app.services.tmdb import TMDBError
@@ -82,6 +85,53 @@ def cast_credits(cast: Sequence[dict]) -> list[CastCredit]:
 
 
 class CineChainEngine(BaseChallengeEngine):
+    def coach_line(self, run: Run, steps: Sequence[RunStep]) -> str | None:
+        rules = run.rules_config or {}
+        if not steps or not bounties.board_enabled(rules):
+            return None
+        cast = self.session.exec(
+            select(CachedMovieCast).where(CachedMovieCast.movie_id == steps[-1].movie_id)
+        ).all()
+        cast_depth = rules.get("max_cast_order") or get_settings().pathfinder_cast_limit
+        actor_ids = [
+            member.actor_id
+            for member in cast
+            if member.cast_order is not None
+            and member.cast_order < cast_depth
+            and (
+                not rules.get("no_consecutive_actor", True)
+                or member.actor_id != (steps[-1].transition_metadata or {}).get("actor_id")
+            )
+        ]
+        if not actor_ids:
+            return None
+        candidate_ids = sorted(
+            set(
+                self.session.exec(
+                    select(CachedMovieCast.movie_id).where(CachedMovieCast.actor_id.in_(actor_ids))
+                ).all()
+            )
+            - {step.movie_id for step in steps}
+        )
+        evidence = feasibility.Evidence(self.session)
+        quests = [bounties.resolve(rules, key) for key in bounties.active_bounties(rules)]
+        for movie_id in candidate_ids:
+            movie = evidence.movies.get(movie_id)
+            if (
+                not movie
+                or not is_reality_eligible(movie)
+                or not self.bounty_pool_allowed(movie, rules, steps)
+            ):
+                continue
+            for quest in quests:
+                if (
+                    quest
+                    and quest.predicate
+                    and quest.predicate.check(movie, evidence.facts[movie_id]) is True
+                ):
+                    return f"{movie.title} may earn the {quest.title} bounty. Check its rule chips."
+        return None
+
     rule_fields: ClassVar[list[RuleField]] = [
         *BaseChallengeEngine.rule_fields,
         RuleField(
@@ -145,7 +195,7 @@ class CineChainEngine(BaseChallengeEngine):
     rulebook: ClassVar[RuleSection] = RuleSection(
         "Build a connected movie chain.",
         [
-            "Start with a seed, then link by a shared credited actor or the same character played by different actors.",
+            "Link films through a shared actor or the same character played by two actors.",
             "Actor links use the configured cast depth: {cast_depth}.",
         ],
         ["{win_goal}"],

@@ -166,6 +166,98 @@ def _mock_movie(tmdb_id: int, title: str, release_date: str = "1999-03-30"):
     )
 
 
+def test_coach_is_participant_guarded_and_cache_only(client, db_engine):
+    _register_and_login(client, "alice")
+    run = client.post("/api/runs", json={"name": "Coach", "game_type": "cinechain"}).json()
+    with respx.mock(assert_all_called=False) as requests:
+        assert client.get(f"/api/runs/{run['id']}/coach").json() == {"line": None}
+        assert not requests.calls
+    _register_and_login(client, "bob")
+    other = _new_client_for(client, "bob")
+    assert other.get(f"/api/runs/{run['id']}/coach").status_code == 404
+    assert other.get("/api/runs/missing/coach").status_code == 404
+    other.close()
+    client.post("/api/auth/logout")
+    assert client.get(f"/api/runs/{run['id']}/coach").status_code == 401
+
+
+def test_coach_tug_streak_uses_cached_state(client, db_engine):
+    from app.engines.tug_of_war import PLAYERS_KEY, TEAM_A, TEAM_B
+    from tests.test_tug_momentum import step
+
+    _register_and_login(client, "ben", display_name="Ben")
+    user_id = client.get("/api/auth/me").json()["id"]
+    run = client.post("/api/runs", json={"name": "Coach", "game_type": "cinechain"}).json()
+    with Session(db_engine) as session:
+        stored = session.get(Run, run["id"])
+        stored.game_type = "tug_of_war"
+        stored.rules_config = {
+            "tug_rules_version": 3,
+            "target_lead": 7,
+            PLAYERS_KEY: {TEAM_A: user_id, TEAM_B: None},
+        }
+        session.add(stored)
+        for index in range(1, 4):
+            pull = step(index, TEAM_A, 1950)
+            pull.run_id = stored.id
+            pull.logged_by_user_id = user_id
+            session.add(pull)
+        session.commit()
+    with respx.mock(assert_all_called=False) as requests:
+        response = client.get(f"/api/runs/{run['id']}/coach")
+        assert response.status_code == 200, response.text
+        assert response.json() == {"line": "Ben's streak is ×3 — a Raid breaks it."}
+        assert not requests.calls
+    with Session(db_engine) as session:
+        stored = session.get(Run, run["id"])
+        stored.status = "completed"
+        session.add(stored)
+        session.commit()
+    assert client.get(f"/api/runs/{run['id']}/coach").json() == {"line": None}
+
+
+@pytest.mark.parametrize("cast_depth", [15, None])
+def test_coach_rabbit_tier_and_cached_bounty(client, db_engine, cast_depth):
+    from app.models.cache import CachedActor, CachedMovieCast
+
+    _register_and_login(client, "alice")
+    run = client.post("/api/runs", json={"name": "Coach", "game_type": "cinechain"}).json()
+    with Session(db_engine) as session:
+        stored = session.get(Run, run["id"])
+        stored.game_type = "rabbit_hole"
+        session.add(stored)
+        for index in range(4):
+            session.add(RunStep(run_id=stored.id, movie_id=index + 1, movie_title="Cached"))
+        session.commit()
+    with respx.mock(assert_all_called=False) as requests:
+        line = client.get(f"/api/runs/{run['id']}/coach").json()["line"]
+        assert "Tier 2 starts next hop:" in line
+        assert not requests.calls
+    with Session(db_engine) as session:
+        stored = session.get(Run, run["id"])
+        stored.game_type = "cinechain"
+        stored.rules_config = {
+            "bounty_board": True,
+            "active_bounties": ["short_king"],
+            "max_cast_order": cast_depth,
+        }
+        session.add(stored)
+        session.add(
+            CachedMovie(tmdb_id=5, title="Short Film", runtime=80, release_date="2000-01-01")
+        )
+        session.add(CachedActor(tmdb_id=1, name="Connector"))
+        session.add(CachedMovie(tmdb_id=4, title="Frontier", release_date="1999-01-01"))
+        session.flush()
+        session.add(CachedMovieCast(movie_id=4, actor_id=1, cast_order=0))
+        session.add(CachedMovieCast(movie_id=5, actor_id=1, cast_order=0))
+        session.commit()
+    with respx.mock(assert_all_called=False) as requests:
+        assert client.get(f"/api/runs/{run['id']}/coach").json() == {
+            "line": "Short Film may earn the Short King bounty. Check its rule chips."
+        }
+        assert not requests.calls
+
+
 def test_create_run_with_participants(client):
     # bootstrap admin (alice), then bob as a regular user (admin-gated register)
     _register_and_login(client, "alice")

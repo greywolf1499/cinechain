@@ -23,10 +23,9 @@ import ColorSwatch, { SemanticMatchBadge } from "./ColorSwatch";
 import ModifierChips from "./ModifierChips";
 import PitchButton from "./PitchButton";
 import MoviePoster from "./MoviePoster";
-import AcquisitionControl from "./AcquisitionControl";
+import { MovieDetailBody } from "./MovieDetailSheet";
 import ChaosBanner from "./ChaosBanner";
 import ChaosButton from "./ChaosButton";
-import MovieTagline from "./MovieTagline";
 import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import RatingBadges from "./RatingBadges";
 import { CanonBadgeList } from "./CanonBadge";
@@ -53,7 +52,6 @@ import DirectorsPicks from "./pick-next/DirectorsPicks";
 import { pendulumState } from "../lib/pendulum";
 import { isoToFlagEmoji } from "../lib/countries";
 import { effectiveCooldown } from "../lib/modifiers";
-import ExpandableText from "./ui/ExpandableText";
 import { useLogFilm } from "../lib/useLogFilm";
 import ClampedLabel from "./ui/ClampedLabel";
 import {
@@ -66,6 +64,7 @@ import {
   useMovieDetail,
   useMovieTropes,
   useRunConstraint,
+  useRunRulebook,
   useUpdateRun,
 } from "../lib/queries";
 import type {
@@ -406,6 +405,7 @@ function DiscoveryGrid({
     tropeMode,
   );
   const { data: constraint } = useRunConstraint(runId);
+  const { data: rulebook } = useRunRulebook(runId);
   const surrender = useUpdateRun(runId);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
@@ -611,6 +611,7 @@ function DiscoveryGrid({
 
   function renderCandidate(candidate: DiscoveryCandidate) {
     return <CandidateCard
+      glossary={rulebook?.glossary ?? {}}
       key={candidate.movie_id}
       roulette={roulette}
       candidate={candidate}
@@ -1104,6 +1105,7 @@ function CandidateCard({
   onQueue,
   onLogWatched,
   onOpenDetails,
+  glossary,
 }: {
   /** Tagline Roulette: poster and title stay masked behind the tagline until revealed. */
   roulette?: boolean;
@@ -1129,6 +1131,7 @@ function CandidateCard({
   onQueue: () => void;
   onLogWatched: () => void;
   onOpenDetails: () => void;
+  glossary: Record<string, string>;
 }) {
   const genreNames = candidate.genre_ids
     .map((id) => genres?.find((g) => g.id === id)?.name)
@@ -1148,14 +1151,13 @@ function CandidateCard({
       )}
     >
       <div className="flex flex-col gap-2">
-        <button
-          type="button"
-          onClick={masked ? () => setRevealed(true) : onOpenDetails}
-          aria-label={masked ? "Reveal this film" : `Open ${candidate.title}`}
+        <div
           className="relative overflow-hidden rounded-md text-left transition-opacity hover:opacity-85"
         >
           <div className={cn(masked && "scale-110 backdrop-blur-md filter blur-md")}>
             <MoviePoster
+              movieId={candidate.movie_id}
+              concealed={masked}
               path={candidate.poster_path}
               title={masked ? "Hidden film" : candidate.title}
               className="w-full"
@@ -1169,7 +1171,9 @@ function CandidateCard({
           {candidate.dominant_color && !masked && (
             <ColorSwatch color={candidate.dominant_color} className="absolute right-1 top-1" />
           )}
-        </button>
+          {masked && <button type="button" aria-label="Reveal this film" onClick={() => setRevealed(true)} className="absolute inset-0" />}
+        </div>
+        {!masked && <button type="button" onClick={onOpenDetails} className="text-left text-xs text-accent">Pick {candidate.title}</button>}
 
         {roulette && (
           <div className="flex flex-col items-start gap-1.5">
@@ -1228,6 +1232,7 @@ function CandidateCard({
         ))}
         {gameType === "tug_of_war" && candidate.tug_effect && candidate.tug_points != null && (
           <GlossaryChip
+            glossary={glossary}
             term={candidate.tug_effect === "invasion" ? "raid" : candidate.tug_effect === "neutral" ? "bank" : candidate.tug_effect === "home" ? "build" : "sudden_death"}
             className={cn(
               "w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold",
@@ -1560,17 +1565,6 @@ function MovieScreenView({
   onClose: () => void;
 }) {
   const navigate = useNavigate();
-  const { movie, isHydrating } = useMovieDetail(screen.movieId);
-  const { data: genres } = useQuery({
-    queryKey: ["movies", "genres"],
-    queryFn: () => api.get<GenreOut[]>("/movies/genres"),
-  });
-  const { data: cast } = useQuery({
-    queryKey: ["movies", screen.movieId, "cast", 20],
-    queryFn: () => api.get<CastMember[]>(`/movies/${screen.movieId}/cast?limit=20`),
-  });
-  const { data: jellyfinStatus } = useJellyfinLookup([screen.movieId]);
-  const { data: badgesMap } = useCanonBadgesBulk([screen.movieId]);
 
   const createStep = useLogFilm(runId);
   const [guard, setGuard] = useState<GuardStatus | null>(null);
@@ -1582,10 +1576,6 @@ function MovieScreenView({
   const wildcardsExhausted = pricing.exhausted;
   const existingStepNumber = findExistingStepNumber(steps, screen.movieId);
   const isLockedDuplicate = existingStepNumber !== null && !allowRepeats;
-
-  const genreNames = (movie?.genre_ids ?? [])
-    .map((id) => genres?.find((g) => g.id === id)?.name)
-    .filter((name): name is string => !!name);
 
   async function handleAdd(watched: boolean, connection?: DiscoveryConnection | ValidationResult["connections"][number]) {
     await createStep.mutateAsync({
@@ -1645,48 +1635,10 @@ function MovieScreenView({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex gap-4">
-        <MoviePoster path={screen.posterPath ?? movie?.poster_path ?? null} title={screen.label} className="w-28 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-zinc-100">{screen.label}</p>
-          <p className="mt-0.5 text-xs text-zinc-400">
-            {movie?.release_year ?? "—"}
-            {movie?.runtime ? ` · ${movie.runtime} min` : ""}
-          </p>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <RatingBadges ratings={movie?.ratings} movieId={screen.movieId} />
-            <OnServerBadge onServer={jellyfinStatus?.[String(screen.movieId)]?.on_server} />
-            <AcquisitionControl
-              tmdbId={screen.movieId}
-              title={screen.label}
-              onServer={jellyfinStatus?.[String(screen.movieId)]?.on_server}
-            />
-          </div>
-          <div className="mt-1.5">
-            <CanonBadgeList badges={badgesMap?.[String(screen.movieId)]} />
-          </div>
-          {genreNames.length > 0 && (
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {genreNames.map((name) => (
-                <span key={name} className="rounded-full bg-app-surface-hover px-2 py-0.5 text-xs text-zinc-300">
-                  {name}
-                </span>
-              ))}
-            </div>
-          )}
-          {movie && (
-            <>
-              <MovieTagline tagline={movie.tagline} />
-              <ExpandableText
-                text={movie.overview}
-                fallback={isHydrating ? "Fetching description..." : "No overview available."}
-                lines={4}
-                className="mt-2 text-xs text-zinc-500"
-              />
-            </>
-          )}
-        </div>
-      </div>
+      <MovieDetailBody movieId={screen.movieId} onActorClick={(actor) => onOpenActor({
+        kind: "actor", label: actor.actorName, ...actor,
+        guaranteedConnected: screen.guaranteedConnected && screen.safeActorIds.has(actor.actorId),
+      })} />
 
       {isLockedDuplicate ? (
         <p className="flex items-center gap-1.5 rounded-md bg-red-950 px-3 py-2 text-xs font-medium text-red-300">
@@ -1745,50 +1697,6 @@ function MovieScreenView({
         );
       })()}
 
-      <div>
-        <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">Cast</p>
-        <div className="flex flex-wrap gap-2">
-          {cast?.map((member) => (
-            <button
-              key={member.actor_id}
-              type="button"
-              title={member.name}
-              onClick={() =>
-                onOpenActor({
-                  kind: "actor",
-                  label: member.name,
-                  actorId: member.actor_id,
-                  actorName: member.name,
-                  profilePath: member.profile_path,
-                  characterName: member.character_name,
-                  guaranteedConnected: screen.guaranteedConnected && screen.safeActorIds.has(member.actor_id),
-                })
-              }
-              className="flex w-14 shrink-0 flex-col items-center gap-1 rounded-md border border-app-border px-1 py-1.5 text-center transition-colors hover:border-accent"
-            >
-              {member.profile_path ? (
-                <img
-                  src={profileUrl(member.profile_path) ?? undefined}
-                  alt={member.name}
-                  loading="lazy"
-                  decoding="async"
-                  className="h-9 w-9 rounded-full object-cover"
-                />
-              ) : (
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-app-surface-hover text-zinc-500">
-                  <User className="h-4 w-4" />
-                </div>
-              )}
-              <ClampedLabel
-                text={member.name}
-                lines={2}
-                as="span"
-                className="text-[9px] leading-tight text-zinc-400"
-              />
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
@@ -1924,21 +1832,8 @@ function ActorScreenView({
       {!isLoading && sorted.length > 0 && (
         <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5">
           {sorted.map((movie) => (
-            <button
+            <div
               key={movie.tmdb_id}
-              type="button"
-              onClick={() =>
-                onOpenMovie({
-                  kind: "movie",
-                  label: movie.title,
-                  movieId: movie.tmdb_id,
-                  posterPath: movie.poster_path,
-                  guaranteedConnected: screen.guaranteedConnected,
-                  safeActorIds: screen.guaranteedConnected
-                    ? new Set([screen.actorId])
-                    : new Set<number>(),
-                })
-              }
               className={cn(
                 "flex flex-col gap-1 rounded-lg border p-1 text-left transition-opacity hover:opacity-85",
                 jellyfinStatus?.[String(movie.tmdb_id)]?.on_server
@@ -1947,19 +1842,25 @@ function ActorScreenView({
               )}
             >
               <div className="relative">
-                <MoviePoster path={movie.poster_path} title={movie.title} className="w-full" />
+                <MoviePoster movieId={movie.tmdb_id} path={movie.poster_path} title={movie.title} className="w-full" />
                 <div className="absolute left-1 top-1">
                   <OnServerBadge onServer={jellyfinStatus?.[String(movie.tmdb_id)]?.on_server} />
                 </div>
               </div>
+              <button type="button" onClick={() => onOpenMovie({
+                kind: "movie", label: movie.title, movieId: movie.tmdb_id, posterPath: movie.poster_path,
+                guaranteedConnected: screen.guaranteedConnected,
+                safeActorIds: screen.guaranteedConnected ? new Set([screen.actorId]) : new Set<number>(),
+              })} className="text-left">
               <ClampedLabel
                 text={movie.title}
                 lines={2}
                 as="p"
                 className="text-[10px] font-medium text-zinc-200"
               />
+              </button>
               <p className="text-[9px] text-zinc-500">{movie.release_year ?? "—"}</p>
-            </button>
+            </div>
           ))}
         </div>
       )}

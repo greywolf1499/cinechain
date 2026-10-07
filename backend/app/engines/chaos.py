@@ -20,7 +20,10 @@ from app.engines.rulebook import RuleSection
 RULEBOOK = RuleSection(
     "Play through a one-step Chaos handicap.",
     ["The active handicap is {chaos_label}. Satisfy it on the next logged film."],
-    ["Logging a film clears the active handicap; unknown facts do not block after hydration."],
+    [
+        "Log a film to clear the handicap.",
+        "If a fact stays unknown after checking, it does not block.",
+    ],
     ["Wildcards cannot bypass a known handicap violation."],
     ["Read the handicap before selecting a connector; narrow the pool before committing."],
     ["wildcard"],

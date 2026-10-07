@@ -228,7 +228,7 @@ function FilmCard({ movie, label, target = false }: { movie: MovieSummary; label
         target ? "border-accent/50" : "border-emerald-700/50",
       )}
     >
-      <MoviePoster path={movie.poster_path} title={movie.title} className="w-20 shrink-0 md:w-full" />
+      <MoviePoster movieId={movie.tmdb_id} path={movie.poster_path} title={movie.title} className="w-20 shrink-0 md:w-full" />
       <div className="min-w-0 text-left md:text-center">
         <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 md:justify-center">
           {target ? <Target className="h-3 w-3 text-accent" /> : <Clapperboard className="h-3 w-3 text-emerald-400" />}
@@ -297,7 +297,7 @@ function ChainStep({ hop, index, isTarget }: { hop: PuzzleHop; index: number; is
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-app-surface-hover text-[11px] font-semibold tabular-nums text-zinc-300">
           {index}
         </span>
-        <MoviePoster path={hop.movie.poster_path} title={hop.movie.title} className="w-9 shrink-0" />
+        <MoviePoster movieId={hop.movie.tmdb_id} path={hop.movie.poster_path} title={hop.movie.title} className="w-9 shrink-0" />
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-zinc-100">{hop.movie.title}</p>
           <p className="text-[11px] text-zinc-500">{hop.movie.release_year ?? "—"}</p>
@@ -351,19 +351,12 @@ function HopSearch({
         <ul className="flex max-h-72 flex-col overflow-y-auto rounded-md border border-app-border bg-app-surface">
           {data.results.slice(0, 8).map((movie) => (
             <li key={movie.tmdb_id}>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => {
-                  setQuery("");
-                  onPick(movie);
-                }}
-                className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-app-surface-hover disabled:opacity-50"
-              >
-                <MoviePoster path={movie.poster_path} title={movie.title} className="w-8 shrink-0" />
-                <span className="min-w-0 truncate text-sm text-zinc-100">{movie.title}</span>
+              <div className="flex w-full items-center gap-3 px-3 py-2">
+                <MoviePoster movieId={movie.tmdb_id} path={movie.poster_path} title={movie.title} className="w-8 shrink-0" />
+                <button type="button" disabled={pending} onClick={() => { setQuery(""); onPick(movie); }}
+                  className="min-w-0 truncate text-left text-sm text-zinc-100 hover:text-accent disabled:opacity-50">{movie.title}</button>
                 <span className="ml-auto shrink-0 text-xs text-zinc-500">{movie.release_year ?? ""}</span>
-              </button>
+              </div>
             </li>
           ))}
         </ul>

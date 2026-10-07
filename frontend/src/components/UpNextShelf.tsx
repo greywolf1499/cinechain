@@ -43,7 +43,7 @@ export default function UpNextShelf({ run }: { run: RunDetail }) {
       <ul className="flex gap-3 overflow-x-auto pb-2">
         {planned.map((step) => (
           <li key={step.id} className="flex w-64 max-w-full shrink-0 items-center gap-2 rounded-lg border border-app-border p-2">
-            <MoviePoster path={step.movie_poster_path} title={step.movie_title} className="w-9 shrink-0" />
+            <MoviePoster movieId={step.movie_id} detailOptions={{ runId: run.id, step }} path={step.movie_poster_path} title={step.movie_title} className="w-9 shrink-0" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-medium text-zinc-100" title={step.movie_title}>{step.movie_title}</p>
               <span className="text-[10px] text-sky-300">Up next</span>

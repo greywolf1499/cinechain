@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { FILM_TOAST_EVENT } from "../lib/useLogFilm";
 import Toast, { type ToastState } from "../components/Toast";
+import MovieDetailSheet from "../components/MovieDetailSheet";
 
 const NAV_ITEMS = [
   { to: "/runs", label: "Runs", icon: Film },
@@ -41,6 +42,7 @@ export default function AppLayout() {
 
   return (
     <div className="min-h-screen w-full max-w-full min-w-0 bg-app-bg">
+      <MovieDetailSheet />
       <header className="sticky top-0 z-20 border-b border-app-border bg-app-bg/95 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
           <div className="flex items-center gap-2 font-semibold tracking-tight text-accent">

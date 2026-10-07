@@ -71,7 +71,7 @@ RULEBOOK = {
         "Combine this mode's rule with shared cast links.",
         ["Also connect each film by a shared credited actor or an eligible same-character hop."],
         ["Both the primary mode and the cast link are checked."],
-        ["A wildcard can override a soft cast-link violation, but not a hard mode rule."],
+        ["A wildcard can skip a missing cast link, but not the film's other rules."],
         ["Choose connectors satisfying both restrictions instead of planning two separate routes."],
         ["wildcard"],
     ),

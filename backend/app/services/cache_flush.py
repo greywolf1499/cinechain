@@ -28,6 +28,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.engine import Engine
 from sqlmodel import Session
 
+from app.facets import store as facet_store
+from app.facets.models import MovieFacet, MovieFacetStatus
 from app.models.cache import CachedActor, CachedMovie, CachedMovieCast, CachedMovieRating
 from app.utils.ids import utcnow
 
@@ -40,6 +42,12 @@ def flush_stale_cache(session: Session, max_age_days: int = 7) -> dict[str, int]
     stale_movies = select(CachedMovie.tmdb_id).where(
         CachedMovie.cast_fetched_at.is_not(None), CachedMovie.cast_fetched_at < cutoff
     )
+    stale_rating_ids = list(
+        session.execute(
+            select(CachedMovieRating.movie_id).where(CachedMovieRating.fetched_at < cutoff)
+        ).scalars()
+    )
+    stale_movie_ids = list(session.execute(stale_movies).scalars())
     ratings_removed = session.execute(
         delete(CachedMovieRating).where(CachedMovieRating.fetched_at < cutoff)
     ).rowcount
@@ -73,6 +81,12 @@ def flush_stale_cache(session: Session, max_age_days: int = 7) -> dict[str, int]
             CachedActor.tmdb_id.not_in(select(CachedMovieCast.actor_id)),
         )
     ).rowcount
+    facet_store.invalidate(session, stale_rating_ids, ["reception"])
+    facet_store.invalidate(session, stale_movie_ids, ["production"])
+    facet_store.refresh(session, set(stale_rating_ids) | set(stale_movie_ids))
+    # Foreign keys are not enabled on every connection; remove orphan projections explicitly.
+    for model in (MovieFacet, MovieFacetStatus):
+        session.execute(delete(model).where(model.movie_id.not_in(select(CachedMovie.tmdb_id))))
     session.commit()
 
     return {

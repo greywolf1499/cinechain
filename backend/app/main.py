@@ -13,6 +13,7 @@ from app.api.routes_bracket import router as bracket_router
 from app.api.routes_curated import router as curated_router
 from app.api.routes_curated import slices_router
 from app.api.routes_engine import router as engine_router
+from app.api.routes_facets import router as facets_router
 from app.api.routes_images import router as images_router
 from app.api.routes_integrations import router as integrations_router
 from app.api.routes_movies import router as movies_router
@@ -91,6 +92,7 @@ app.include_router(runs_router, prefix=api_router_prefix)
 app.include_router(bracket_router, prefix=api_router_prefix)
 app.include_router(split_router, prefix=api_router_prefix)
 app.include_router(engine_router, prefix=api_router_prefix)
+app.include_router(facets_router, prefix=api_router_prefix)
 app.include_router(integrations_router, prefix=api_router_prefix)
 app.include_router(movies_router, prefix=api_router_prefix)
 app.include_router(settings_router, prefix=api_router_prefix)

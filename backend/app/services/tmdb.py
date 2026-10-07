@@ -56,6 +56,9 @@ class TMDBMovie(TypedDict, total=False):
     vote_average: float | None
     vote_count: int | None
     status: str | None
+    budget: int | None
+    revenue: int | None
+    collection_id: int | None
 
 
 class TMDBCastMember(TypedDict):
@@ -406,6 +409,9 @@ def _normalize_movie_detail(data: dict[str, Any]) -> TMDBMovie:
         vote_average=data.get("vote_average"),
         vote_count=data.get("vote_count"),
         status=data.get("status"),
+        budget=data.get("budget"),
+        revenue=data.get("revenue"),
+        collection_id=(data.get("belongs_to_collection") or {}).get("id"),
     )
 
 

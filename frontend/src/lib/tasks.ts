@@ -150,5 +150,6 @@ export const TASK_TITLES: Record<string, string> = {
 	diary_import_csv: "Diary CSV import",
 	diary_import_rss: "Diary RSS import",
 	passport_backfill_directors: "Director lookup",
+	facets_backfill: "Film facet indexing",
 	llm_model_download: "Local model download",
 };

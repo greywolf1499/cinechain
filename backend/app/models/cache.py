@@ -52,6 +52,9 @@ class CachedMovie(SQLModel, table=True):
     # resolves to its release year / "Contemporary". A manual edit is stored the same way.
     narrative_year: int | None = None
     narrative_era_label: str | None = None
+    budget: int | None = None
+    revenue: int | None = None
+    collection_id: int | None = None
 
 
 class CachedActor(SQLModel, table=True):
@@ -60,6 +63,7 @@ class CachedActor(SQLModel, table=True):
     tmdb_id: int = Field(primary_key=True)
     name: str
     profile_path: str | None = None
+    deathday: str | None = None
     # Completeness flag: distinguish "no credits" from "credits not yet fetched".
     credits_fetched_at: datetime | None = None
 
@@ -103,6 +107,7 @@ class CachedDirector(SQLModel, table=True):
     person_id: int = Field(primary_key=True)
     name: str
     credits_fetched_at: datetime = Field(default_factory=utcnow)
+    deathday: str | None = None
 
 
 class CachedMovieDirector(SQLModel, table=True):

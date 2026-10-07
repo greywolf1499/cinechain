@@ -37,7 +37,7 @@ from app.models.run import (
     RunStep,
 )
 from app.schemas.engine import Preset, RuleField, ValidationResult
-from app.services import embeddings
+from app.services import cache_repo, embeddings
 from app.services.tmdb import TMDBClient, TMDBError
 
 METHOD_ACTOR = "method_actor"
@@ -597,7 +597,7 @@ class MethodActorEngine(TrackerEngine):
     async def prepare_run(self, rules: dict, user_id: str) -> dict:
         actor_id = rules[ACTOR_ID_KEY]
         try:
-            person = await self.tmdb.get_person(actor_id)
+            person = await cache_repo.get_person(self.session, self.tmdb, actor_id)
             credits = await self.tmdb.get_person_cast_credits_raw(actor_id)
         except TMDBError as exc:
             if exc.status_code == 404:

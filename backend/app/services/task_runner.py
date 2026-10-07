@@ -202,6 +202,42 @@ def _record_success(ctx: TaskContext, result: dict[str, Any] | None) -> None:
     ctx.flush(status=COMPLETED)
 
 
+FACETS_BATCH_SIZE = 2000
+
+
+def facets_backfill(ctx: TaskContext) -> dict[str, Any]:
+    from app.facets.store import refresh
+    from app.models.cache import CachedMovie
+
+    cursor = int(ctx._data.get("cursor", 0))
+    processed = int(ctx._data.get("processed", 0))
+    while True:
+        ctx.check_cancelled(force=True)
+        with ctx.session() as session:
+            ids = list(
+                session.exec(
+                    select(CachedMovie.tmdb_id)
+                    .where(CachedMovie.tmdb_id > cursor)
+                    .order_by(col(CachedMovie.tmdb_id))
+                    .limit(FACETS_BATCH_SIZE)
+                ).all()
+            )
+            if not ids:
+                return {"processed": processed, "cursor": cursor}
+            refresh(session, ids, check_cancelled=ctx.check_cancelled)
+            cursor, processed = ids[-1], processed + len(ids)
+            task = session.get(SystemTask, ctx.task_id)
+            if task is None:
+                raise TaskCancelled("Facet backfill task was removed")
+            task.progress_data = {**ctx._data, "cursor": cursor, "processed": processed}
+            session.add(task)
+            session.commit()
+        ctx.set("cursor", cursor)
+        ctx.set("processed", processed)
+        ctx.progress({"phase": "facets", "processed": processed, "cursor": cursor})
+        ctx.flush()
+
+
 def _execute(
     engine: Engine, task_id: str, work: TaskWork, describe_error: ErrorDescriber | None
 ) -> None:
@@ -279,9 +315,11 @@ def fail_interrupted_tasks(engine: Engine) -> int:
 
 def prune_finished(session: Session) -> None:
     session.exec(
-        delete(SystemTask).where(
+        delete(SystemTask)
+        .where(
             col(SystemTask.status).in_((COMPLETED, FAILED)),
             col(SystemTask.updated_at) < utcnow() - RETENTION,
         )
+        .execution_options(synchronize_session="fetch")
     )
     session.commit()

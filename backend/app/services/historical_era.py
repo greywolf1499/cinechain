@@ -226,6 +226,10 @@ def _store(session: Session, movie: CachedMovie, year: int, label: str) -> None:
     movie.narrative_year = year
     movie.narrative_era_label = label
     session.add(movie)
+    from app.facets.store import invalidate, refresh
+
+    invalidate(session, [movie.tmdb_id], ["production"])
+    refresh(session, [movie.tmdb_id], ["production"])
     session.commit()
     session.refresh(movie)
 

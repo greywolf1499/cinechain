@@ -32,6 +32,7 @@ from app.engines.mutators import (
     candidate_from_row,
 )
 from app.engines.rulebook import RuleSection
+from app.facets.genres import TMDB_GENRE_IDS
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
@@ -55,28 +56,6 @@ SWING_FREQUENCY_KEY = "swing_frequency"
 # Frontier genres a pool query pairs with the target (TMDB `with_genres` ANDs them).
 POOL_PAIR_GENRES = 3
 
-# TMDB's fixed movie genre ids: they never change, so no lookup is needed to resolve a name.
-TMDB_GENRE_IDS: dict[str, int] = {
-    "Action": 28,
-    "Adventure": 12,
-    "Animation": 16,
-    "Comedy": 35,
-    "Crime": 80,
-    "Documentary": 99,
-    "Drama": 18,
-    "Family": 10751,
-    "Fantasy": 14,
-    "History": 36,
-    "Horror": 27,
-    "Music": 10402,
-    "Mystery": 9648,
-    "Romance": 10749,
-    "Science Fiction": 878,
-    "TV Movie": 10770,
-    "Thriller": 53,
-    "War": 10752,
-    "Western": 37,
-}
 _BY_LOWER = {name.lower(): name for name in TMDB_GENRE_IDS}
 _ALIASES = {
     "sci-fi": "Science Fiction",

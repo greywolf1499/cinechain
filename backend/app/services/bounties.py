@@ -19,6 +19,7 @@ from typing import Any, NamedTuple
 
 from app.engines.predicates import MovieFacts, Predicate, facts_of, predicate
 from app.engines.rulebook import RuleSection
+from app.facets.genres import GENRE_IDS
 
 RULEBOOK = RuleSection(
     "Earn rewards by completing film side quests.",
@@ -322,28 +323,6 @@ def revoke(rules: dict, bounty_id: str, replacement: str | None) -> dict:
 MAX_CONDITIONS = 3
 MAX_KEYWORDS = 5
 MIN_YEAR, MAX_RUNTIME = 1888, 400
-GENRE_IDS = {
-    "action": 28,
-    "adventure": 12,
-    "animation": 16,
-    "comedy": 35,
-    "crime": 80,
-    "documentary": 99,
-    "drama": 18,
-    "family": 10751,
-    "fantasy": 14,
-    "history": 36,
-    "horror": 27,
-    "music": 10402,
-    "musical": 10402,
-    "mystery": 9648,
-    "romance": 10749,
-    "science fiction": 878,
-    "sci-fi": 878,
-    "thriller": 53,
-    "war": 10752,
-    "western": 37,
-}
 
 
 def _whole(value: object, low: int, high: int) -> int | None:

@@ -21,9 +21,10 @@ from typing import TypedDict
 import anyio
 import httpx
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.config import get_settings
+from app.facets import store as facet_store
 from app.integrations.omdb import OMDbClient, OMDbRatings
 from app.models.cache import (
     CachedActor,
@@ -116,7 +117,24 @@ class CacheRepo:
         row.vote_average = movie.get("vote_average")
         row.vote_count = movie.get("vote_count")
         row.status = movie.get("status")
+        row.budget = movie.get("budget")
+        row.revenue = movie.get("revenue")
+        row.collection_id = movie.get("collection_id")
         self.session.add(row)
+        affected = set(
+            self.session.exec(
+                select(CachedMovieDirector.movie_id).where(
+                    col(CachedMovieDirector.person_id).in_(
+                        select(CachedMovieDirector.person_id).where(
+                            CachedMovieDirector.movie_id == row.tmdb_id
+                        )
+                    )
+                )
+            ).all()
+        ) | {row.tmdb_id}
+        facet_store.invalidate(self.session, affected, ["production"])
+        facet_store.invalidate(self.session, [row.tmdb_id], ("lexical", "production", "reception"))
+        facet_store.refresh(self.session, [row.tmdb_id])
         self.session.commit()
         self.session.refresh(row)
         return row
@@ -153,6 +171,7 @@ class CacheRepo:
         except IntegrityError:
             row = self.session.get(CachedMovie, credit["id"])
             return row
+        facet_store.refresh(self.session, [row.tmdb_id])
         self.session.commit()
         self.session.refresh(row)
         return row
@@ -190,6 +209,8 @@ class CacheRepo:
         self.session.add_all(rows)
         movie.directors_fetched_at = utcnow()
         self.session.add(movie)
+        facet_store.invalidate(self.session, [movie_id], ["production"])
+        facet_store.refresh(self.session, [movie_id], ["production"])
         self.session.commit()
         return rows
 
@@ -213,9 +234,11 @@ class CacheRepo:
         director = self.session.get(CachedDirector, person_id)
         if director is None:
             director = CachedDirector(person_id=person_id, name=name)
+            actor = self.session.get(CachedActor, person_id)
+            if actor is not None:
+                director.deathday = actor.deathday
         director.name = name or director.name
         director.credits_fetched_at = utcnow()
-        self.session.add(director)
 
         movies: list[CachedMovie] = []
         for credit in credits:
@@ -225,6 +248,10 @@ class CacheRepo:
                 self.session.add(
                     CachedMovieDirector(movie_id=movie.tmdb_id, person_id=person_id, name=name)
                 )
+        self.session.add(director)
+        affected = [m.tmdb_id for m in movies]
+        facet_store.invalidate(self.session, affected, ["production"])
+        facet_store.refresh(self.session, affected, ["production"])
         self.session.commit()
         return movies
 
@@ -451,6 +478,8 @@ class CacheRepo:
             movie.cast_fetched_at = utcnow()
             self.session.add(movie)
 
+        facet_store.invalidate(self.session, [movie_id], ["production"])
+        facet_store.refresh(self.session, [movie_id], ["production"])
         self.session.commit()
         return entries
 
@@ -535,12 +564,48 @@ class CacheRepo:
         row.metacritic = ratings["metacritic"] if ratings else None
         row.fetched_at = utcnow()
         self.session.add(row)
+        facet_store.invalidate(self.session, [movie_id], ["reception"])
+        facet_store.refresh(self.session, [movie_id], ["reception"])
         self.session.commit()
         self.session.refresh(row)
         return row
 
 
 # --- async read-through orchestration ---
+
+
+async def get_person(session: Session, tmdb: TMDBClient, person_id: int) -> dict:
+    person = await tmdb.get_person(person_id)
+    await anyio.to_thread.run_sync(_persist_person, session, person_id, person)
+    return person
+
+
+def _persist_person(session: Session, person_id: int, person: dict) -> None:
+    actor = session.get(CachedActor, person_id)
+    if actor is None:
+        actor = CachedActor(
+            tmdb_id=person_id,
+            name=person.get("name") or str(person_id),
+            profile_path=person.get("profile_path"),
+        )
+    director = session.get(CachedDirector, person_id)
+    # A director row signifies a complete filmography, so never create it from person detail.
+    for row in (actor, director):
+        if row is not None:
+            row.deathday = person.get("deathday")
+            session.add(row)
+    affected = set(
+        session.exec(
+            select(CachedMovieCast.movie_id).where(CachedMovieCast.actor_id == person_id)
+        ).all()
+    ) | set(
+        session.exec(
+            select(CachedMovieDirector.movie_id).where(CachedMovieDirector.person_id == person_id)
+        ).all()
+    )
+    facet_store.invalidate(session, affected, ["production"])
+    facet_store.refresh(session, affected, ["production"])
+    session.commit()
 
 
 async def get_movie(

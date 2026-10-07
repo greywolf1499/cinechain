@@ -1,3 +1,4 @@
+from app.facets.models import MovieFacet, MovieFacetStatus
 from app.models.cache import (
     CachedActor,
     CachedCrewCredit,
@@ -26,6 +27,8 @@ __all__ = [
     "CuratedListEntry",
     "DailyPuzzle",
     "DailyPuzzleAttempt",
+    "MovieFacet",
+    "MovieFacetStatus",
     "Run",
     "RunParticipant",
     "RunStep",

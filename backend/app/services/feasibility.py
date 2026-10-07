@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from sqlalchemy import text
 from sqlmodel import Session, select
 
-from app.engines.predicates import MovieFacts, Predicate, facts_of
+from app.engines.predicates import FacetPredicate, MovieFacts, Predicate, facts_of
+from app.facets.query import count
+from app.facets.registry import FAMILY_VERSIONS
 from app.models.cache import CachedMovie, CachedMovieDirector, CachedMovieRating
 from app.services.movie_filters import rating_from_cache
 
@@ -79,12 +83,38 @@ def invalidate(session: Session) -> None:
 
 
 def pass_rate(session: Session, test: Predicate, ids: Iterable[int]) -> float | None:
+    ids = list(ids)
+    if isinstance(test, FacetPredicate) and test.query.stored and _covered(session, test, ids):
+        return count(session, test.query, ids)["pass_rate"]
     evidence = evidence_for(session)
     results = [
         test.check(evidence.movies[i], evidence.facts[i]) if i in evidence.movies else None
         for i in ids
     ]
     return sum(result is not False for result in results) / len(results) if results else None
+
+
+def _covered(session: Session, test: FacetPredicate, ids: list[int]) -> bool:
+    def families(query):
+        from app.facets.registry import CATALOGUE
+
+        return (
+            {CATALOGUE[query.facet].family}
+            if query.facet
+            else set().union(*(families(c) for c in query.children()))
+        )
+
+    required = families(test.query)
+    return all(
+        session.execute(
+            text("""SELECT COUNT(*) FROM movie_facet_status
+        WHERE movie_id IN (SELECT value FROM json_each(:ids)) AND family=:family
+        AND version=:version AND status='ok'"""),
+            {"ids": json.dumps(ids), "family": family, "version": FAMILY_VERSIONS[family]},
+        ).scalar_one()
+        == len(set(ids))
+        for family in required
+    )
 
 
 def exists(session: Session, test: Predicate, ids: Iterable[int]) -> bool:

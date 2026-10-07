@@ -1,15 +1,58 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from pydantic import BaseModel
-from sqlmodel import Session, func, select
+from sqlmodel import Session, col, func, select
 
 from app.api.deps import get_current_admin, get_current_user
+from app.api.routes_tasks import TaskOut
 from app.config import get_settings
 from app.db import get_session
+from app.facets.registry import FAMILY_VERSIONS
 from app.models.cache import CachedActor, CachedMovie, CachedMovieCast
+from app.models.system import SystemTask
 from app.models.user import User
-from app.services import cache_flush
+from app.services import cache_flush, task_runner
 
 router = APIRouter(tags=["system"])
+
+
+@router.post("/system/facets/backfill", response_model=TaskOut)
+def backfill_facets(
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    admin: User = Depends(get_current_admin),
+) -> TaskOut:
+    dedupe_key = "facets_backfill:" + ",".join(
+        f"{family}:{version}" for family, version in FAMILY_VERSIONS.items()
+    )
+    previous = session.exec(
+        select(SystemTask)
+        .where(SystemTask.dedupe_key == dedupe_key)
+        .order_by(col(SystemTask.created_at).desc())
+    ).first()
+    resume = (
+        dict(previous.progress_data or {})
+        if previous is not None and previous.status == task_runner.FAILED
+        else None
+    )
+    task, created = task_runner.submit_task(
+        background_tasks,
+        session,
+        "facets_backfill",
+        task_runner.facets_backfill,
+        user_id=admin.id,
+        dedupe_key=dedupe_key,
+        label="Compute cached movie facets",
+        link="/settings",
+    )
+    if created and resume is not None:
+        task.progress_data = {
+            **(task.progress_data or {}),
+            "cursor": resume.get("cursor", 0),
+            "processed": resume.get("processed", 0),
+        }
+        session.add(task)
+        session.commit()
+    return TaskOut.from_model(task)
 
 
 class CacheStats(BaseModel):

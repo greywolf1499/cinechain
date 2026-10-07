@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from app.facets.query import FacetQuery
 from app.models.cache import CachedMovie, CachedMovieDirector
 from app.utils.countries import parse_countries
 from app.utils.dates import parse_release_year
@@ -61,13 +62,33 @@ class Predicate(Protocol):
 
 
 @dataclass(frozen=True)
-class FilmPredicate:
+class FacetPredicate:
     id: str
     label: str
     emoji: str
     needs: frozenset[str]
     difficulty: int
     params: dict[str, float]
+
+    @property
+    def query(self) -> FacetQuery:
+        if self.id == "female_director":
+            return FacetQuery(facet="female_director", op="eq", value=True)
+        if self.id in ("non_english", "non_us_non_english"):
+            language = {"facet": "original_language", "op": "ne", "value": "en"}
+            return FacetQuery.model_validate(
+                language
+                if self.id == "non_english"
+                else {"facet": "non_us_non_english", "op": "eq", "value": True}
+            )
+        field_name, comparison = self.id.rsplit("_", 1)
+        return FacetQuery.model_validate(
+            {
+                "facet": "release_year" if field_name == "year" else field_name,
+                "op": comparison,
+                "value": self.params["value"],
+            }
+        )
 
     @property
     def ranges(self) -> dict[str, tuple[float | None, float | None]]:
@@ -88,30 +109,29 @@ class FilmPredicate:
         }
 
     def check(self, movie: CachedMovie | None, facts: MovieFacts) -> bool | None:
-        if self.id == "female_director":
-            if 1 in facts.director_genders:
-                return True
-            return None if not facts.director_genders or None in facts.director_genders else False
-        if self.id in ("non_english", "non_us_non_english"):
-            if not facts.language:
-                return None
-            if facts.language == "en":
-                return False
-            if self.id == "non_english":
-                return True
-            return None if facts.countries is None else "US" not in facts.countries
-        field_name, comparison = self.id.rsplit("_", 1)
-        value = getattr(facts, field_name)
-        if value is None:
-            return None
-        threshold = self.params["value"]
-        if comparison == "lt":
-            return value < threshold
-        if comparison == "gt":
-            return value > threshold
-        if comparison == "le":
-            return value <= threshold
-        return value >= threshold
+        genders = facts.director_genders
+        return self.query.evaluate(
+            {
+                "runtime": facts.runtime,
+                "release_year": facts.year,
+                "popularity": facts.popularity,
+                "original_language": facts.language or None,
+                "origin_country": facts.countries,
+                "rating": facts.rating,
+                "non_us_non_english": None
+                if not facts.language
+                else False
+                if facts.language == "en"
+                else None
+                if facts.countries is None
+                else "US" not in facts.countries,
+                "female_director": True
+                if 1 in genders
+                else None
+                if not genders or None in genders
+                else False,
+            }
+        )
 
 
 _SPECS = {
@@ -135,4 +155,7 @@ _SPECS = {
 
 def predicate(predicate_id: str, **params: float) -> Predicate:
     label, emoji, needs, difficulty = _SPECS[predicate_id]
-    return FilmPredicate(predicate_id, label, emoji, needs, difficulty, params)
+    return FacetPredicate(predicate_id, label, emoji, needs, difficulty, params)
+
+
+FilmPredicate = FacetPredicate

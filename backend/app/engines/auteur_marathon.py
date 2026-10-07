@@ -196,7 +196,7 @@ class AuteurMarathonEngine(TrackerEngine):
     async def prepare_run(self, rules: dict, user_id: str) -> dict:
         director_id = rules[DIRECTOR_ID_KEY]
         try:
-            person = await self.tmdb.get_person(director_id)
+            person = await cache_repo.get_person(self.session, self.tmdb, director_id)
             credits = await self.tmdb.get_person_crew_credits_raw(director_id)
             candidates = [c for c in credits if _is_candidate(c, datetime.now(UTC).date())]
             details = await self._details(candidates)

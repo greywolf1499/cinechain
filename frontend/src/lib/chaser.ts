@@ -1,7 +1,21 @@
-export const DRAMA_GENRE_ID = 18;
-export const CHASER_TRIGGER_RUNTIME = 135;
+import { useQuery } from "@tanstack/react-query";
+import { api } from "./api";
 
-/** A heavy film (135+ minutes, or a drama) earns a palate cleanser (mirrors services/pool_options.py). */
-export function needsChaser(runtime: number | null | undefined, genreIds: number[] | null | undefined): boolean {
-  return (runtime ?? 0) >= CHASER_TRIGGER_RUNTIME || (genreIds ?? []).includes(DRAMA_GENRE_ID);
+interface ChaserCatalogue {
+  named_variants: {
+    chaser_trigger: { query: { any: [{ facet: "runtime"; op: "ge"; value: number }, { facet: "genre"; op: "contains"; value: number }] } };
+  };
+}
+
+export function useNeedsChaser(runtime: number | null | undefined, genreIds: number[] | null | undefined) {
+  const catalogue = useQuery({
+    queryKey: ["facets"],
+    queryFn: () => api.get<ChaserCatalogue>("/facets"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const leaves = catalogue.data?.named_variants.chaser_trigger.query.any;
+  return {
+    heavy: !!leaves && ((runtime != null && runtime >= leaves[0].value) || !!genreIds?.includes(leaves[1].value)),
+    error: catalogue.error,
+  };
 }

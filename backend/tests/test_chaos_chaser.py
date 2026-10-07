@@ -1,5 +1,7 @@
 """Phase 27c: the Chaos Button, The Chaser (palate cleansers) and the Underdog B-Side flip."""
 
+import random
+
 import httpx
 import pytest
 import respx
@@ -127,6 +129,31 @@ def force_chaos(monkeypatch, handicap_id):
     )
 
 
+def test_modern_only_can_be_dealt_and_enforced(client, monkeypatch):
+    original_roll = chaos.roll
+
+    def deal_modern(rng=None, feasible=None):
+        assert "modern_only" in feasible
+        for seed in range(200):
+            dealt = original_roll(random.Random(seed), feasible)
+            if dealt["id"] == "modern_only":
+                return dealt
+        pytest.fail("Modern only was never selected from the measured eligible pool")
+
+    monkeypatch.setattr(chaos, "roll", deal_modern)
+    run_id = make_run(client)
+    with respx.mock:
+        mock_universe(
+            {1: film("Anchor"), 2: film("Classic", year=1955), 3: film("Modern", year=1995)}
+        )
+        assert log(client, run_id, 1).status_code == 201
+        response = client.post(f"/api/runs/{run_id}/chaos")
+        assert response.status_code == 200, response.text
+        assert response.json()["rules_config"]["active_chaos"]["label"] == "Modern only"
+        assert log(client, run_id, 2).status_code == 409
+        assert log(client, run_id, 3).status_code == 201
+
+
 # --- the handicap rules ---
 
 
@@ -134,10 +161,14 @@ def force_chaos(monkeypatch, handicap_id):
     ("handicap", "good", "bad"),
     [
         ("pre_1970", {"release_date": "1969-12-31"}, {"release_date": "1970-01-01"}),
-        ("epic_length", {"runtime": 150}, {"runtime": 149}),
-        ("short_flick", {"runtime": 85}, {"runtime": 86}),
+        ("epic_length", {"runtime": 151}, {"runtime": 150}),
+        ("short_flick", {"runtime": 89}, {"runtime": 90}),
         ("foreign_tongue", {"original_language": "fr"}, {"original_language": "en"}),
         ("b_movie", {"vote_average": 5.9}, {"vote_average": 6.0}),
+        ("modern_only", {"release_date": "1970-01-01"}, {"release_date": "1969-12-31"}),
+        ("english_only", {"original_language": "en"}, {"original_language": "fr"}),
+        ("crowd_pleaser", {"vote_average": 6.0}, {"vote_average": 5.9}),
+        ("one_word_titles", {"title": "Alien"}, {"title": "Two Words"}),
     ],
 )
 def test_each_handicap_checks_its_criterion(db_engine, handicap, good, bad):
@@ -178,6 +209,11 @@ def test_unknown_data_never_blocks_and_imdb_beats_the_tmdb_score(db_engine):
         "epic_length",
         "short_flick",
         "foreign_tongue",
+        "modern_only",
+        "crowd_pleaser",
+        "english_only",
+        "one_word_titles",
+        "cult_classics",
     }
 
 

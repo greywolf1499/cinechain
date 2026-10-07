@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import operator
+import re
 from collections.abc import Iterable, Mapping
 from typing import Literal
 
@@ -13,7 +14,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from app.facets.registry import CATALOGUE, FAMILY_VERSIONS, FacetValue
-from app.facets.store import EMPTY_SET
+from app.facets.store import EMPTY_SET, stored_values
 
 Scalar = str | int | float | bool
 COMPARISONS = {
@@ -110,6 +111,9 @@ class FacetQuery(BaseModel):
         if value is None:
             return None
         if self.op == "contains":
+            if self.facet == "text":
+                assert isinstance(value, str) and isinstance(self.value, str)
+                return bool(re.search(r"\b" + re.escape(self.value), value.lower()))
             assert isinstance(value, list)
             return self.value in value
         if self.op == "has_any":
@@ -123,6 +127,46 @@ class FacetQuery(BaseModel):
 
 def evaluate(query: FacetQuery, facts: Mapping[str, FacetValue]) -> bool | None:
     return query.evaluate(facts)
+
+
+def _relative_value(facet_id: str) -> str:
+    if facet_id == "text":
+        return """(SELECT LOWER(title || ' ' || COALESCE(tagline,'') || ' ' ||
+            COALESCE(overview,'')) FROM cached_movies WHERE tmdb_id=u.movie_id)"""
+    if facet_id == "canon":
+        return "EXISTS (SELECT 1 FROM canon_movie_badges WHERE movie_id=u.movie_id)"
+    if facet_id == "popularity":
+        return "(SELECT popularity FROM cached_movies WHERE tmdb_id=u.movie_id)"
+    if facet_id not in ("popularity_percentile", "vote_count_band"):
+        raise ValueError(f"No query-time value projection for facet {facet_id}")
+    column, buckets = (
+        ("popularity", 100) if facet_id == "popularity_percentile" else ("vote_count", 4)
+    )
+    value = f"(SELECT bucket FROM (SELECT tmdb_id, NTILE({buckets}) OVER (ORDER BY {column},tmdb_id) AS bucket FROM cached_movies WHERE {column} IS NOT NULL) WHERE tmdb_id=u.movie_id)"
+    if facet_id == "vote_count_band":
+        value = f"(CASE {value} WHEN 1 THEN 'low' WHEN 2 THEN 'medium' WHEN 3 THEN 'high' WHEN 4 THEN 'very_high' END)"
+    return value
+
+
+def values_for(
+    session: Session, movie_ids: Iterable[int], facets: Iterable[str]
+) -> dict[int, dict[str, FacetValue]]:
+    ids, names = list(movie_ids), list(facets)
+    values = stored_values(session, ids, names)
+    relative = [name for name in names if CATALOGUE[name].relative]
+    if relative and ids:
+        universe, params = universe_ids(ids)
+        columns = ",".join(f"{_relative_value(name)} AS v{i}" for i, name in enumerate(relative))
+        for row in session.execute(
+            text(f"SELECT u.movie_id,{columns} FROM ({universe}) AS u"), params
+        ).mappings():
+            facts = values.setdefault(row["movie_id"], {})
+            for i, name in enumerate(relative):
+                value = row[f"v{i}"]
+                facts[name] = (
+                    bool(value) if CATALOGUE[name].kind == "bool" and value is not None else value
+                )
+    return values
 
 
 def _expression(query: FacetQuery) -> tuple[str, dict]:
@@ -149,17 +193,9 @@ def _expression(query: FacetQuery) -> tuple[str, dict]:
         definition = CATALOGUE[node.facet]
         if definition.relative:
             assert node.value is not None and not isinstance(node.value, list)
-            if definition.id == "popularity":
-                value = "(SELECT popularity FROM cached_movies WHERE tmdb_id=u.movie_id)"
-            else:
-                column, buckets = (
-                    ("popularity", 100)
-                    if definition.id == "popularity_percentile"
-                    else ("vote_count", 4)
-                )
-                value = f"(SELECT bucket FROM (SELECT tmdb_id, NTILE({buckets}) OVER (ORDER BY {column},tmdb_id) AS bucket FROM cached_movies WHERE {column} IS NOT NULL) WHERE tmdb_id=u.movie_id)"
-                if definition.id == "vote_count_band":
-                    value = f"(CASE {value} WHEN 1 THEN 'low' WHEN 2 THEN 'medium' WHEN 3 THEN 'high' WHEN 4 THEN 'very_high' END)"
+            value = _relative_value(definition.id)
+            if definition.id == "text":
+                return f"({value} REGEXP {bind(r'\b' + re.escape(str(node.value)))})"
             op = {"eq": "=", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}[node.op]
             return f"({value}{op}{bind(node.value)})"
         facet = bind(definition.id)

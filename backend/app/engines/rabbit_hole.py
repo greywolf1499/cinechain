@@ -29,14 +29,23 @@ from datetime import date
 from hashlib import sha256
 from typing import ClassVar
 
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.engines.base import RunSetupError
 from app.engines.cinechain import CineChainEngine
 from app.engines.conditions import RunOutcome
-from app.engines.predicates import MovieFacts, Predicate, facts_of, predicate
+from app.engines.predicates import (
+    MovieFacts,
+    Predicate,
+    QueryPredicate,
+    facts_of,
+    named_predicate,
+    predicate,
+)
 from app.engines.rulebook import RuleSection
-from app.models.cache import CachedMovie
+from app.facets.query import FacetQuery
+from app.facets.registry import CATALOGUE, named_variants
+from app.models.cache import CachedMovie, CachedMovieCast, CachedMovieDirector
 from app.models.run import RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, Run, RunStep
 from app.schemas.discovery import DiscoveryCandidate
 from app.schemas.engine import (
@@ -105,7 +114,7 @@ TIERS = (
 
 
 def procedural(rules: dict | None) -> bool:
-    return (rules or {}).get(RH_VERSION_KEY) == 2
+    return (rules or {}).get(RH_VERSION_KEY) in (2, 3)
 
 
 def daily_seed(day: date) -> int:
@@ -126,6 +135,15 @@ def tier_options() -> list[Predicate]:
 
 
 def predicate_data(test: Predicate) -> dict:
+    if isinstance(test, QueryPredicate):
+        return {
+            "query": test.query.model_dump(by_alias=True, exclude_none=True),
+            "predicate_id": test.id,
+            "params": {},
+            "name": test.label,
+            "rule": test.label,
+            "difficulty": test.difficulty,
+        }
     names = {
         "year_lt": "The Retro Lock",
         "non_english": "Tower of Babel",
@@ -149,6 +167,13 @@ def predicate_data(test: Predicate) -> dict:
 
 
 def test_from_data(data: dict) -> Predicate:
+    if "query" in data:
+        return QueryPredicate(
+            data["predicate_id"],
+            data["rule"],
+            FacetQuery.model_validate(data["query"]),
+            difficulty=data.get("difficulty", 1),
+        )
     return predicate(data["predicate_id"], **data["params"])
 
 
@@ -159,6 +184,10 @@ class TierPredicates:
     label = "Rabbit Hole tier and curses"
     emoji = ""
     difficulty = 3
+
+    @property
+    def query(self) -> FacetQuery:
+        return FacetQuery(all=[feasibility.query_of(test) for test in self.tests])
 
     @property
     def params(self) -> dict[str, float]:
@@ -246,6 +275,178 @@ def draw_deck(
                 **predicate_data(test),
                 "number": index + 1,
                 "start_depth": index * 5,
+                "curses": inherited,
+            }
+        )
+    return deck
+
+
+TIER_PASS_BANDS = ((0.20, 0.45), (0.10, 0.30), (0.05, 0.18), (0.025, 0.10))
+
+
+def facet_options(session: Session) -> list[QueryPredicate]:
+    options = [
+        named_predicate(name)
+        for name in named_variants()
+        if name not in ("chaser_trigger", "chaser")
+    ]
+    movies = feasibility.movies(session)
+    from app.facets.store import refresh, stored_values
+
+    refresh(session, movies)
+    facts = stored_values(session, movies, ("runtime", "release_year", "rating", "title_length"))
+    for movie_id, movie in movies.items():
+        facts.setdefault(movie_id, {})["popularity"] = movie.popularity
+    for facet in ("runtime", "release_year", "rating", "popularity", "title_length"):
+        values = sorted(
+            {value for f in facts.values() if isinstance(value := f.get(facet), (int, float))}
+        )
+        for fraction in (0.03, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95, 0.97, 0.99):
+            if not values:
+                continue
+            value = values[min(len(values) - 1, int(len(values) * fraction))]
+            for op in ("le", "ge"):
+                comparison = "at most" if op == "le" else "at least"
+                options.append(
+                    QueryPredicate(
+                        f"{facet}_{op}_{value}",
+                        f"{CATALOGUE[facet].label} {comparison} {value:g}",
+                        FacetQuery(facet=facet, op=op, value=value),
+                    )
+                )
+    return options
+
+
+def draw_facet_deck(
+    session: Session, seed: int, eligible_ids: Sequence[int], curses: bool = False
+) -> list[dict]:
+    rng = random.Random(seed)
+    options = facet_options(session)
+    rng.shuffle(options)
+    candidates = list(options)
+
+    def numeric_value(test: QueryPredicate) -> float:
+        assert isinstance(test.query.value, (int, float))
+        return test.query.value
+
+    for facet in ("runtime", "release_year", "rating", "popularity", "title_length"):
+        lower = sorted(
+            (p for p in options if p.query.facet == facet and p.query.op == "le"), key=numeric_value
+        )[:3]
+        upper = sorted(
+            (p for p in options if p.query.facet == facet and p.query.op == "ge"),
+            key=numeric_value,
+            reverse=True,
+        )[:3]
+        for left in lower:
+            for right in upper:
+                candidates.append(
+                    QueryPredicate(
+                        f"{left.id}|{right.id}",
+                        f"{left.label} or {right.label}",
+                        FacetQuery(any=[left.query, right.query]),
+                    )
+                )
+    cult, one_word = named_predicate("cult_classic"), named_predicate("one_word")
+    candidates.append(
+        QueryPredicate(
+            "cult_classic+one_word",
+            "Cult classic + one-word title",
+            FacetQuery(all=[cult.query, one_word.query]),
+        )
+    )
+    for _ in range(300):
+        parts = rng.sample(options, rng.randint(2, min(3, len(options))))
+        conjunction = rng.choice((True, False))
+        candidates.append(
+            QueryPredicate(
+                ("+" if conjunction else "|").join(p.id for p in parts),
+                (" + " if conjunction else " or ").join(p.label for p in parts),
+                FacetQuery(all=[p.query for p in parts])
+                if conjunction
+                else FacetQuery(any=[p.query for p in parts]),
+            )
+        )
+
+    def leaf_count(query: FacetQuery) -> int:
+        return (
+            1 if query.facet is not None else sum(leaf_count(child) for child in query.children())
+        )
+
+    candidates = [test for test in candidates if 1 <= leaf_count(test.query) <= 3]
+    cache_ids = list(feasibility.movies(session))
+    deck = [
+        {
+            "number": 1,
+            "name": "Freefall",
+            "rule": "No extra constraints",
+            "start_depth": 0,
+            "curses": [],
+        }
+    ]
+    used = set()
+    previous_difficulty = 1
+    for index, (low, high) in enumerate(TIER_PASS_BANDS, start=1):
+        accepted = []
+        for test in candidates:
+            if test.id in used:
+                continue
+            cache_rate = feasibility.pass_rate(session, test, cache_ids)
+            pool_rate = feasibility.pass_rate(session, test, eligible_ids)
+            if (
+                cache_rate is None
+                or pool_rate is None
+                or not (low <= cache_rate <= high and low <= pool_rate <= high)
+            ):
+                continue
+            measured = feasibility.difficulty(pool_rate)
+            if measured >= previous_difficulty:
+                accepted.append((test, pool_rate, measured))
+        if not accepted:
+            raise RunSetupError(
+                f"Rabbit Hole needs cached movie evidence and a reachable pool in tier {index + 1}'s {low:.0%}-{high:.0%} pass-rate band. Browse more films or choose a broader seed."
+            )
+        accepted.sort(key=lambda entry: (entry[2], abs(entry[1] - (low + high) / 2)))
+        # Choose among equally difficult rules, favouring a composition when available.
+        minimum = accepted[0][2]
+        fair = [entry for entry in accepted if entry[2] == minimum]
+        compositions = [entry for entry in fair if entry[0].query.all is not None]
+        test, rate, measured = rng.choice(compositions or fair)
+        used.add(test.id)
+        previous_difficulty = measured
+        inherited = []
+        if curses and index >= 3:
+            for entry in [*deck[-1]["curses"], deck[-1]]:
+                combined = QueryPredicate(
+                    "combined",
+                    "Combined",
+                    FacetQuery(
+                        all=[
+                            test.query,
+                            feasibility.query_of(test_from_data(entry)),
+                            *(feasibility.query_of(test_from_data(c)) for c in inherited),
+                        ]
+                    ),
+                )
+                if (
+                    combined.query.size() <= 64
+                    and (feasibility.pass_rate(session, combined, eligible_ids) or 0) >= 0.01
+                    and (feasibility.pass_rate(session, combined, cache_ids) or 0) >= 0.01
+                ):
+                    inherited.append(
+                        {
+                            k: v
+                            for k, v in entry.items()
+                            if k not in ("curses", "number", "start_depth")
+                        }
+                    )
+        deck.append(
+            {
+                **predicate_data(test),
+                "number": index + 1,
+                "start_depth": index * 5,
+                "difficulty": measured,
+                "pass_rate": rate,
                 "curses": inherited,
             }
         )
@@ -368,18 +569,18 @@ def tier_state(depth: int, rules: dict | None) -> RabbitHoleState:
 def compliance(session, tier: Tier, row: CachedMovie) -> bool | None:
     """Does `row` satisfy the tier's rule? None = the film's data can't tell (yet)."""
     tests = tier_tests(tier)
-    rating = rating_of(session, row) if "rating" in tests.needs else None
-    return tests.check(row, facts_of(row, [], rating))
+    if session.get(CachedMovie, row.tmdb_id) is None:
+        return tests.check(row, facts_of(row, [], rating_of(session, row)))
+    return feasibility.verdict(session, tests, row.tmdb_id)
 
 
 def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
     prefix = f"Tier {tier.number} ({tier.name}): "
     if tier.procedural:
-        facts = facts_of(row, [], rating_of(session, row))
         failed = [
             predicate_data(test)["rule"]
             for test in tier_tests(tier).tests
-            if test.check(row, facts) is False
+            if feasibility.verdict(session, test, row.tmdb_id) is False
         ]
         return f"{prefix}{row.title} must satisfy: {', '.join(failed)}"
     if tier.number == 2:
@@ -534,6 +735,7 @@ class RabbitHoleEngine(CineChainEngine):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._depth = 0
+        self.setup_seed_movie_id: int | None = None
 
     # --- rules ---
 
@@ -565,20 +767,48 @@ class RabbitHoleEngine(CineChainEngine):
 
     async def prepare_run(self, rules: dict, user_id: str) -> dict:
         seed = daily_seed(utcnow().date()) if rules.get("daily") else secrets.randbits(48)
-        evidence = feasibility.evidence_for(self.session)
+        movies = feasibility.movies(self.session)
         bounds = super().bounty_bounds(rules, [])
         eligible = [
             movie_id
-            for movie_id, row in evidence.movies.items()
+            for movie_id, row in movies.items()
             if is_reality_eligible(row)
-            and feasibility.within(evidence.facts[movie_id], bounds)
+            and feasibility.within_movie(row, bounds)
             and super(RabbitHoleEngine, self).bounty_pool_allowed(row, rules, [])
         ]
+        if self.setup_seed_movie_id is not None:
+            from app.services import cache_repo
+
+            cast = await cache_repo.get_movie_cast(
+                self.session, self.tmdb, self.setup_seed_movie_id
+            )
+            directors = await cache_repo.get_movie_directors(
+                self.session, self.tmdb, self.setup_seed_movie_id
+            )
+            actor_ids = [
+                p["actor_id"] for p in cast if p["cast_order"] < rules.get("max_cast_order", 10)
+            ]
+            director_ids = [p.person_id for p in directors]
+            reachable = set(
+                self.session.exec(
+                    select(CachedMovieCast.movie_id).where(
+                        col(CachedMovieCast.actor_id).in_(actor_ids)
+                    )
+                ).all()
+            )
+            reachable.update(
+                self.session.exec(
+                    select(CachedMovieDirector.movie_id).where(
+                        col(CachedMovieDirector.person_id).in_(director_ids)
+                    )
+                ).all()
+            )
+            eligible = [i for i in eligible if i in reachable and i != self.setup_seed_movie_id]
         return {
             **rules,
-            RH_VERSION_KEY: 2,
+            RH_VERSION_KEY: 3,
             RH_SEED_KEY: seed,
-            "tier_deck": draw_deck(self.session, seed, rules.get("curses", False), eligible),
+            "tier_deck": draw_facet_deck(self.session, seed, eligible, rules.get("curses", False)),
             "relics": {"skip_curse": 0},
             "reroll_tokens": 0,
         }
@@ -824,6 +1054,7 @@ class RabbitHoleEngine(CineChainEngine):
         """Stamps the tier verdict on the final pool. Running after every hydration pass and
         after `shape_pool` means a film whose facts arrived late is judged on those facts, so a
         card can never carry both a cached runtime and "Rule unverified"."""
+        candidates = super().annotate_candidates(candidates, rules, history)
         depth = len(history) if history is not None else self._depth
         tier = tier_for_depth(depth, rules)
         for candidate in candidates:

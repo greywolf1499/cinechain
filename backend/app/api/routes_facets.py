@@ -13,7 +13,7 @@ from sqlmodel import Session
 from app.api.deps import get_current_user, run_participant_guard
 from app.db import get_session
 from app.facets.query import FacetQuery, compile, count, universe_ids
-from app.facets.registry import CATALOGUE, FAMILY_VERSIONS
+from app.facets.registry import CATALOGUE, FAMILY_VERSIONS, named_variants
 from app.models.user import User
 
 router = APIRouter(prefix="/facets", tags=["facets"])
@@ -49,12 +49,29 @@ class CountRequest(BaseModel):
 def catalogue(
     session: Session = Depends(get_session), _user: User = Depends(get_current_user)
 ) -> dict:
+    variants = named_variants()
+
+    def uses_facet(query: FacetQuery, facet_id: str) -> bool:
+        return query.facet == facet_id or any(
+            uses_facet(child, facet_id) for child in query.children()
+        )
+
+    variant_queries = {
+        name: FacetQuery.model_validate(definition["query"])
+        for name, definition in variants.items()
+    }
     with query_deadline(session):
         total = session.execute(text("SELECT COUNT(*) FROM cached_movies")).scalar_one()
         facets = []
         for facet in CATALOGUE.values():
             if facet.relative:
-                column = "vote_count" if facet.id == "vote_count_band" else "popularity"
+                column = (
+                    "vote_count"
+                    if facet.id == "vote_count_band"
+                    else "title"
+                    if facet.id in ("text", "canon")
+                    else "popularity"
+                )
                 known = session.execute(
                     text(f"SELECT COUNT({column}) FROM cached_movies")
                 ).scalar_one()
@@ -80,12 +97,16 @@ def catalogue(
                     "version": facet.version,
                     "ops": facet.ops,
                     "relative": facet.relative,
-                    "named_variants": {},
+                    "named_variants": {
+                        name: definition
+                        for name, definition in variants.items()
+                        if uses_facet(variant_queries[name], facet.id)
+                    },
                     "known": known,
                     "coverage": 100 * known / total if total else 0,
                 }
             )
-    return {"facets": facets, "cached_movies": total}
+    return {"facets": facets, "cached_movies": total, "named_variants": variants}
 
 
 @router.post("/count")

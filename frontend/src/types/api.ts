@@ -499,7 +499,8 @@ export interface FilterSpec {
 	key: string;
 	kind: "select" | "toggle" | "range";
 	label: string;
-	source: "origin_country" | "release_year" | "narrative_year" | "runtime" | "genre_ids" | "tug_effect" | "tier_compliant" | "new_country";
+	source: "origin_country" | "release_year" | "narrative_year" | "runtime" | "genre_ids" | "tug_effect" | "tier_compliant" | "new_country" | "facet";
+	facet?: string | null;
 	default: boolean | string | number | null;
 	server_param: "include_off_tier" | null;
 	help: string;
@@ -820,6 +821,7 @@ export interface DiscoveryConnection {
 }
 
 export interface DiscoveryCandidate {
+	facet_values?: Record<string, string | number | boolean | string[] | number[] | null>;
 	overlay_ok?: Record<string, boolean | null>;
 	movie_id: number;
 	title: string;
@@ -1216,6 +1218,35 @@ export interface BingoWatchlist {
 	total: number;
 	/** Films still missing detail / directors / ratings; request again with `hydrate` to fill more. */
 	pending: number;
+}
+
+// --- tools: Bingo squares and stamps (GET /tools/bingo/squares, POST /tools/bingo/stamp) ---
+
+/** A server-defined Bingo square (a facet query) with the caller's watchlist films that fill it. */
+export interface BingoSquare {
+	id: string;
+	label: string;
+	/** What qualifies, shown when the square is opened. */
+	hint: string;
+	/** The server facet query; informational only - stamps are validated server-side. */
+	query: unknown;
+	/** Watchlist movie ids the server's cached facts say fill the square. */
+	matches: number[];
+	/** Watchlist films whose cached facts can't decide the square yet. */
+	unknown: number;
+}
+
+export interface BingoSquares {
+	squares: BingoSquare[];
+}
+
+export interface BingoStampResult {
+	square_id: string;
+	movie_id: number;
+	valid: boolean;
+	/** false = the film doesn't fit, null = the cache can't tell yet. */
+	verdict: boolean | null;
+	reason: string;
 }
 
 // --- tools: The Perfect Marathon Router (POST /tools/router/*) ---

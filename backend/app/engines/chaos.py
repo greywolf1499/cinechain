@@ -14,8 +14,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from app.engines.predicates import Predicate, facts_of, predicate
+from app.engines.predicates import Predicate, facts_of, named_predicate
 from app.engines.rulebook import RuleSection
+from app.facets.registry import named_variants
 
 RULEBOOK = RuleSection(
     "Play through a one-step Chaos handicap.",
@@ -32,14 +33,13 @@ RULEBOOK = RuleSection(
 from sqlmodel import Session
 
 from app.models.cache import CachedMovie
-from app.services.movie_filters import rating_of
 
 ACTIVE_KEY = "active_chaos"
 
-PRE_YEAR = 1970
-B_MOVIE_RATING = 6.0
-EPIC_RUNTIME = 150
-SHORT_RUNTIME = 85
+PRE_YEAR = named_variants()["classic"]["query"]["value"]
+B_MOVIE_RATING = named_variants()["campy"]["query"]["value"]
+EPIC_RUNTIME = named_variants()["epic"]["query"]["value"]
+SHORT_RUNTIME = named_variants()["short"]["query"]["value"]
 
 
 @dataclass(frozen=True)
@@ -53,31 +53,23 @@ class Handicap:
 
 
 def _pre_1970(movie: CachedMovie, rating: float | None) -> bool | None:
-    return predicate("year_lt", value=PRE_YEAR).check(movie, facts_of(movie, []))
+    return named_predicate("classic").check(movie, facts_of(movie, []))
 
 
 def _b_movie(movie: CachedMovie, rating: float | None) -> bool | None:
-    return predicate("rating_lt", value=B_MOVIE_RATING).check(movie, facts_of(movie, [], rating))
+    return named_predicate("campy").check(movie, facts_of(movie, [], rating))
 
 
 def _epic_length(movie: CachedMovie, rating: float | None) -> bool | None:
-    return (
-        None
-        if not movie.runtime
-        else predicate("runtime_ge", value=EPIC_RUNTIME).check(movie, facts_of(movie, []))
-    )
+    return None if not movie.runtime else named_predicate("epic").check(movie, facts_of(movie, []))
 
 
 def _short_flick(movie: CachedMovie, rating: float | None) -> bool | None:
-    return (
-        None
-        if not movie.runtime
-        else predicate("runtime_le", value=SHORT_RUNTIME).check(movie, facts_of(movie, []))
-    )
+    return None if not movie.runtime else named_predicate("short").check(movie, facts_of(movie, []))
 
 
 def _foreign_tongue(movie: CachedMovie, rating: float | None) -> bool | None:
-    return predicate("non_english").check(movie, facts_of(movie, []))
+    return named_predicate("non_english").check(movie, facts_of(movie, []))
 
 
 HANDICAPS: dict[str, Handicap] = {
@@ -88,42 +80,57 @@ HANDICAPS: dict[str, Handicap] = {
             "Time Machine: Pre-1970 only",
             _pre_1970,
             "",
-            predicate("year_lt", value=PRE_YEAR),
+            named_predicate("classic"),
         ),
         Handicap(
             "b_movie",
             "Campy Cinema: Under 6.0 rating",
             _b_movie,
             "vote_average",
-            predicate("rating_lt", value=B_MOVIE_RATING),
+            named_predicate("campy"),
         ),
         Handicap(
             "epic_length",
             "The Long Haul: Over 150 mins",
             _epic_length,
             "runtime",
-            predicate("runtime_ge", value=EPIC_RUNTIME),
+            named_predicate("epic"),
         ),
         Handicap(
             "short_flick",
-            "Lightning Fast: Under 85 mins",
+            "Lightning Fast: Under 90 mins",
             _short_flick,
             "runtime",
-            predicate("runtime_le", value=SHORT_RUNTIME),
+            named_predicate("short"),
         ),
         Handicap(
             "foreign_tongue",
             "Passport Punch: Non-English only",
             _foreign_tongue,
             "original_language",
-            predicate("non_english"),
+            named_predicate("non_english"),
         ),
     )
 }
+for _id, _concept, _needs in (
+    ("modern_only", "modern", "release_date"),
+    ("crowd_pleaser", "crowd_pleaser", "vote_average"),
+    ("english_only", "english", "original_language"),
+    ("one_word_titles", "one_word", ""),
+    ("cult_classics", "cult_classic", "vote_average"),
+):
+    _test = named_predicate(_concept)
+    HANDICAPS[_id] = Handicap(
+        _id,
+        _test.label,
+        lambda movie, rating, test=_test: test.check(movie, facts_of(movie, [], rating)),
+        _needs,
+        _test,
+    )
 
 
 def roll(rng: random.Random | None = None, feasible: list[str] | None = None) -> dict[str, Any]:
-    pool = [h for h in HANDICAPS.values() if feasible is None or h.id in feasible]
+    pool = list(HANDICAPS.values()) if feasible is None else [HANDICAPS[key] for key in feasible]
     if not pool:
         raise ValueError("No feasible Chaos handicap")
     handicap = (rng or random.Random()).choice(pool)
@@ -146,8 +153,15 @@ def violation(session: Session, movie: CachedMovie, rules: dict | None) -> str |
     handicap = active(rules)
     if handicap is None:
         return None
-    rating = rating_of(session, movie) if handicap.id == "b_movie" else None
-    if handicap.check(movie, rating) is False:
+    from app.services import feasibility
+    from app.services.movie_filters import rating_of
+
+    verdict = (
+        feasibility.verdict(session, handicap.predicate, movie.tmdb_id)
+        if session.get(CachedMovie, movie.tmdb_id) is not None
+        else handicap.check(movie, rating_of(session, movie))
+    )
+    if verdict is False:
         return f"Chaos Active - {handicap.label}: {movie.title} doesn't qualify (this step only)"
     return None
 

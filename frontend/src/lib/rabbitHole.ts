@@ -24,7 +24,7 @@ const DEFAULT_LIVES = 3;
 const WARNING_WINDOW = 2;
 
 export function rabbitTiers(rules?: RulesConfig): RabbitTier[] {
-  if (rules?.rh_rules_version !== 2) return RABBIT_TIERS;
+  if (rules?.rh_rules_version !== 2 && rules?.rh_rules_version !== 3) return RABBIT_TIERS;
   return (rules.tier_deck ?? []).map((tier) => ({
     number: tier.number, name: tier.name, rule: tier.rule,
     startDepth: tier.start_depth, curses: tier.curses,
@@ -38,7 +38,7 @@ export function tierForDepth(
   const tiers = rabbitTiers(rules);
   const scheduled = [...tiers].reverse().find((tier) => depth >= tier.startDepth) ?? tiers[0];
   const override = rules?.tier_override;
-  if (rules?.rh_rules_version === 2) {
+  if (rules?.rh_rules_version === 2 || rules?.rh_rules_version === 3) {
     const current = override?.depth === depth && override.predicate
       ? { ...scheduled, name: override.predicate.name, rule: override.predicate.rule }
       : scheduled;

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.facets.query import FacetQuery
+from app.facets.registry import named_variants
 from app.models.cache import CachedMovie, CachedMovieDirector
 from app.utils.countries import parse_countries
 from app.utils.dates import parse_release_year
@@ -159,3 +160,117 @@ def predicate(predicate_id: str, **params: float) -> Predicate:
 
 
 FilmPredicate = FacetPredicate
+
+
+@dataclass(frozen=True)
+class QueryPredicate:
+    id: str
+    label: str
+    query: FacetQuery
+    emoji: str = ""
+    difficulty: int = 1
+
+    @property
+    def params(self) -> dict:
+        return {}
+
+    @property
+    def needs(self) -> frozenset[str]:
+        fields = {
+            "release_year": "release_date",
+            "original_language": "original_language",
+            "genre": "genre_ids",
+            "origin_country": "origin_country",
+            "region": "origin_country",
+            "female_director": "directors",
+            "one_word_title": "title",
+            "runtime_verified": "runtime",
+            "cult_classic": "rating",
+            "critic_darling": "rating",
+        }
+
+        def leaves(query: FacetQuery) -> list[str]:
+            return (
+                [query.facet]
+                if query.facet is not None
+                else [f for child in query.children() for f in leaves(child)]
+            )
+
+        return frozenset(fields.get(f, f) for f in leaves(self.query))
+
+    @property
+    def ranges(self) -> dict[str, tuple[float | None, float | None]]:
+        def ranges(query):
+            if query.all is not None:
+                result = {}
+                for child in query.all:
+                    for name, (low, high) in ranges(child).items():
+                        old_low, old_high = result.get(name, (None, None))
+                        lows = [v for v in (low, old_low) if v is not None]
+                        highs = [v for v in (high, old_high) if v is not None]
+                        result[name] = (max(lows) if lows else None, min(highs) if highs else None)
+                return result
+            field = {
+                "release_year": "year",
+                "runtime": "runtime",
+                "runtime_verified": "runtime",
+                "rating": "rating",
+                "popularity": "popularity",
+            }.get(query.facet)
+            if field and query.op in ("lt", "le", "gt", "ge", "eq"):
+                value = query.value
+                assert isinstance(value, (int, float))
+                offset = 1 if field in ("year", "runtime") else 0
+                return {
+                    field: (
+                        value + (offset if query.op == "gt" else 0)
+                        if query.op in ("gt", "ge", "eq")
+                        else None,
+                        value - (offset if query.op == "lt" else 0)
+                        if query.op in ("lt", "le", "eq")
+                        else None,
+                    )
+                }
+            return {}
+
+        return ranges(self.query)
+
+    def check(self, movie: CachedMovie | None, facts: MovieFacts) -> bool | None:
+        from app.facets import lexical, production, reception
+
+        values = {}
+        if movie is not None:
+            values.update(lexical.evaluate(movie.title))
+            values.update(production.evaluate(movie))
+            values.update(reception.evaluate(movie, None))
+        values.update(
+            {
+                "runtime": facts.runtime or None,
+                "release_year": facts.year,
+                "runtime_verified": facts.runtime if facts.runtime and facts.runtime > 0 else None,
+                "rating": facts.rating,
+                "popularity": facts.popularity,
+                "original_language": facts.language or None,
+                "origin_country": facts.countries,
+                "genre": facts.genre_ids or None,
+                "text": facts.text or None,
+                "female_director": True
+                if 1 in facts.director_genders
+                else None
+                if not facts.director_genders or None in facts.director_genders
+                else False,
+                "non_us_non_english": None
+                if not facts.language
+                else False
+                if facts.language == "en"
+                else None
+                if facts.countries is None
+                else "US" not in facts.countries,
+            }
+        )
+        return self.query.evaluate(values)
+
+
+def named_predicate(name: str) -> QueryPredicate:
+    variant = named_variants()[name]
+    return QueryPredicate(name, variant["label"], FacetQuery.model_validate(variant["query"]))

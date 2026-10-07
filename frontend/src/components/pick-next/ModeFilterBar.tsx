@@ -32,6 +32,7 @@ export function filterDataUnknown(candidate: DiscoveryCandidate, spec: FilterSpe
     case "release_year": return candidate.release_year == null;
     case "narrative_year": return candidate.narrative_year == null;
     case "runtime": return candidate.runtime == null || candidate.runtime <= 0;
+    case "facet": return !spec.facet || candidate.facet_values?.[spec.facet] == null;
   }
 }
 
@@ -53,6 +54,14 @@ export function matchesModeFilters(
         ? candidate.tug_effect === "neutral" || candidate.tug_effect === "sudden_neutral"
         : candidate.tug_effect === value;
       case "tier_compliant": return candidate.tier_compliant !== false;
+      case "facet": {
+        const fact = spec.facet ? candidate.facet_values?.[spec.facet] : null;
+        if (fact == null) return true;
+        if (Array.isArray(value)) return typeof fact !== "number" ||
+          ((value[0] == null || fact >= value[0]) && (value[1] == null || fact <= value[1]));
+        if (typeof value === "boolean") return fact === true;
+        return Array.isArray(fact) ? fact.some((item) => String(item) === value) : String(fact) === value;
+      }
       case "release_year":
       case "narrative_year":
       case "runtime": {
@@ -91,20 +100,23 @@ export default function ModeFilterBar({
         } else if (spec.kind === "select") {
           const counts = new Map<string, number>();
           for (const candidate of pool) {
-            const options = spec.source === "origin_country" ? candidateCountries(candidate)
+            const facet = spec.facet ? candidate.facet_values?.[spec.facet] : null;
+            const options = spec.source === "facet" && facet != null
+              ? (Array.isArray(facet) ? facet.map(String) : [String(facet)])
+              : spec.source === "origin_country" ? candidateCountries(candidate)
               : spec.source === "tug_effect" && candidate.tug_effect ? [candidate.tug_effect === "sudden_neutral" ? "neutral" : candidate.tug_effect] : [];
             for (const option of options) counts.set(option, (counts.get(option) ?? 0) + 1);
           }
           const optionLabel = (key: string) => spec.source === "origin_country"
             ? `${isoToFlagEmoji(key)} ${countryName(key, key)}`
-            : ({ home: "Build", invasion: "Raid", neutral: "Bank" }[key] ?? key);
+            : spec.source === "facet" ? key : ({ home: "Build", invasion: "Raid", neutral: "Bank" }[key] ?? key);
           const options = [...counts].sort(([a], [b]) => optionLabel(a).localeCompare(optionLabel(b)));
           // Keep a selected option visible if a new server pool no longer contains it.
           if (typeof value === "string" && value && !counts.has(value)) options.push([value, 0]);
           control = <label className="flex flex-col gap-1 text-xs text-zinc-400">
             {spec.label}
             <select value={typeof value === "string" ? value : ""} onChange={(e) => onChange(spec.key, e.target.value)} className="rounded-md border border-app-border bg-app-bg px-2.5 py-2 text-sm text-zinc-200">
-              <option value="">All {spec.label.toLowerCase() === "country" ? "countries" : "effects"}</option>
+              <option value="">All {spec.source === "facet" ? "values" : spec.label.toLowerCase() === "country" ? "countries" : "effects"}</option>
               {options.map(([key, count]) => <option key={key} value={key} disabled={spec.source === "origin_country" && cooldown.has(key)}>
                 {optionLabel(key)} ({count}){spec.source === "origin_country" && cooldown.has(key) ? ` - Cooling down (${cooldown.get(key)} more)` : ""}
               </option>)}
@@ -112,8 +124,14 @@ export default function ModeFilterBar({
           </label>;
         } else {
           const range = Array.isArray(value) ? value : [null, null];
-          const numbers = pool.map((candidate) => spec.source === "release_year" ? candidate.release_year
-            : spec.source === "narrative_year" ? candidate.narrative_year : candidate.runtime).filter((number): number is number => number != null);
+          const numbers = pool.map((candidate) => {
+            if (spec.source === "facet") {
+              const fact = spec.facet ? candidate.facet_values?.[spec.facet] : null;
+              return typeof fact === "number" ? fact : null;
+            }
+            return spec.source === "release_year" ? candidate.release_year
+              : spec.source === "narrative_year" ? candidate.narrative_year : candidate.runtime;
+          }).filter((number): number is number => number != null);
           const frontier = spec.source === "release_year" ? frontierYear : spec.source === "narrative_year" ? frontierNarrativeYear : null;
           const min = frontier != null && !descending ? frontier + 1 : numbers.length ? Math.min(...numbers) : undefined;
           const max = frontier != null && descending ? frontier - 1 : numbers.length ? Math.max(...numbers) : undefined;

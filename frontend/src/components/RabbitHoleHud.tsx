@@ -13,7 +13,7 @@ const TIER_STYLES = [
 ];
 
 export function RabbitInventory({ rules, depth }: { rules: RulesConfig; depth: number }) {
-  if (rules.rh_rules_version !== 2) return null;
+  if (rules.rh_rules_version !== 2 && rules.rh_rules_version !== 3) return null;
   const hud = rabbitHud(rules, depth);
   return (
     <div className="space-y-2 text-xs">

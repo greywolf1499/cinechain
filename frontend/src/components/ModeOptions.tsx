@@ -2,6 +2,15 @@ import { cn } from "../lib/cn";
 import { defaultModifierParams, modifierEnabled, modifierParams, modifierWarnings, setModifier } from "../lib/modifiers";
 import type { EngineMeta, ModifierMeta, ModifierParamSchema, ModifierParamValue, RulesConfig } from "../types/api";
 
+const OPTION_LABELS: Record<string, string> = {
+  asc: "Increasing",
+  desc: "Decreasing",
+  az: "A to Z",
+  za: "Z to A",
+  last_first: "Last letter to first",
+  first_last: "First letter to last",
+};
+
 export default function ModeOptions({
   gameType, value, onChange, engine, editing = false,
 }: {
@@ -31,7 +40,7 @@ export default function ModeOptions({
           <select id={id} value={typeof current === "string" ? current : ""} disabled={disabled}
             onChange={(event) => change(event.target.value)}
             className="max-w-full rounded border border-app-border bg-app-bg px-2 py-1 capitalize">
-            {schema.enum.map((option) => <option key={option} value={option}>{option.replaceAll("_", " ")}</option>)}
+            {schema.enum.map((option) => <option key={option} value={option}>{OPTION_LABELS[option] ?? option.replaceAll("_", " ")}</option>)}
           </select>
         ) : schema.type === "integer" ? (
           <input id={id} type="number" min={schema.minimum} max={schema.maximum} disabled={disabled}

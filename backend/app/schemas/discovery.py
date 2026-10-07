@@ -19,6 +19,7 @@ class DiscoveryConnection(BaseModel):
 
 
 class DiscoveryCandidate(BaseModel):
+    facet_values: dict[str, str | int | float | bool | list[str] | list[int] | None] = {}
     overlay_ok: dict[str, bool | None] = {}
     movie_id: int
     title: str

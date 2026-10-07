@@ -118,7 +118,6 @@ class BaseChallengeEngine(ABC):
         # engine's own pool filter and the modifier filter.
         self._hydration_left: int | None = None
         self._hydration_deadline = 0.0
-        self._bounty_evidence: feasibility.Evidence | None = None
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
@@ -313,7 +312,7 @@ class BaseChallengeEngine(ABC):
             candidate.overlay_ok = {
                 spec.key: verdict.ok
                 for spec, verdict in verdicts
-                if spec.needs == frozenset({"title"})
+                if getattr(spec, "overlay", False)
             }
             if any(
                 verdict.ok is False for spec, verdict in verdicts if spec.scope != "sequence"
@@ -384,7 +383,7 @@ class BaseChallengeEngine(ABC):
         return {
             spec.key: spec.check(ctx, movie)
             for spec, ctx in contexts(self.active_modifiers(rules), history)
-            if spec.needs == frozenset({"title"})
+            if getattr(spec, "overlay", False)
         }
 
     def overlay_outcome(self, run: Run, steps: Sequence[RunStep]) -> RunOutcome | None:
@@ -407,13 +406,12 @@ class BaseChallengeEngine(ABC):
         return rules
 
     def prepare_overlays(self, rules: dict, history: Sequence[RunStep] = ()) -> dict:
-        from app.engines.modifier_registry import TitleCoveragePredicate, TitleModifier, contexts
-        from app.utils.title_tokens import first_letter, title_numbers
+        from app.engines.modifier_registry import contexts, matching_rows
 
         overlays = [
             (spec, ctx)
             for spec, ctx in contexts(self.active_modifiers(rules), history)
-            if isinstance(spec, TitleModifier)
+            if getattr(spec, "overlay", False)
         ]
         if not overlays:
             return rules
@@ -424,88 +422,50 @@ class BaseChallengeEngine(ABC):
         if exact:
             rows = [CachedMovie(tmdb_id=film["movie_id"], title=film["title"]) for film in films]
         else:
-            evidence = feasibility.evidence_for(self.session)
+            cached = feasibility.movies(self.session)
             bounds = self.bounty_bounds(rules, [])
             rows = [
                 row
-                for movie_id, row in evidence.movies.items()
-                if feasibility.within(evidence.facts[movie_id], bounds) and is_reality_eligible(row)
+                for row in cached.values()
+                if feasibility.within_movie(row, bounds) and is_reality_eligible(row)
             ]
         for spec, ctx in overlays:
             if spec.scope == "film":
-                rows = [row for row in rows if spec.check(ctx, row).ok is True]
-        if not exact and evidence.movies and not rows:
+                kept = matching_rows(self.session, spec.query(ctx), rows)
+                rows = [row for row in rows if row.tmdb_id in kept]
+        if not exact and cached and not rows:
             raise RunSetupError("Title overlays have no qualifying films in the cached mode pool")
         for spec, ctx in overlays:
-            params = ctx.params.model_dump()
             if spec.key == "number_in_title":
-                rows = [row for row in rows if spec.check(ctx, row).ok is True]
                 if track is not None and len(rows) < 3:
                     raise RunSetupError(
                         "Number in title needs at least 3 qualifying checklist films"
                     )
                 if exact and not rows:
                     raise RunSetupError("Number in title has no qualifying checklist films")
+            elif spec.scope == "film":
+                if exact and not rows:
+                    raise RunSetupError(f"{spec.label} has no eligible checklist films")
             elif rows:
-                choices: dict[Any, list[int]]
-                if spec.key == "alphabet_run":
-                    letters = (
-                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                        if params["direction"] == "az"
-                        else "ZYXWVUTSRQPONMLKJIHGFEDCBA"
-                    )
-                    position, _ = spec.state(ctx)
-                    required = list(letters[position:]) if params["strict"] else [letters[-1]]
-                    choices = {
-                        token: [
-                            row.tmdb_id
-                            for row in rows
-                            if token in params["wild_letters"]
-                            or first_letter(row.title, params["ignore_articles"]) in (token, "#")
-                        ]
-                        for token in required
-                    }
-                else:
-                    position, _ = spec.state(ctx)
-                    required = (
-                        list(range(position + 1, params["target"] + 1))
-                        if params["mode"] == "count_up"
-                        else [position + 1]
-                    )
-                    choices = {
-                        token: [
-                            row.tmdb_id
-                            for row in rows
-                            if token in title_numbers(row.title, params["allow_years"])
-                            or (
-                                params["mode"] == "increasing"
-                                and any(
-                                    n >= token
-                                    for n in title_numbers(row.title, params["allow_years"])
-                                )
-                            )
-                        ]
-                        for token in required
-                    }
-                # Match distinct films to requirements: a single numbered/digit-leading title
-                # cannot prove that a repeat-strict checklist covers the entire sequence.
+                required = spec.requirements(ctx)
                 if not exact:
                     ids = [row.tmdb_id for row in rows]
                     missing = [
                         token
                         for token in required
-                        if feasibility.pass_rate(
-                            self.session,
-                            TitleCoveragePredicate(spec, ctx, token),
-                            ids,
-                        )
-                        == 0
+                        if feasibility.pass_rate(self.session, spec.coverage(ctx, token), ids) == 0
                     ]
                     if missing:
                         raise RunSetupError(
                             f"{spec.label} has zero pass-rate in the cached mode pool for: {', '.join(map(str, missing[:12]))}"
                         )
                     continue
+                choices: dict[Any, list[int]] = {}
+                for token in required:
+                    kept = matching_rows(self.session, spec.query(ctx, token), rows)
+                    choices[token] = [row.tmdb_id for row in rows if row.tmdb_id in kept]
+                # Match distinct films to requirements: a single numbered/digit-leading title
+                # cannot prove that a repeat-strict checklist covers the entire sequence.
                 assigned: dict[int, Any] = {}
                 occupied: dict[Any, int] = {}
                 missing = []
@@ -634,29 +594,42 @@ class BaseChallengeEngine(ABC):
             return feasibility.Feasibility(
                 False, "Quest conflicts with the mode's current bounds", 0
             )
-        if self._bounty_evidence is None:
-            self._bounty_evidence = feasibility.Evidence(self.session)
-        evidence = self._bounty_evidence
+        return feasibility.check(
+            self.session,
+            test,
+            self.bounty_universe(rules, history),
+            exact=self.bounty_ids(rules, history) is not None,
+        )
+
+    def bounty_universe(self, rules: dict, history: Sequence[RunStep]) -> list[int]:
+        bounds = self.bounty_bounds(rules, history)
+        movies = feasibility.movies(self.session)
         exact_ids = self.bounty_ids(rules, history)
         watched = {step.movie_id for step in history}
         exclude_watched = exact_ids is not None or rules.get("allow_repeats", "strict") != "allowed"
         ids = [
             movie_id
-            for movie_id in (exact_ids if exact_ids is not None else evidence.movies)
+            for movie_id in (exact_ids if exact_ids is not None else movies)
             if (not exclude_watched or movie_id not in watched)
             and (
-                movie_id not in evidence.movies
+                movie_id not in movies
                 or (
-                    feasibility.within(evidence.facts[movie_id], bounds)
-                    and (
-                        not evidence.movies[movie_id].release_date
-                        or is_reality_eligible(evidence.movies[movie_id])
-                    )
-                    and self.bounty_pool_allowed(evidence.movies[movie_id], rules, history)
+                    feasibility.within_movie(movies[movie_id], bounds)
+                    and (not movies[movie_id].release_date or is_reality_eligible(movies[movie_id]))
+                    and self.bounty_pool_allowed(movies[movie_id], rules, history)
                 )
             )
         ]
-        return evidence.check(test, ids, exact=exact_ids is not None)
+        return ids
+
+    def bounty_difficulty(
+        self, rules: dict, history: Sequence[RunStep], bounty: bounties.Bounty
+    ) -> int:
+        if bounty.predicate is None:
+            return 1
+        return feasibility.measured_difficulty(
+            self.session, bounty.predicate, self.bounty_universe(rules, history)
+        )
 
     def sync_run_state(self, run: Run, steps: Sequence[RunStep]) -> None:
         """Refresh any state the engine derives from the steps and caches on the run (e.g. Tug of
@@ -801,5 +774,17 @@ class BaseChallengeEngine(ABC):
     ) -> list[DiscoveryCandidate]:
         """Last pass over the pool the player will actually see, after every hydration and
         pool-shaping step. Engines stamp render-time verdicts here so a card can never show a
-        fact and "unverified" at the same time. The base implementation is a no-op."""
+        fact and "unverified" at the same time."""
+        facets = [
+            spec.facet for spec in self.discovery_filters if spec.source == "facet" and spec.facet
+        ]
+        if facets:
+            from app.facets.query import values_for
+            from app.facets.store import refresh
+
+            ids = [candidate.movie_id for candidate in candidates]
+            refresh(self.session, ids)
+            values = values_for(self.session, ids, facets)
+            for candidate in candidates:
+                candidate.facet_values = values.get(candidate.movie_id, {})
         return candidates

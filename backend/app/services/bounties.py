@@ -17,9 +17,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
-from app.engines.predicates import MovieFacts, Predicate, facts_of, predicate
+from pydantic import ValidationError
+
+from app.engines.predicates import MovieFacts, Predicate, QueryPredicate, named_predicate
 from app.engines.rulebook import RuleSection
 from app.facets.genres import GENRE_IDS
+from app.facets.query import FacetQuery
+from app.facets.registry import CATALOGUE, named_variants
 
 RULEBOOK = RuleSection(
     "Earn rewards by completing film side quests.",
@@ -54,10 +58,10 @@ REPLACEMENT_METADATA_KEY = "bounty_replacement"
 CUSTOM_KEY = "custom_bounties"
 AI_PREFIX = "ai_"
 
-SHORT_RUNTIME = 90
-EPIC_RUNTIME = 150
-CAPSULE_YEAR = 1960
-HIDDEN_GEM_POPULARITY = 12.0  # the cache keeps TMDB popularity, not the vote count
+SHORT_RUNTIME = named_variants()["short"]["query"]["value"]
+EPIC_RUNTIME = named_variants()["epic"]["query"]["value"]
+CAPSULE_YEAR = named_variants()["vintage"]["query"]["value"]
+HIDDEN_GEM_POPULARITY = named_variants()["hidden_gem"]["query"]["value"]
 FEMALE = 1  # TMDB gender code
 
 
@@ -74,27 +78,27 @@ class Bounty:
 
 
 def _short_king(f: MovieFacts) -> bool:
-    return bool(f.runtime) and predicate("runtime_lt", value=SHORT_RUNTIME).check(None, f) is True
+    return bool(f.runtime) and named_predicate("short").check(None, f) is True
 
 
 def _time_capsule(f: MovieFacts) -> bool:
-    return predicate("year_lt", value=CAPSULE_YEAR).check(None, f) is True
+    return named_predicate("vintage").check(None, f) is True
 
 
 def _hidden_gem(f: MovieFacts) -> bool:
-    return predicate("popularity_lt", value=HIDDEN_GEM_POPULARITY).check(None, f) is True
+    return named_predicate("hidden_gem").check(None, f) is True
 
 
 def _foreign_horizon(f: MovieFacts) -> bool:
-    return predicate("non_us_non_english").check(None, f) is True
+    return named_predicate("foreign").check(None, f) is True
 
 
 def _female_gaze(f: MovieFacts) -> bool:
-    return predicate("female_director").check(None, f) is True
+    return named_predicate("female_director").check(None, f) is True
 
 
 def _epic_odyssey(f: MovieFacts) -> bool:
-    return bool(f.runtime) and predicate("runtime_gt", value=EPIC_RUNTIME).check(None, f) is True
+    return bool(f.runtime) and named_predicate("epic").check(None, f) is True
 
 
 BOUNTIES: dict[str, Bounty] = {
@@ -106,7 +110,7 @@ BOUNTIES: dict[str, Bounty] = {
             "⏱️",
             f"Runtime under {SHORT_RUNTIME} minutes",
             _short_king,
-            predicate=predicate("runtime_lt", value=SHORT_RUNTIME),
+            predicate=named_predicate("short"),
         ),
         Bounty(
             "time_capsule",
@@ -114,7 +118,7 @@ BOUNTIES: dict[str, Bounty] = {
             "📼",
             f"Released before {CAPSULE_YEAR}",
             _time_capsule,
-            predicate=predicate("year_lt", value=CAPSULE_YEAR),
+            predicate=named_predicate("vintage"),
         ),
         Bounty(
             "hidden_gem",
@@ -122,7 +126,7 @@ BOUNTIES: dict[str, Bounty] = {
             "💎",
             "Obscure: TMDB popularity under 12",
             _hidden_gem,
-            predicate=predicate("popularity_lt", value=HIDDEN_GEM_POPULARITY),
+            predicate=named_predicate("hidden_gem"),
         ),
         Bounty(
             "foreign_horizon",
@@ -130,7 +134,7 @@ BOUNTIES: dict[str, Bounty] = {
             "🌍",
             "Non-English language and not a US production",
             _foreign_horizon,
-            predicate=predicate("non_us_non_english"),
+            predicate=named_predicate("foreign"),
         ),
         Bounty(
             "female_gaze",
@@ -139,7 +143,7 @@ BOUNTIES: dict[str, Bounty] = {
             "Directed by a woman",
             _female_gaze,
             needs_directors=True,
-            predicate=predicate("female_director"),
+            predicate=named_predicate("female_director"),
         ),
         Bounty(
             "epic_odyssey",
@@ -147,7 +151,7 @@ BOUNTIES: dict[str, Bounty] = {
             "🏔️",
             f"Runtime over {EPIC_RUNTIME} minutes",
             _epic_odyssey,
-            predicate=predicate("runtime_gt", value=EPIC_RUNTIME),
+            predicate=named_predicate("epic"),
         ),
     )
 }
@@ -174,11 +178,14 @@ def draw_replacement(
     completed: list[str],
     rng: random.Random,
     feasible: Callable[[str], bool] | None = None,
+    difficulty: Callable[[str], int] | None = None,
 ) -> str | None:
     """A bounty not on the board: from the never-completed ones first, else any other."""
     eligible = [b for b in BOUNTIES if b not in active and (feasible is None or feasible(b))]
     fresh = [b for b in eligible if b not in completed]
     pool = fresh or eligible
+    if difficulty:
+        pool.sort(key=difficulty)
     return rng.choice(pool) if pool else None
 
 
@@ -186,14 +193,19 @@ def prepare_board(
     rules: dict,
     rng: random.Random | None = None,
     feasible: Callable[[str], bool] | None = None,
+    difficulty: Callable[[str], int] | None = None,
 ) -> dict:
     """Start with up to three feasible, nontrivial quests and one free discard."""
     rng = rng or random.Random()
     pool = [b for b in BOUNTIES if feasible is None or feasible(b)]
+    if difficulty:
+        pool.sort(key=difficulty)
     return {
         **rules,
         "wildcards_budget": 0,
-        ACTIVE_KEY: rng.sample(pool, min(BOARD_SIZE, len(pool))),
+        ACTIVE_KEY: sorted(rng.sample(pool, min(BOARD_SIZE, len(pool))), key=difficulty)
+        if difficulty
+        else rng.sample(pool, min(BOARD_SIZE, len(pool))),
         COMPLETED_KEY: [],
         "bounty_discards_left": 1,
         "bounty_stars": 0,
@@ -231,6 +243,7 @@ async def evaluate(
     rng: random.Random | None = None,
     feasible: Callable[[Bounty], bool] | None = None,
     context: str = "",
+    difficulty: Callable[[Bounty], int] | None = None,
 ) -> BountyAward | None:
     """The award, if logging `movie` completes a bounty on the board.
 
@@ -243,12 +256,20 @@ async def evaluate(
     try:
         if movie.origin_country is None or movie.runtime is None:
             movie = await cache_repo.get_movie(session, tmdb, movie.tmdb_id, refresh=True)
-        directors: list[CachedMovieDirector] = []
         if any(b.needs_directors for b in active):
-            directors = await _directors_with_gender(session, tmdb, movie.tmdb_id)
+            await _directors_with_gender(session, tmdb, movie.tmdb_id)
     except TMDBError:
         return None
-    done = completed_by(active, facts_of(movie, directors))
+    from app.services import feasibility
+
+    done = next(
+        (
+            b.id
+            for b in active
+            if b.predicate and feasibility.verdict(session, b.predicate, movie.tmdb_id) is True
+        ),
+        None,
+    )
     if done is None:
         return None
     rng = rng or random.Random()
@@ -265,6 +286,7 @@ async def evaluate(
             completed,
             rng,
             (lambda bounty_id: feasible(BOUNTIES[bounty_id])) if feasible else None,
+            (lambda bounty_id: difficulty(BOUNTIES[bounty_id])) if difficulty else None,
         ),
     )
 
@@ -349,6 +371,15 @@ def normalize_condition(raw: object) -> dict[str, Any] | None:
     genre / keyword test."""
     if not isinstance(raw, dict):
         return None
+    if "facet" in raw:
+        leaf = {k: v for k, v in raw.items() if k != "type"}
+        try:
+            query = FacetQuery.model_validate(leaf)
+        except ValidationError:
+            return None
+        if query.facet is None:
+            return None
+        return {"type": "facet", **query.model_dump(by_alias=True, exclude_none=True)}
     kind = raw.get("type")
     if kind == "runtime":
         bounds = _range(raw, 1, MAX_RUNTIME)
@@ -392,6 +423,11 @@ def normalize_rule(raw: object) -> list[dict[str, Any]] | None:
 def _holds(condition: dict[str, Any], facts: MovieFacts) -> bool:
     """Missing data never satisfies a condition."""
     kind = condition["type"]
+    if kind == "facet":
+        return (
+            QueryPredicate("custom", "Custom", condition_query(condition)).check(None, facts)
+            is True
+        )
     if kind == "genre":
         return GENRE_IDS[condition["genre"]] in facts.genre_ids
     if kind == "keyword":
@@ -405,7 +441,9 @@ def _holds(condition: dict[str, Any], facts: MovieFacts) -> bool:
 def describe_rule(rule: list[dict[str, Any]]) -> str:
     parts = []
     for c in rule:
-        if c["type"] in ("runtime", "year"):
+        if c["type"] == "facet":
+            parts.append(f"{CATALOGUE[c['facet']].label} {c['op']} {c['value']}")
+        elif c["type"] in ("runtime", "year"):
             unit = " min" if c["type"] == "runtime" else ""
             low, high = c.get("min"), c.get("max")
             span = (
@@ -431,6 +469,10 @@ class CustomPredicate:
     difficulty: int = 3
 
     @property
+    def query(self) -> FacetQuery:
+        return FacetQuery(all=[condition_query(c) for c in self.conditions])
+
+    @property
     def params(self) -> dict[str, float]:
         return {}
 
@@ -448,17 +490,27 @@ class CustomPredicate:
         return bounds
 
     def check(self, movie: CachedMovie | None, facts: MovieFacts) -> bool | None:
-        results: list[bool | None] = []
-        for condition in self.conditions:
-            kind = condition["type"]
-            value = {
-                "runtime": facts.runtime,
-                "year": facts.year,
-                "genre": facts.genre_ids,
-                "keyword": facts.text,
-            }[kind]
-            results.append(_holds(condition, facts) if value else None)
-        return False if False in results else None if None in results else True
+        return QueryPredicate(self.id, self.label, self.query).check(movie, facts)
+
+
+def condition_query(condition: dict) -> FacetQuery:
+    kind = condition["type"]
+    if kind == "facet":
+        return FacetQuery.model_validate({k: v for k, v in condition.items() if k != "type"})
+    if kind == "genre":
+        return FacetQuery(facet="genre", op="contains", value=GENRE_IDS[condition["genre"]])
+    if kind == "keyword":
+        return FacetQuery(
+            any=[FacetQuery(facet="text", op="contains", value=w) for w in condition["keywords"]]
+        )
+    facet = "runtime" if kind == "runtime" else "release_year"
+    return FacetQuery(
+        all=[
+            FacetQuery.model_validate({"facet": facet, "op": op, "value": condition[key]})
+            for key, op in (("min", "ge"), ("max", "le"))
+            if key in condition
+        ]
+    )
 
 
 def custom_bounty(definition: dict) -> Bounty | None:
@@ -466,6 +518,7 @@ def custom_bounty(definition: dict) -> Bounty | None:
     rule = normalize_rule(definition.get("rule"))
     if rule is None or not isinstance(definition.get("id"), str):
         return None
+    test = CustomPredicate(definition["id"], str(definition.get("title", "AI Bounty")), "✨", rule)
     return Bounty(
         id=definition["id"],
         title=str(definition.get("title") or "AI Bounty"),
@@ -473,8 +526,11 @@ def custom_bounty(definition: dict) -> Bounty | None:
         description=str(definition.get("description") or describe_rule(rule)),
         check=lambda facts: all(_holds(c, facts) for c in rule),
         ai=True,
-        predicate=CustomPredicate(
-            definition["id"], str(definition.get("title", "AI Bounty")), "✨", rule
+        predicate=test,
+        needs_directors=any(
+            c.get("facet")
+            in ("female_director", "director_debut", "director_film_index", "posthumous_release")
+            for c in rule
         ),
     )
 
@@ -485,7 +541,9 @@ BOUNTY_SYSTEM = (
     "You invent ONE fun challenge for a cinephile movie night: a kind of film to go and watch. "
     "Reply with ONLY a JSON object: "
     '{"title": "2-4 words", "icon": "one emoji", "description": "one short sentence", "rule": [...]}. '
-    "The rule is a list of 1 to 3 conditions that must ALL hold. Each condition is one of: "
+    "Prefer facet leaves from the supplied best-covered catalogue, each as "
+    '{"facet":"catalogue_id","op":"allowed_operator","value":typed_value}. '
+    "The rule is a list of 1 to 3 conditions that must ALL hold. Legacy forms also accepted: "
     '{"type":"runtime","min":N,"max":N} (minutes, either bound optional), '
     '{"type":"year","min":N,"max":N} (release year, either bound optional), '
     '{"type":"decade","decade":1970}, '
@@ -582,6 +640,7 @@ async def roll_custom(
     rules: dict | None,
     feasible: Callable[[Bounty], bool] | None = None,
     context: str = "",
+    difficulty: Callable[[Bounty], int] | None = None,
 ) -> dict:
     """The rules after the player's "✨ Roll Custom Bounty": the oldest bounty on the board is
     swapped for a freshly generated AI one (it returns to the pool, uncompleted)."""
@@ -606,6 +665,7 @@ async def roll_custom(
                 rules.get(COMPLETED_KEY) or [],
                 random.Random(),
                 (lambda bounty_id: feasible(BOUNTIES[bounty_id])) if feasible else None,
+                (lambda bounty_id: difficulty(BOUNTIES[bounty_id])) if difficulty else None,
             )
             if feasible
             else None

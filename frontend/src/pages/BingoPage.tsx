@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, Check, Loader2, Sparkles, Star } from "lucide-react";
 import PageHeading from "../components/PageHeading";
 import MoviePoster from "../components/MoviePoster";
-import { api } from "../lib/api";
+import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
 import {
   BOARD_SIZE,
@@ -11,15 +11,14 @@ import {
   completedLines,
   generateBoard,
   loadBoard,
-  matchingFilms,
   newBoardState,
   saveBoard,
-  squareById,
-  toggleStamp,
+  stampSquare,
+  unstampSquare,
   type BingoBoardState,
 } from "../lib/bingo";
 import { useAuthStore } from "../store/authStore";
-import type { BingoFilm, BingoWatchlist } from "../types/api";
+import type { BingoFilm, BingoSquare, BingoSquares, BingoStampResult, BingoWatchlist } from "../types/api";
 
 const HYDRATE_PER_ROUND = 10;
 const MAX_HYDRATE_ROUNDS = 8;
@@ -28,6 +27,7 @@ const MAX_HYDRATE_ROUNDS = 8;
 export default function BingoPage() {
   const userId = useAuthStore((s) => s.user?.id);
   const [films, setFilms] = useState<BingoFilm[]>([]);
+  const [squares, setSquares] = useState<BingoSquare[]>([]);
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -35,14 +35,22 @@ export default function BingoPage() {
   const boardOwner = useRef<string | undefined>(undefined);
   const [selected, setSelected] = useState<number | null>(null);
   const [preferFillable, setPreferFillable] = useState(true);
+  const [stamping, setStamping] = useState<number | null>(null);
+  const [stampError, setStampError] = useState<string | null>(null);
 
-  // Read the watchlist, then top up missing details a few films at a time.
+  // Read the server's squares and the watchlist, then top up missing details a few films at a
+  // time, re-reading the squares' matches as details arrive.
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        let data = await api.get<BingoWatchlist>("/tools/bingo/watchlist");
+        const [defs, first] = await Promise.all([
+          api.get<BingoSquares>("/tools/bingo/squares"),
+          api.get<BingoWatchlist>("/tools/bingo/watchlist"),
+        ]);
+        let data = first;
         if (cancelled) return;
+        setSquares(defs.squares);
         setFilms(data.films);
         setPending(data.pending);
         setLoading(false);
@@ -53,10 +61,13 @@ export default function BingoPage() {
           setFilms(data.films);
           setPending(data.pending);
           if (data.pending >= before) break; // no progress (TMDB down, nothing fetchable)
+          const refreshed = await api.get<BingoSquares>("/tools/bingo/squares");
+          if (cancelled) return;
+          setSquares(refreshed.squares);
         }
       } catch {
         if (!cancelled) {
-          setLoadError("Couldn't read your watchlist - the board still works, but squares can't suggest films.");
+          setLoadError("Couldn't read your Bingo squares or watchlist - try again in a moment.");
           setLoading(false);
         }
       }
@@ -69,18 +80,19 @@ export default function BingoPage() {
 
   // Restore this user's saved board (the id arrives after the session loads), or deal the first one.
   useEffect(() => {
-    if (loading || !userId || boardOwner.current === userId) return;
+    if (loading || !userId || squares.length === 0 || boardOwner.current === userId) return;
     boardOwner.current = userId;
-    const stored = loadBoard(userId);
+    const stored = loadBoard(userId, new Set(squares.map((s) => s.id)));
     if (stored) {
       setBoard(stored);
+      saveBoard(userId, stored); // persist any legacy-stamp migration
       return;
     }
-    const fresh = newBoardState(generateBoard(films, preferFillable));
+    const fresh = newBoardState(generateBoard(squares, preferFillable));
     setBoard(fresh);
     saveBoard(userId, fresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, userId]);
+  }, [loading, userId, squares.length]);
 
   function update(next: BingoBoardState) {
     setBoard(next);
@@ -88,23 +100,67 @@ export default function BingoPage() {
   }
 
   function dealNewBoard() {
-    update(newBoardState(generateBoard(films, preferFillable)));
+    update(newBoardState(generateBoard(squares, preferFillable)));
     setSelected(null);
+    setStampError(null);
   }
+
+  function select(index: number | null) {
+    setSelected(index);
+    setStampError(null);
+  }
+
+  /** Stamp only once the server confirms the chosen watchlist film fills the square. */
+  async function stampWith(index: number, movieId: number) {
+    if (!board) return;
+    setStamping(movieId);
+    setStampError(null);
+    try {
+      const result = await api.post<BingoStampResult>("/tools/bingo/stamp", {
+        square_id: board.squares[index],
+        movie_id: movieId,
+      });
+      if (result.valid) {
+        setBoard((current) => {
+          if (!current || current.squares[index] !== result.square_id) return current;
+          const next = stampSquare(current, index, result.movie_id);
+          saveBoard(userId, next);
+          return next;
+        });
+      } else {
+        setStampError(result.reason);
+      }
+    } catch (err) {
+      setStampError(err instanceof ApiError ? err.message : "Couldn't check that film - try again.");
+    } finally {
+      setStamping(null);
+    }
+  }
+
+  const squaresById = useMemo(() => new Map(squares.map((s) => [s.id, s])), [squares]);
+  const filmsById = useMemo(() => new Map(films.map((f) => [f.movie_id, f])), [films]);
 
   const lines = useMemo(() => (board ? completedLines(board.stamped) : []), [board]);
   const lineCells = useMemo(() => new Set(lines.flat()), [lines]);
   const matches = useMemo(() => {
     const byIndex = new Map<number, BingoFilm[]>();
     board?.squares.forEach((id, index) => {
-      const square = squareById(id);
-      if (square) byIndex.set(index, matchingFilms(square, films));
+      const square = squaresById.get(id);
+      if (square) {
+        byIndex.set(
+          index,
+          square.matches.map((movieId) => filmsById.get(movieId)).filter((f): f is BingoFilm => f !== undefined),
+        );
+      }
     });
     return byIndex;
-  }, [board, films]);
+  }, [board, squaresById, filmsById]);
 
-  const selectedSquare = board && selected !== null ? squareById(board.squares[selected]) : undefined;
+  const selectedSquare = board && selected !== null ? squaresById.get(board.squares[selected]) : undefined;
   const selectedFilms = selected !== null ? (matches.get(selected) ?? []) : [];
+  const selectedStamped = board !== null && selected !== null && board.stamped.includes(selected);
+  const stampedFilmId = board && selected !== null ? board.films?.[selected] : undefined;
+  const stampedFilm = stampedFilmId !== undefined ? filmsById.get(stampedFilmId) : undefined;
 
   return (
     <div>
@@ -116,7 +172,7 @@ export default function BingoPage() {
       </Link>
       <PageHeading
         title="Watchlist Bingo"
-        subtitle="Stamp squares as you watch. Click a square to see watchlist films that would fill it."
+        subtitle="Click a square to see watchlist films that fill it, then stamp it with the one you watched."
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -175,7 +231,7 @@ export default function BingoPage() {
             style={{ gridTemplateColumns: `repeat(${BOARD_SIZE}, minmax(0, 1fr))` }}
           >
             {board.squares.map((id, index) => {
-              const square = squareById(id);
+              const square = squaresById.get(id);
               const isFree = id === FREE_SQUARE;
               const stamped = board.stamped.includes(index);
               const count = matches.get(index)?.length ?? 0;
@@ -193,7 +249,7 @@ export default function BingoPage() {
                   <button
                     type="button"
                     disabled={isFree}
-                    onClick={() => setSelected(selected === index ? null : index)}
+                    onClick={() => select(selected === index ? null : index)}
                     aria-label={isFree ? "Free space" : `${square?.label ?? id}${stamped ? " (stamped)" : ""}`}
                     className="flex h-full w-full flex-col items-center justify-center gap-1 p-1.5 disabled:cursor-default"
                   >
@@ -220,8 +276,8 @@ export default function BingoPage() {
                   {!isFree && (
                     <button
                       type="button"
-                      onClick={() => update(toggleStamp(board, index))}
-                      aria-label={stamped ? "Remove stamp" : "Stamp this square"}
+                      onClick={() => (stamped ? update(unstampSquare(board, index)) : select(index))}
+                      aria-label={stamped ? "Remove stamp" : "Choose a film to stamp this square"}
                       aria-pressed={stamped}
                       className={cn(
                         "absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border transition-colors",
@@ -250,20 +306,27 @@ export default function BingoPage() {
                     <h2 className="text-sm font-semibold text-zinc-100">{selectedSquare.label}</h2>
                     <p className="text-xs text-zinc-500">{selectedSquare.hint}</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => update(toggleStamp(board, selected))}
-                    className={cn(
-                      "flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors",
-                      board.stamped.includes(selected)
-                        ? "border border-app-border text-zinc-300 hover:bg-app-surface-hover"
-                        : "bg-accent text-zinc-950 hover:bg-accent-strong",
-                    )}
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                    {board.stamped.includes(selected) ? "Unstamp" : "Stamp"}
-                  </button>
+                  {selectedStamped && (
+                    <button
+                      type="button"
+                      onClick={() => update(unstampSquare(board, selected))}
+                      className="flex shrink-0 items-center gap-1 rounded-md border border-app-border px-2.5 py-1.5 text-xs font-semibold text-zinc-300 transition-colors hover:bg-app-surface-hover"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      Unstamp
+                    </button>
+                  )}
                 </div>
+                {selectedStamped && (
+                  <p className="mt-2 text-xs text-accent">
+                    Stamped{stampedFilm ? ` with ${stampedFilm.title}` : ""}.
+                  </p>
+                )}
+                {stampError && (
+                  <p role="alert" className="mt-2 text-xs text-amber-400">
+                    {stampError}
+                  </p>
+                )}
 
                 <h3 className="mb-2 mt-4 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
                   From your watchlist ({selectedFilms.length})
@@ -273,7 +336,7 @@ export default function BingoPage() {
                     <p>
                       {films.length === 0
                         ? "Nothing on your watchlist yet."
-                        : pending > 0
+                        : pending > 0 || (selectedSquare.unknown ?? 0) > 0
                           ? "Nothing matches yet - still reading film details."
                           : "No watchlist film fits this square - time to find one!"}
                     </p>
@@ -291,7 +354,7 @@ export default function BingoPage() {
                     {selectedFilms.map((film) => (
                       <li key={film.movie_id} className="flex items-center gap-2.5 rounded-lg bg-app-bg p-2">
                         <MoviePoster movieId={film.movie_id} path={film.poster_path} title={film.title} className="w-9 shrink-0" />
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="truncate text-xs font-medium text-zinc-100">{film.title}</p>
                           <p className="text-[11px] text-zinc-500">
                             {[film.year, film.runtime ? `${film.runtime} min` : null, film.imdb_rating ? `IMDb ${film.imdb_rating}` : null]
@@ -299,6 +362,22 @@ export default function BingoPage() {
                               .join(" · ")}
                           </p>
                         </div>
+                        {!selectedStamped && (
+                          <button
+                            type="button"
+                            disabled={stamping !== null}
+                            onClick={() => void stampWith(selected, film.movie_id)}
+                            aria-label={`Stamp with ${film.title}`}
+                            className="flex shrink-0 items-center gap-1 rounded-md bg-accent px-2 py-1 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
+                          >
+                            {stamping === film.movie_id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Check className="h-3 w-3" />
+                            )}
+                            Watched
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -306,8 +385,9 @@ export default function BingoPage() {
               </>
             ) : (
               <p className="text-xs text-zinc-500">
-                Pick a square to see which of your watchlist films would fill it. Use the tick in a
-                square's corner to stamp it - your board is saved in this browser.
+                Pick a square to see which of your watchlist films would fill it, then stamp it with
+                the one you watched - the server checks the film really fits. Your board is saved in
+                this browser.
               </p>
             )}
           </aside>

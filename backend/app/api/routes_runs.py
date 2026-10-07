@@ -811,6 +811,7 @@ async def create_run(
         rules_config = engine.prepare_rules_config(rules_config)
         if isinstance(engine, RabbitHoleEngine) and payload.seed_movie_id is not None:
             await cache_repo.get_movie(session, tmdb, payload.seed_movie_id, require_detail=True)
+            engine.setup_seed_movie_id = payload.seed_movie_id
             feasibility.invalidate(session)
         try:
             rules_config = await engine.prepare_run(rules_config, current_user.id)
@@ -898,6 +899,9 @@ async def create_run(
             rules = run.rules_config or {}
             run.rules_config = bounties.prepare_board(
                 rules,
+                difficulty=lambda bounty_id: engine.bounty_difficulty(
+                    rules, history, bounties.BOUNTIES[bounty_id]
+                ),
                 feasible=lambda bounty_id: (
                     engine.bounty_feasible(
                         rules,
@@ -1171,6 +1175,7 @@ async def _award_step_bounty(
         movie,
         feasible=lambda quest: engine.bounty_feasible(rules, history, quest).drawable,
         context=_bounty_context(engine, rules, history),
+        difficulty=lambda quest: engine.bounty_difficulty(rules, history, quest),
     )
     if bounty is None:
         return
@@ -2206,7 +2211,11 @@ async def reroll_rabbit_hole_tier(
         feasibility.invalidate(session)
         alternatives = [
             test
-            for test in rabbit_hole.tier_options()
+            for test in (
+                rabbit_hole.facet_options(session)
+                if rules.get(rabbit_hole.RH_VERSION_KEY) == 3
+                else rabbit_hole.tier_options()
+            )
             if current_tier.predicate is not None
             and (test.id, test.params) != (current_tier.predicate.id, current_tier.predicate.params)
             and (
@@ -2218,13 +2227,27 @@ async def reroll_rabbit_hole_tier(
                 or 0
             )
             >= 0.03
+            and (
+                rules.get(rabbit_hole.RH_VERSION_KEY) != 3
+                or all(
+                    rabbit_hole.TIER_PASS_BANDS[min(current_tier.number - 2, 3)][0]
+                    <= (rate or 0)
+                    <= rabbit_hole.TIER_PASS_BANDS[min(current_tier.number - 2, 3)][1]
+                    for rate in (
+                        feasibility.pass_rate(session, test, ids),
+                        feasibility.cache_pass_rate(session, test),
+                    )
+                )
+            )
         ]
         if not alternatives:
             raise HTTPException(
                 409, detail="No feasible reachable alternative tier; no resource was spent"
             )
         replacement = random.Random(f"{rules[rabbit_hole.RH_SEED_KEY]}:{depth}").choice(
-            alternatives
+            sorted(
+                alternatives, key=lambda test: feasibility.measured_difficulty(session, test, ids)
+            )
         )
         rules[TIER_OVERRIDE_KEY] = {
             "depth": depth,
@@ -2239,14 +2262,13 @@ async def reroll_rabbit_hole_tier(
         session.commit()
         session.refresh(run)
         return _to_run_detail(session, run)
-    evidence = feasibility.Evidence(session)
     choices = [
         tier.number
         for tier in rabbit_hole.TIERS
         if tier.number > 1
         and tier.number != current_tier.number
         and tier.predicate is not None
-        and evidence.check(tier.predicate, ids).drawable
+        and feasibility.check(session, tier.predicate, ids).drawable
     ]
     if not choices:
         raise HTTPException(409, detail="No fair reachable alternative tier; no life was spent")
@@ -2412,6 +2434,7 @@ async def roll_custom_bounty(
             rules,
             feasible=lambda quest: engine.bounty_feasible(rules, history, quest).drawable,
             context=_bounty_context(engine, rules, history),
+            difficulty=lambda quest: engine.bounty_difficulty(rules, history, quest),
         )
     except bounties.BountyError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -2430,11 +2453,13 @@ def _bounty_context(engine: BaseChallengeEngine, rules: dict, history: list[RunS
         tier_for_depth(len(history), rules).rule if isinstance(engine, RabbitHoleEngine) else "none"
     )
     expedition = rules.get("expedition") or {}
+    universe = engine.bounty_universe(rules, history)
     return (
         f"mode={engine.game_type}; bounds={engine.bounty_bounds(rules, history)}; "
         f"tier={tier}; depth={len(history)}; remaining checklist={remaining}; "
         f"slice country={expedition.get('country')}; decade={expedition.get('decade')}; "
-        f"reward={engine.bounty_reward}. Avoid impossible or universally satisfied quests."
+        f"reward={engine.bounty_reward}. Avoid impossible or universally satisfied quests. "
+        f"Best-covered facets for this run: {feasibility.covered_facets(engine.session, universe)}"
     )
 
 
@@ -2445,7 +2470,6 @@ def _expire_bounties(
     if not bounties.board_enabled(rules):
         return
     history = _play_history(session, run.id)
-    engine._bounty_evidence = None
     feasibility.invalidate(session)
     active = bounties.active_bounties(rules)
     changes = []
@@ -2463,6 +2487,9 @@ def _expire_bounties(
             [*active, bounty_id],
             rules.get(bounties.COMPLETED_KEY) or [],
             random.Random(),
+            difficulty=lambda candidate: engine.bounty_difficulty(
+                rules, history, bounties.BOUNTIES[candidate]
+            ),
             feasible=lambda candidate: (
                 engine.bounty_feasible(
                     rules,
@@ -2511,6 +2538,9 @@ def discard_bounty(
         active,
         rules.get(bounties.COMPLETED_KEY) or [],
         random.Random(),
+        difficulty=lambda candidate: engine.bounty_difficulty(
+            rules, history, bounties.BOUNTIES[candidate]
+        ),
         feasible=lambda candidate: (
             engine.bounty_feasible(rules, history, bounties.BOUNTIES[candidate]).drawable
         ),
@@ -2585,14 +2615,14 @@ async def _reachable_pool(
 async def _overlay_skip_options(
     session: Session, engine: BaseChallengeEngine, run: Run
 ) -> list[dict]:
-    from app.engines.modifier_registry import contexts
+    from app.engines.modifier_registry import contexts, film_values
 
     history = _play_history(session, run.id)
     rules = _run_rules(run)
     specs = [
         (spec, ctx)
         for spec, ctx in contexts(engine.active_modifiers(rules), history)
-        if spec.needs == frozenset({"title"})
+        if getattr(spec, "overlay", False)
     ]
     if not specs:
         return []
@@ -2604,7 +2634,6 @@ async def _overlay_skip_options(
         ids = exact if exact is not None else list(session.exec(select(CachedMovie.tmdb_id)).all())
     used = {step.movie_id for step in history}
     bounds = engine.bounty_bounds(rules, history)
-    evidence = feasibility.evidence_for(session)
     checklist = {
         film["movie_id"]: film
         for film in (rules.get("filmography") or (rules.get("expedition") or {}).get("films") or [])
@@ -2620,14 +2649,24 @@ async def _overlay_skip_options(
                 rows.append(CachedMovie(tmdb_id=movie_id, title=checklist[movie_id]["title"]))
             else:
                 unknown = True
-        elif is_reality_eligible(row) and feasibility.within(evidence.facts[movie_id], bounds):
+        elif is_reality_eligible(row) and feasibility.within_movie(row, bounds):
             rows.append(row)
     budget = rules.get("wildcards_budget", 0)
     result = []
     for spec, ctx in specs:
         progress = spec.progress(ctx)
         assert progress is not None
-        available = unknown or any(spec.check(ctx, row).ok is not False for row in rows)
+        coverage = spec.coverage(ctx)
+        cached = [row.tmdb_id for row in rows if session.get(CachedMovie, row.tmdb_id) is not None]
+        available = (
+            unknown
+            or bool(cached and feasibility.check(session, coverage, cached, exact=False).ok)
+            or any(
+                coverage.query.evaluate(film_values(row)) is not False
+                for row in rows
+                if row.tmdb_id not in cached
+            )
+        )
         result.append(
             {
                 **progress,
@@ -2643,12 +2682,13 @@ async def _overlay_skip_options(
 
 
 def _check_watched_overlays(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) -> None:
+    from app.engines.modifier_registry import registry
+
     if step.status == "watched":
         return
-    if not any(
-        entry.get("key") in ("alphabet_run", "number_in_title", "ascending_numbers")
-        for entry in _run_rules(run).get("modifiers", [])
-    ):
+    overlays = {key for key, spec in registry().items() if getattr(spec, "overlay", False)}
+    sequences = {key for key in overlays if registry()[key].scope == "sequence"}
+    if not any(entry.get("key") in overlays for entry in _run_rules(run).get("modifiers", [])):
         return
     engine = get_engine(run.game_type, session, tmdb)
     history = [other for other in _play_history(session, run.id) if other.id != step.id]
@@ -2662,8 +2702,7 @@ def _check_watched_overlays(session: Session, tmdb: TMDBClient, run: Run, step: 
         if key not in skips and verdict.ok is False:
             raise HTTPException(409, detail=verdict.reason)
     if step.status == "planned" and any(
-        entry.get("key") in ("alphabet_run", "ascending_numbers")
-        for entry in _run_rules(run).get("modifiers", [])
+        entry.get("key") in sequences for entry in _run_rules(run).get("modifiers", [])
     ):
         step.logged_at = utcnow()
 
@@ -2681,20 +2720,22 @@ async def roll_chaos(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="A chaos handicap is already active"
         )
-    from app.services.feasibility import Evidence
-
     engine = get_engine(run.game_type, session, tmdb)
     ids = await _reachable_pool(session, engine, run)
-    evidence = Evidence(session)
     feasible_ids = [
         handicap.id
         for handicap in chaos.HANDICAPS.values()
-        if evidence.check(handicap.predicate, ids).drawable
+        if feasibility.check(session, handicap.predicate, ids).drawable
         and not feasibility.contradicts(
             handicap.predicate,
             engine.bounty_bounds(_run_rules(run), _play_history(session, run.id)),
         )
     ]
+    feasible_ids.sort(
+        key=lambda key: feasibility.measured_difficulty(
+            session, chaos.HANDICAPS[key].predicate, ids
+        )
+    )
     if not feasible_ids:
         raise HTTPException(
             409, detail="No nontrivial feasible handicap fits the current pool; no roll was applied"

@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import json
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlmodel import Session, select
 
-from app.engines.predicates import FacetPredicate, MovieFacts, Predicate, facts_of
-from app.facets.query import count
-from app.facets.registry import FAMILY_VERSIONS
-from app.models.cache import CachedMovie, CachedMovieDirector, CachedMovieRating
-from app.services.movie_filters import rating_from_cache
+from app.engines.predicates import MovieFacts, Predicate, facts_of
+from app.facets.query import FacetQuery, compile, count, universe_ids
+from app.facets.store import refresh
+from app.models.cache import CachedMovie
 
 
 @dataclass(frozen=True)
@@ -27,94 +26,107 @@ class Feasibility:
         return self.ok and (self.pass_rate is None or self.pass_rate <= 0.8)
 
 
-class Evidence:
-    """Memoize facts, not conclusions: bounds/history can change within a request."""
-
-    def __init__(self, session: Session) -> None:
-        self.session = session
-        self.movies = {movie.tmdb_id: movie for movie in session.exec(select(CachedMovie)).all()}
-        directors: dict[int, list[CachedMovieDirector]] = {}
-        for director in session.exec(select(CachedMovieDirector)).all():
-            directors.setdefault(director.movie_id, []).append(director)
-        ratings = {
-            rating.movie_id: rating for rating in session.exec(select(CachedMovieRating)).all()
-        }
-        self.facts = {
-            movie_id: facts_of(
-                movie, directors.get(movie_id, []), rating_from_cache(movie, ratings.get(movie_id))
-            )
-            for movie_id, movie in self.movies.items()
-        }
-
-    def check(self, test: Predicate, ids: Iterable[int], *, exact: bool = True) -> Feasibility:
-        results = [
-            test.check(self.movies[movie_id], self.facts[movie_id])
-            if movie_id in self.movies
-            else None
-            for movie_id in ids
-        ]
-        if not results:
-            return Feasibility(
-                not exact, "No remaining eligible films" if exact else "Cache has no evidence", None
-            )
-        possible = sum(result is not False for result in results)
-        rate = possible / len(results)
-        # Unknowns are possible, but cannot prove that a quest is trivial.
-        observed_rate = None if any(result is None for result in results) else rate
-        return Feasibility(
-            possible > 0,
-            "No remaining eligible film matches this quest"
-            if not possible
-            else "Too easy for the eligible pool"
-            if observed_rate is not None and observed_rate > 0.8
-            else "A matching film is possible",
-            observed_rate,
-        )
-
-
-def evidence_for(session: Session) -> Evidence:
-    if "bounty_feasibility" not in session.info:
-        session.info["bounty_feasibility"] = Evidence(session)
-    return session.info["bounty_feasibility"]
-
-
 def invalidate(session: Session) -> None:
     session.info.pop("bounty_feasibility", None)
 
 
-def pass_rate(session: Session, test: Predicate, ids: Iterable[int]) -> float | None:
+def query_of(test: Predicate) -> FacetQuery:
+    query = getattr(test, "query", None)
+    if not isinstance(query, FacetQuery):
+        raise TypeError(f"Predicate {test.id} has no facet query")
+    return query
+
+
+def counts(session: Session, test: Predicate, ids: Iterable[int]) -> dict:
     ids = list(ids)
-    if isinstance(test, FacetPredicate) and test.query.stored and _covered(session, test, ids):
-        return count(session, test.query, ids)["pass_rate"]
-    evidence = evidence_for(session)
-    results = [
-        test.check(evidence.movies[i], evidence.facts[i]) if i in evidence.movies else None
-        for i in ids
-    ]
-    return sum(result is not False for result in results) / len(results) if results else None
+    query = query_of(test)
+    key = (query.model_dump_json(by_alias=True, exclude_none=True), tuple(ids))
+    cache = session.info.setdefault("bounty_feasibility", {})
+    if key not in cache:
+        refresh(session, ids)
+        cache[key] = count(session, query, ids)
+    return cache[key]
 
 
-def _covered(session: Session, test: FacetPredicate, ids: list[int]) -> bool:
-    def families(query):
-        from app.facets.registry import CATALOGUE
-
-        return (
-            {CATALOGUE[query.facet].family}
-            if query.facet
-            else set().union(*(families(c) for c in query.children()))
+def check(
+    session: Session, test: Predicate, ids: Iterable[int], *, exact: bool = True
+) -> Feasibility:
+    ids = list(ids)
+    if not ids:
+        return Feasibility(
+            not exact, "No remaining eligible films" if exact else "Cache has no evidence", None
         )
-
-    required = families(test.query)
-    return all(
-        session.execute(
-            text("""SELECT COUNT(*) FROM movie_facet_status
-        WHERE movie_id IN (SELECT value FROM json_each(:ids)) AND family=:family
-        AND version=:version AND status='ok'"""),
-            {"ids": json.dumps(ids), "family": family, "version": FAMILY_VERSIONS[family]},
-        ).scalar_one()
-        == len(set(ids))
-        for family in required
+    result = counts(session, test, ids)
+    possible = result["matches"] + result["unknown"]
+    observed_rate = None if result["unknown"] else result["pass_rate"]
+    return Feasibility(
+        possible > 0,
+        "No remaining eligible film matches this quest"
+        if not possible
+        else "Too easy for the eligible pool"
+        if observed_rate is not None and observed_rate > 0.8
+        else "A matching film is possible",
+        observed_rate,
     )
+
+
+def pass_rate(session: Session, test: Predicate, ids: Iterable[int]) -> float | None:
+    return counts(session, test, ids)["pass_rate"]
+
+
+def verdict(session: Session, test: Predicate, movie_id: int) -> bool | None:
+    result = counts(session, test, [movie_id])
+    return None if result["unknown"] else bool(result["matches"])
+
+
+def matching_ids(session: Session, query: FacetQuery, ids: Iterable[int]) -> list[int]:
+    ids = list(ids)
+    refresh(session, ids)
+    universe, params = universe_ids(ids)
+    sql, bindings = compile(query, universe)
+    return list(
+        session.execute(
+            text(f"SELECT movie_id FROM ({sql}) WHERE verdict IS TRUE"), {**params, **bindings}
+        ).scalars()
+    )
+
+
+def difficulty(rate: float | None) -> int:
+    return 1 if rate is None else 6 if rate <= 0 else max(1, min(6, 1 + round(-math.log2(rate))))
+
+
+def measured_difficulty(session: Session, test: Predicate, ids: Iterable[int]) -> int:
+    return difficulty(pass_rate(session, test, ids))
+
+
+def movies(session: Session) -> dict[int, CachedMovie]:
+    return {m.tmdb_id: m for m in session.exec(select(CachedMovie)).all()}
+
+
+def within_movie(movie: CachedMovie, bounds: dict) -> bool:
+    return within(facts_of(movie, []), bounds)
+
+
+def covered_facets(session: Session, ids: Iterable[int]) -> list[dict]:
+    import json
+
+    from app.facets.registry import CATALOGUE, FAMILY_VERSIONS
+
+    ids = list(ids)
+    refresh(session, ids)
+    rows = session.execute(
+        text("""SELECT f.facet_id, COUNT(DISTINCT f.movie_id) AS known
+        FROM movie_facets f JOIN movie_facet_status s ON s.movie_id=f.movie_id
+        WHERE f.movie_id IN (SELECT value FROM json_each(:ids)) AND s.status='ok'
+        GROUP BY f.facet_id"""),
+        {"ids": json.dumps(ids)},
+    ).mappings()
+    coverage = {row["facet_id"]: row["known"] for row in rows}
+    return [
+        {"facet": f.id, "kind": f.kind, "ops": f.ops, "known": coverage.get(f.id, 0)}
+        for f in sorted(CATALOGUE.values(), key=lambda f: (-coverage.get(f.id, 0), f.id))
+        if not f.relative and f.version == FAMILY_VERSIONS[f.family]
+    ][:25]
 
 
 def exists(session: Session, test: Predicate, ids: Iterable[int]) -> bool:

@@ -182,3 +182,63 @@ def refresh(
                 )
             )
     session.flush()
+
+
+def stored_values(
+    session: Session, movie_ids: Iterable[int], facets: Iterable[str] | None = None
+) -> dict[int, dict[str, FacetValue]]:
+    """Read-only decode of current stored facets; never refreshes or computes.
+
+    Only facets whose family status is ``ok`` at the current version are returned; a known
+    empty set is ``[]`` and a current family without a row is ``None``. Relative facets and
+    stale/missing families are omitted, so callers can fall back to live evaluation."""
+    ids = list(dict.fromkeys(movie_ids))
+    wanted = [
+        f
+        for f in (CATALOGUE.values() if facets is None else (CATALOGUE[i] for i in facets))
+        if not f.relative
+    ]
+    if not ids or not wanted:
+        return {}
+    current = {
+        (s.movie_id, s.family)
+        for s in session.exec(
+            select(MovieFacetStatus).where(
+                col(MovieFacetStatus.movie_id).in_(ids), MovieFacetStatus.status == "ok"
+            )
+        ).all()
+        if s.version == FAMILY_VERSIONS[s.family]
+    }
+    result: dict[int, dict[str, FacetValue]] = {
+        movie_id: {f.id: None for f in wanted if (movie_id, f.family) in current}
+        for movie_id in ids
+    }
+    rows = session.exec(
+        select(MovieFacet).where(
+            col(MovieFacet.movie_id).in_(ids), col(MovieFacet.facet_id).in_([f.id for f in wanted])
+        )
+    ).all()
+    for row in rows:
+        values = result.get(row.movie_id)
+        if values is None or row.facet_id not in values:
+            continue
+        kind = CATALOGUE[row.facet_id].kind
+        if row.value_text == EMPTY_SET:
+            values[row.facet_id] = []
+            continue
+        base = kind.removeprefix("set_")
+        item: FacetValue = (
+            row.value_text
+            if base == "cat"
+            else bool(row.value_num)
+            if base == "bool"
+            else int(row.value_num)
+            if float(row.value_num).is_integer()
+            else row.value_num
+        )
+        if kind.startswith("set_"):
+            existing = values[row.facet_id]
+            values[row.facet_id] = sorted([*(existing if isinstance(existing, list) else []), item])
+        else:
+            values[row.facet_id] = item
+    return {movie_id: values for movie_id, values in result.items() if values}

@@ -113,10 +113,10 @@ class CineChainEngine(BaseChallengeEngine):
             )
             - {step.movie_id for step in steps}
         )
-        evidence = feasibility.Evidence(self.session)
+        movies = feasibility.movies(self.session)
         quests = [bounties.resolve(rules, key) for key in bounties.active_bounties(rules)]
         for movie_id in candidate_ids:
-            movie = evidence.movies.get(movie_id)
+            movie = movies.get(movie_id)
             if (
                 not movie
                 or not is_reality_eligible(movie)
@@ -127,7 +127,7 @@ class CineChainEngine(BaseChallengeEngine):
                 if (
                     quest
                     and quest.predicate
-                    and quest.predicate.check(movie, evidence.facts[movie_id]) is True
+                    and feasibility.verdict(self.session, quest.predicate, movie_id) is True
                 ):
                     return f"{movie.title} may earn the {quest.title} bounty. Check its rule chips."
         return None

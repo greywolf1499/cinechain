@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
-import { needsChaser } from "../lib/chaser";
+import { useNeedsChaser } from "../lib/chaser";
 import { useMovieDetail } from "../lib/queries";
 import type { RunStep } from "../types/api";
 
-/** 🍺 Grab a Chaser: after a heavy film (135+ min or a drama) offer a short, light palate cleanser.
+/** 🍺 Grab a Chaser: use the catalogue's heavy-film rule to offer a light palate cleanser.
  * An inline action button stays while the heavy film is the frontier; a toast pops up when the
  * film is logged during this visit. */
 export default function ChaserPrompt({
@@ -15,7 +15,7 @@ export default function ChaserPrompt({
   onGrab: () => void;
 }) {
   const { movie } = useMovieDetail(frontier.movie_id);
-  const heavy = !!movie && needsChaser(movie.runtime, movie.genre_ids);
+  const { heavy, error } = useNeedsChaser(movie?.runtime, movie?.genre_ids);
   const initialStepId = useRef(frontier.id);
   const [dismissedStepId, setDismissedStepId] = useState<string | null>(null);
   const loggedThisVisit = frontier.id !== initialStepId.current;
@@ -28,6 +28,7 @@ export default function ChaserPrompt({
     return () => window.clearTimeout(timer);
   }, [showToast, frontier.id]);
 
+  if (error) return <p role="alert" className="text-xs text-amber-300">Could not load Chaser rules.</p>;
   if (!heavy) return null;
   return (
     <>

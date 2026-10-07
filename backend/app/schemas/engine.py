@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from app.schemas.discovery import DiscoveryCandidate
 from app.utils.countries import parse_countries
@@ -14,6 +14,7 @@ FilterSource = Literal[
     "tug_effect",
     "tier_compliant",
     "new_country",
+    "facet",
 ]
 
 RuleValue = bool | str | int | None
@@ -47,6 +48,25 @@ class FilterSpec(BaseModel):
     default: bool | str | int | None = None
     server_param: Literal["include_off_tier"] | None = None
     help: str = ""
+    facet: str | None = None
+
+    @model_validator(mode="after")
+    def valid_facet(self):
+        from app.facets.registry import CATALOGUE
+
+        if self.source == "facet" and self.facet not in CATALOGUE:
+            raise ValueError("Facet filters require a registered facet id")
+        if self.source == "facet" and self.facet is not None:
+            kind = CATALOGUE[self.facet].kind
+            if (self.kind == "range" and kind != "num") or (
+                self.kind == "toggle" and kind != "bool"
+            ):
+                raise ValueError(
+                    "Facet ranges require numeric values and toggles require boolean values"
+                )
+        if self.source != "facet" and self.facet is not None:
+            raise ValueError("Only facet filters accept a facet id")
+        return self
 
 
 class SharedActorConnection(BaseModel):

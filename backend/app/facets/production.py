@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime
 
 from app.facets.micro_eras import micro_eras
 from app.facets.regions import regions_of
-from app.facets.registry import FacetValue
+from app.facets.registry import FacetValue, named_variants
 from app.models.cache import CachedMovie
 from app.utils.countries import parse_countries
 from app.utils.dates import parse_release_year
@@ -12,18 +12,21 @@ def evaluate(movie: CachedMovie) -> dict[str, FacetValue]:
     year = parse_release_year(movie.release_date)
     countries = None if movie.origin_country is None else parse_countries(movie.origin_country)
     runtime = movie.runtime
+    concepts = named_variants()
     return {
         "release_year": year,
         "release_decade": year // 10 * 10 if year is not None else None,
         "runtime": runtime,
+        "runtime_verified": runtime if runtime and runtime > 0 else None,
         "runtime_band": None
         if not runtime
         else "short"
-        if runtime < 90
+        if runtime < concepts["short"]["query"]["value"]
         else "epic"
-        if runtime > 150
+        if runtime > concepts["epic"]["query"]["value"]
         else "standard",
         "origin_country": countries,
+        "origin_country_count": len(countries) if countries is not None else None,
         "region": regions_of(countries) if countries is not None else None,
         "micro_era": micro_eras(year, countries),
         "original_language": movie.original_language or None,

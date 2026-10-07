@@ -15,7 +15,7 @@ from app.engines.predicates import FacetPredicate, MovieFacts, predicate
 from app.facets import lexical, production, reception, store
 from app.facets.micro_eras import MICRO_ERAS, micro_eras
 from app.facets.models import MovieFacet, MovieFacetStatus
-from app.facets.query import FacetQuery, compile, count
+from app.facets.query import FacetQuery, compile, count, values_for
 from app.facets.regions import regions_of
 from app.facets.registry import CATALOGUE, FAMILY_VERSIONS
 from app.models.cache import (
@@ -39,6 +39,46 @@ __all__ = ["client", "db_engine"]
 
 def film(movie_id=1, **values):
     return CachedMovie(tmdb_id=movie_id, title="The Film", **values)
+
+
+def test_facet_filters_use_stored_and_query_time_values(db_engine):
+    from app.schemas.engine import FilterSpec
+
+    with pytest.raises(ValidationError):
+        FilterSpec(key="missing", label="Missing", kind="toggle", source="facet")
+    with pytest.raises(ValidationError):
+        FilterSpec(key="bad", label="Bad", kind="range", source="facet", facet="not_registered")
+    with pytest.raises(ValidationError):
+        FilterSpec(key="bad", label="Bad", kind="range", source="facet", facet="one_word_title")
+    with Session(db_engine) as session:
+        session.add(film(runtime=89, popularity=8, vote_count=100))
+        session.add(film(2))
+        session.commit()
+        store.refresh(session, [1, 2])
+        facets = [
+            "runtime_verified",
+            "popularity",
+            "popularity_percentile",
+            "vote_count_band",
+            "canon",
+            "text",
+        ]
+        values = values_for(session, [1, 2], facets)
+        assert values[1] == {
+            "runtime_verified": 89,
+            "popularity": 8,
+            "popularity_percentile": 1,
+            "vote_count_band": "low",
+            "canon": False,
+            "text": "the film  ",
+        }
+        assert values[2].get("runtime_verified") is None
+        assert values[2]["popularity"] is None
+        for facet, value in values[1].items():
+            op = "contains" if facet == "text" else "eq"
+            query = FacetQuery(facet=facet, op=op, value=value)
+            assert query.evaluate(values[1]) is True
+            assert count(session, query, [1])["matches"] == 1
 
 
 @pytest.mark.parametrize(
@@ -75,7 +115,9 @@ def test_lexical_boundaries(title, expected):
     values = lexical.evaluate(title)
     for key, value in expected.items():
         assert values[key] == value
-    assert {f.id for f in CATALOGUE.values() if f.family == "lexical"} == values.keys()
+    assert {
+        f.id for f in CATALOGUE.values() if f.family == "lexical" and not f.relative
+    } == values.keys()
 
 
 @pytest.mark.parametrize(
@@ -439,7 +481,7 @@ def test_500_films_200_random_queries_python_sql_parity(db_engine):
         )
 
 
-def test_predicate_aliases_compiled_counts_and_fallback(db_engine, monkeypatch):
+def test_predicate_aliases_compiled_counts_without_evidence(db_engine, monkeypatch):
     with Session(db_engine) as session:
         session.add_all([film(1, runtime=80), film(2, runtime=100), film(3)])
         session.commit()
@@ -452,7 +494,7 @@ def test_predicate_aliases_compiled_counts_and_fallback(db_engine, monkeypatch):
         def no_evidence(*args):
             raise AssertionError("whole-cache evidence load")
 
-        monkeypatch.setattr(feasibility, "evidence_for", no_evidence)
+        monkeypatch.setattr(feasibility, "movies", no_evidence)
         assert feasibility.pass_rate(session, test, [1, 2, 3]) == pytest.approx(2 / 3)
         assert feasibility.cache_pass_rate(session, test) == pytest.approx(2 / 3)
         assert feasibility.pass_rate(session, test, [1, 1, 2, 3]) == pytest.approx(3 / 4)

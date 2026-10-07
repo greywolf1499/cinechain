@@ -206,3 +206,174 @@ def test_bingo_requires_login(db_engine):
             assert anonymous.get("/api/tools/bingo/watchlist").status_code == 401
     finally:
         app.dependency_overrides.clear()
+
+
+# --- F5b: server-side squares and stamps -------------------------------------------------
+
+
+def squares_by_id(client) -> dict:
+    resp = client.get("/api/tools/bingo/squares")
+    assert resp.status_code == 200
+    return {s["id"]: s for s in resp.json()["squares"]}
+
+
+def test_squares_keep_their_ids_and_read_named_variant_thresholds(client):
+    from app.facets.registry import named_variants
+
+    squares = squares_by_id(client)
+    assert {"classic", "short", "epic", "canon", "woman-director", "scifi", "decade-1960"} <= set(
+        squares
+    )
+    assert len(squares) == 34
+    variants = named_variants()
+    assert squares["short"]["query"] == variants["short"]["query"]
+    assert squares["hidden-gem"]["query"] == variants["hidden_gem"]["query"]
+    assert str(variants["short"]["query"]["value"]) in squares["short"]["hint"]
+    assert squares["canon"]["query"] == {"facet": "canon", "op": "eq", "value": True}
+    assert squares["scifi"]["query"] == {"facet": "genre", "op": "contains", "value": 878}
+
+
+def test_square_matches_come_from_the_callers_watchlist_only(client, db_engine):
+    seed(db_engine)
+    with Session(db_engine) as session:
+        # Bob's film fits everything Alice's classic does; it must never appear.
+        session.add(
+            CachedMovie(
+                tmdb_id=3,
+                title="Not Mine",
+                release_date="1961-01-01",
+                runtime=80,
+                original_language="fr",
+                origin_country='["FR"]',
+                genre_ids=[18],
+                popularity=1.0,
+            )
+        )
+        session.add(CanonMovieBadge(curated_list_id="l", movie_id=3, badge_label="SS22 #9"))
+        session.commit()
+    squares = squares_by_id(client)
+
+    for square_id in (
+        "classic",
+        "short",
+        "non-english",
+        "imdb-high",
+        "canon",
+        "woman-director",
+        "hidden-gem",
+        "european",
+        "not-us-uk",
+        "decade-1960",
+    ):
+        assert squares[square_id]["matches"] == [1], square_id
+    assert squares["epic"]["matches"] == [] and squares["horror"]["matches"] == []
+    assert squares["asian"]["matches"] == []
+    # Film 2 isn't cached, so the server can't decide it yet; Bob's film is never counted.
+    assert squares["epic"]["unknown"] == 1
+    assert all(3 not in s["matches"] for s in squares.values())
+
+
+def test_squares_for_an_empty_watchlist_have_no_matches(client):
+    squares = squares_by_id(client)
+    assert all(s["matches"] == [] and s["unknown"] == 0 for s in squares.values())
+
+
+def test_stamp_is_validated_against_the_server_square(client, db_engine):
+    seed(db_engine)
+    ok = client.post("/api/tools/bingo/stamp", json={"square_id": "classic", "movie_id": 1})
+    assert ok.status_code == 200 and ok.json()["valid"] is True and ok.json()["verdict"] is True
+
+    wrong = client.post("/api/tools/bingo/stamp", json={"square_id": "epic", "movie_id": 1}).json()
+    assert wrong["valid"] is False and wrong["verdict"] is False
+
+    unknown = client.post(
+        "/api/tools/bingo/stamp", json={"square_id": "classic", "movie_id": 2}
+    ).json()
+    assert unknown["valid"] is False and unknown["verdict"] is None
+
+
+def test_stamp_rejects_other_users_films_unknown_squares_and_client_queries(client, db_engine):
+    seed(db_engine)
+    with Session(db_engine) as session:
+        session.add(CachedMovie(tmdb_id=3, title="Not Mine", release_date="1950-01-01"))
+        session.commit()
+    foreign = client.post("/api/tools/bingo/stamp", json={"square_id": "classic", "movie_id": 3})
+    assert foreign.status_code == 200 and foreign.json()["valid"] is False
+
+    missing = client.post("/api/tools/bingo/stamp", json={"square_id": "nope", "movie_id": 1})
+    assert missing.status_code == 404
+
+    forged = client.post(
+        "/api/tools/bingo/stamp",
+        json={
+            "square_id": "epic",
+            "movie_id": 1,
+            "query": {"facet": "runtime", "op": "gt", "value": 0},
+            "matches": [1],
+        },
+    )
+    assert forged.status_code == 422
+
+
+def test_outside_us_uk_needs_a_known_non_empty_country_list(client, db_engine):
+    uid = alice_id(db_engine)
+    with Session(db_engine) as session:
+        for movie_id, countries in ((20, "[]"), (21, None), (22, '["US", "FR"]'), (23, '["JP"]')):
+            session.add(
+                CachedMovie(tmdb_id=movie_id, title=f"C{movie_id}", origin_country=countries)
+            )
+            session.add(
+                LetterboxdWatchlist(
+                    user_id=uid, letterboxd_username="a", movie_id=movie_id, title=f"C{movie_id}"
+                )
+            )
+        session.commit()
+    square = squares_by_id(client)["not-us-uk"]
+    assert square["matches"] == [23]
+
+    def stamp(movie_id):
+        return client.post(
+            "/api/tools/bingo/stamp", json={"square_id": "not-us-uk", "movie_id": movie_id}
+        ).json()
+
+    assert stamp(23)["valid"] is True
+    assert stamp(20)["valid"] is False  # known empty: no evidence it's non-US/UK
+    assert stamp(21)["valid"] is False and stamp(21)["verdict"] is None  # unknown countries
+    assert stamp(22)["valid"] is False and stamp(22)["verdict"] is False
+
+
+def test_squares_and_stamps_require_login(db_engine):
+    def override_get_session():
+        with Session(db_engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+    try:
+        with TestClient(app) as anonymous:
+            assert anonymous.get("/api/tools/bingo/squares").status_code == 401
+            assert (
+                anonymous.post(
+                    "/api/tools/bingo/stamp", json={"square_id": "classic", "movie_id": 1}
+                ).status_code
+                == 401
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_zero_or_missing_runtime_never_fills_short_or_epic(client, db_engine):
+    uid = alice_id(db_engine)
+    with Session(db_engine) as session:
+        for movie_id, runtime in ((30, 0), (31, None), (32, 80), (33, 170)):
+            session.add(CachedMovie(tmdb_id=movie_id, title=f"R{movie_id}", runtime=runtime))
+            session.add(
+                LetterboxdWatchlist(
+                    user_id=uid, letterboxd_username="a", movie_id=movie_id, title=f"R{movie_id}"
+                )
+            )
+        session.commit()
+    squares = squares_by_id(client)
+    assert squares["short"]["matches"] == [32]
+    assert squares["epic"]["matches"] == [33]
+    zero = client.post("/api/tools/bingo/stamp", json={"square_id": "short", "movie_id": 30}).json()
+    assert zero["valid"] is False

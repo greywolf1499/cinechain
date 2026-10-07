@@ -7,6 +7,8 @@ from collections.abc import Sequence
 
 from sqlmodel import Session
 
+from app.facets.query import FacetQuery
+from app.facets.registry import named_variants
 from app.models.cache import CachedMovie
 from app.services import cache_repo
 from app.services.tmdb import TMDBClient, TMDBError
@@ -18,23 +20,35 @@ UNDERDOG_MIN_POPULARITY = 1.0  # below this a film is usually dead, unreleased o
 # TMDB genre ids.
 ANIMATION, COMEDY, DRAMA = 16, 35, 18
 CHASER_GENRES = frozenset({ANIMATION, COMEDY})
-CHASER_MAX_RUNTIME = 95
-CHASER_TRIGGER_RUNTIME = 135
+CHASER_MAX_RUNTIME = named_variants()["chaser"]["query"]["all"][1]["value"]
+CHASER_TRIGGER_RUNTIME = named_variants()["chaser_trigger"]["query"]["any"][0]["value"]
 HYDRATE_BUDGET = 30
 HYDRATE_SECONDS = 15.0
 
 
 def needs_chaser(runtime: int | None, genre_ids: Sequence[int] | None) -> bool:
     """A heavy film (long, or a drama) earns a palate cleanser."""
-    return (runtime or 0) >= CHASER_TRIGGER_RUNTIME or DRAMA in (genre_ids or ())
+    return (
+        FacetQuery.model_validate(named_variants()["chaser_trigger"]["query"]).evaluate(
+            {
+                "runtime": runtime or None,
+                "genre": list(genre_ids) if genre_ids is not None else None,
+            }
+        )
+        is True
+    )
 
 
 def is_chaser(runtime: int | None, genre_ids: Sequence[int] | None) -> bool:
     """Quick and lighthearted: at most 95 minutes and Comedy or Animation. Unknown never qualifies."""
     return (
-        bool(runtime)
-        and runtime <= CHASER_MAX_RUNTIME  # type: ignore[operator]
-        and bool(CHASER_GENRES & set(genre_ids or ()))
+        FacetQuery.model_validate(named_variants()["chaser"]["query"]).evaluate(
+            {
+                "runtime": runtime or None,
+                "genre": list(genre_ids) if genre_ids is not None else None,
+            }
+        )
+        is True
     )
 
 

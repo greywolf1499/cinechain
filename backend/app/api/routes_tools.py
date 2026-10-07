@@ -1,4 +1,4 @@
-"""Data for the Tools hub: the Watchlist Bingo pool."""
+"""Data for the Tools hub: the Watchlist Bingo pool, squares and stamps."""
 
 from __future__ import annotations
 
@@ -6,13 +6,18 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client
 from app.db import get_session
 from app.engines import march_madness
 from app.engines.base import RunSetupError
+from app.facets import store as facet_store
+from app.facets.genres import GENRE_IDS
+from app.facets.query import FacetQuery, compile, universe_ids
+from app.facets.registry import named_variants
 from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie, CachedMovieDirector, CachedMovieRating
 from app.models.curated import CanonMovieBadge, LetterboxdWatchlist
@@ -225,6 +230,241 @@ async def bingo_watchlist(
         if _needs_work(session, session.get(CachedMovie, row.movie_id), omdb.enabled, row.movie_id)
     )
     return BingoWatchlist(films=films, total=len(films), pending=pending)
+
+
+# (square id, named variant, label template, hint template); {v} is the variant's threshold.
+_VARIANT_SQUARES = (
+    ("classic", "classic", "Pre-{v} Classic", "Released before {v}"),
+    ("short", "short", "Runtime Under {v}m", "Shorter than {v} minutes"),
+    ("epic", "epic", "Epic: Over {v} Minutes", "Longer than {v} minutes"),
+    ("non-english", "non_english", "Non-English Language", "Original language isn't English"),
+    ("woman-director", "female_director", "Directed by a Woman", "At least one woman directed it"),
+    ("recent", "recent", "Released in the Last 5 Years", "Released {v} or later"),
+    (
+        "hidden-gem",
+        "hidden_gem",
+        "Hidden Gem",
+        "TMDB popularity under {v} - hardly anyone's seen it",
+    ),
+    ("asian", "asian", "Asian Cinema", "Made in Asia"),
+    ("european", "european", "European Cinema", "Made in Europe"),
+    (
+        "latam-africa",
+        "latam_africa",
+        "Latin American or African Cinema",
+        "Made in Latin America or Africa",
+    ),
+)
+_GENRE_SQUARES = (
+    ("documentary", "documentary", "Documentary"),
+    ("animation", "animation", "Animation"),
+    ("horror", "horror", "Horror"),
+    ("scifi", "sci-fi", "Sci-Fi"),
+    ("comedy", "comedy", "Comedy"),
+    ("romance", "romance", "Romance"),
+    ("war", "war", "War"),
+    ("western", "western", "Western"),
+    ("musical", "musical", "Musical"),
+    ("thriller", "thriller", "Thriller"),
+    ("crime", "crime", "Crime"),
+    ("fantasy", "fantasy", "Fantasy"),
+    ("mystery", "mystery", "Mystery"),
+)
+_DECADES = (1960, 1970, 1980, 1990, 2000, 2010, 2020)
+
+
+class BingoSquare(BaseModel):
+    id: str
+    label: str
+    hint: str
+    query: FacetQuery
+
+
+def bingo_squares() -> list[BingoSquare]:
+    """Every square as a server facet query; thresholds come from the named variants."""
+    variants = named_variants()
+
+    def leaf(facet: str, op: str, value) -> FacetQuery:
+        return FacetQuery(facet=facet, op=op, value=value)
+
+    squares = []
+    for square_id, name, label, hint in _VARIANT_SQUARES:
+        query = variants[name]["query"]
+        value = query.get("value")
+        squares.append(
+            BingoSquare(
+                id=square_id,
+                label=label.format(v=value),
+                hint=hint.format(v=value),
+                query=FacetQuery.model_validate(query),
+            )
+        )
+    squares += [
+        BingoSquare(
+            id="imdb-high",
+            label="IMDb > 8.0",
+            hint="Rated above 8.0 on IMDb",
+            query=leaf("imdb_rating", "gt", 8.0),
+        ),
+        BingoSquare(
+            id="imdb-low",
+            label="IMDb Under 5.5",
+            hint="So bad it's good: rated under 5.5",
+            query=leaf("imdb_rating", "lt", 5.5),
+        ),
+        BingoSquare(
+            id="canon",
+            label="Sight & Sound / Canon Film",
+            hint="On one of your curated canon lists",
+            query=leaf("canon", "eq", True),
+        ),
+        BingoSquare(
+            id="not-us-uk",
+            label="Made Outside the US & UK",
+            hint="Neither American nor British",
+            # A known-empty country list says nothing about where the film was made.
+            query=FacetQuery.model_validate(
+                {
+                    "all": [
+                        {"facet": "origin_country_count", "op": "gt", "value": 0},
+                        {
+                            "not": {
+                                "facet": "origin_country",
+                                "op": "has_any",
+                                "value": ["US", "GB"],
+                            }
+                        },
+                    ]
+                }
+            ),
+        ),
+    ]
+    squares += [
+        BingoSquare(
+            id=square_id,
+            label=label,
+            hint=f"A {label.lower()} film",
+            query=leaf("genre", "contains", GENRE_IDS[genre]),
+        )
+        for square_id, genre, label in _GENRE_SQUARES
+    ]
+    squares += [
+        BingoSquare(
+            id=f"decade-{decade}",
+            label=f"Decade: {decade}s",
+            hint=f"Released between {decade} and {decade + 9}",
+            query=leaf("release_decade", "eq", decade),
+        )
+        for decade in _DECADES
+    ]
+    return squares
+
+
+class BingoSquareMatches(BingoSquare):
+    # Caller's watchlist films that fill the square / whose cached facts can't decide yet.
+    matches: list[int]
+    unknown: int
+
+
+class BingoSquares(BaseModel):
+    squares: list[BingoSquareMatches]
+
+
+class BingoStampRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    square_id: str
+    movie_id: int
+
+
+class BingoStampResult(BaseModel):
+    square_id: str
+    movie_id: int
+    valid: bool
+    # False = the film doesn't fit, None = the cache can't tell yet.
+    verdict: bool | None
+    reason: str
+
+
+def _watchlist_ids(session: Session, user_id: str) -> list[int]:
+    return list(
+        dict.fromkeys(
+            session.exec(
+                select(LetterboxdWatchlist.movie_id).where(LetterboxdWatchlist.user_id == user_id)
+            ).all()
+        )
+    )
+
+
+def _verdicts(session: Session, query: FacetQuery, ids: list[int]) -> dict[int, bool | None]:
+    """Cache-only three-valued verdicts for `ids` (facets must already be refreshed)."""
+    if not ids:
+        return {}
+    universe, params = universe_ids(ids)
+    sql, bindings = compile(query, universe)
+    return {
+        row.movie_id: None if row.verdict is None else bool(row.verdict)
+        for row in session.execute(text(sql), {**params, **bindings})
+    }
+
+
+def _refresh_facets(session: Session, ids: list[int]) -> None:
+    if not ids:
+        return
+    facet_store.refresh(session, ids)
+    session.commit()
+
+
+@router.get("/bingo/squares", response_model=BingoSquares, response_model_exclude_none=True)
+def bingo_squares_for_watchlist(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> BingoSquares:
+    """Every Bingo square with the caller's watchlist films that fill it (cache only)."""
+    ids = _watchlist_ids(session, current_user.id)
+    _refresh_facets(session, ids)
+    result = []
+    for square in bingo_squares():
+        verdicts = _verdicts(session, square.query, ids)
+        result.append(
+            BingoSquareMatches(
+                **square.model_dump(by_alias=True),
+                matches=[movie_id for movie_id in ids if verdicts.get(movie_id) is True],
+                unknown=sum(1 for movie_id in ids if verdicts.get(movie_id) is None),
+            )
+        )
+    return BingoSquares(squares=result)
+
+
+@router.post("/bingo/stamp", response_model=BingoStampResult)
+def bingo_stamp(
+    body: BingoStampRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> BingoStampResult:
+    """Check a watchlist film fills a square, using the server's own query for that square."""
+    square = next((s for s in bingo_squares() if s.id == body.square_id), None)
+    if square is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown Bingo square")
+
+    def result(valid: bool, verdict: bool | None, reason: str) -> BingoStampResult:
+        return BingoStampResult(
+            square_id=square.id,
+            movie_id=body.movie_id,
+            valid=valid,
+            verdict=verdict,
+            reason=reason,
+        )
+
+    if body.movie_id not in _watchlist_ids(session, current_user.id):
+        return result(False, False, "That film isn't on your watchlist")
+    _refresh_facets(session, [body.movie_id])
+    verdict = _verdicts(session, square.query, [body.movie_id]).get(body.movie_id)
+    if verdict is True:
+        return result(True, True, "Stamped")
+    if verdict is None:
+        return result(False, None, "Not enough is known about that film yet")
+    return result(False, False, f"That film doesn't fit: {square.hint.lower()}")
 
 
 @router.get("/march-madness/seed", response_model=list[MovieSummary])

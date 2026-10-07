@@ -217,7 +217,8 @@ def test_invalid_and_unsupported_boards_are_refused(client, db_engine):
             )
         )
         session.commit()
-    assert make_run(client, "rabbit_hole", bounty_board=True).status_code == 201
+    # A single cached film cannot demonstrate v3's tier pass-rate bands.
+    assert make_run(client, "rabbit_hole", bounty_board=True).status_code == 422
     assert make_run(client, "march_madness", bounty_board=True).status_code == 422
 
 

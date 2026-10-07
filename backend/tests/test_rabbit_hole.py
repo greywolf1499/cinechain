@@ -222,7 +222,7 @@ def test_a_new_run_starts_on_full_lives_whatever_the_client_sends(client):
         (25.0, False),
     ],
 )
-def test_escape_depth_is_optional_and_bounded(client, world, escape_depth, valid):
+def test_escape_depth_is_optional_and_bounded(client, procedural_world, escape_depth, valid):
     rules = {"escape_depth": escape_depth} if escape_depth is not None else {}
     response = client.post(
         "/api/runs", json={"name": "Escape", "game_type": "rabbit_hole", "rules_config": rules}
@@ -745,7 +745,7 @@ def procedural_world(world):
             add_film(
                 session,
                 1000 + index,
-                year=1960 + index * 2,
+                year=1960 + index,
                 lang="fr" if index % 2 else "en",
                 runtime=75 + index * 3,
                 vote=4 + index % 5,
@@ -792,10 +792,8 @@ def test_seed_hydrates_evidence_before_procedural_preparation(client, db_engine)
                 "seed_movie_id": 90,
             },
         )
-    assert response.status_code == 201, response.text
-    detail = run_detail(client, response.json()["id"])
-    assert detail["rules_config"]["rh_rules_version"] == 2
-    assert detail["steps"][0]["movie_id"] == 90
+    assert response.status_code == 422, response.text
+    assert "pass-rate band" in response.json()["detail"]
     with Session(db_engine) as session:
         assert session.get(CachedMovie, 90).runtime == 120
 
@@ -804,7 +802,7 @@ def test_new_runs_deal_versioned_feasible_decks(client, procedural_world, monkey
     monkeypatch.setattr(rabbit_hole.secrets, "randbits", lambda bits: 12345)
     first = run_detail(client, procedural_run(client))["rules_config"]
     second = run_detail(client, procedural_run(client))["rules_config"]
-    assert first["rh_rules_version"] == 2 and first["rh_seed"] == 12345
+    assert first["rh_rules_version"] == 3 and first["rh_seed"] == 12345
     assert first["tier_deck"] == second["tier_deck"]
     assert first["tier_deck"][0]["name"] == "Freefall"
     assert 5 <= len(first["tier_deck"]) <= 7
@@ -814,16 +812,33 @@ def test_new_runs_deal_versioned_feasible_decks(client, procedural_world, monkey
     difficulties = [entry["difficulty"] for entry in first["tier_deck"][1:]]
     assert difficulties == sorted(difficulties)
     with Session(procedural_world) as session:
-        for entry in first["tier_deck"][1:]:
-            assert feasibility.cache_pass_rate(session, rabbit_hole.test_from_data(entry)) >= 0.03
+        movies = feasibility.movies(session)
+        from app.services.movie_filters import is_reality_eligible
+
+        eligible = [movie_id for movie_id, row in movies.items() if is_reality_eligible(row)]
+        leaf_counts = []
+
+        def leaves(query):
+            return 1 if query.facet else sum(leaves(child) for child in query.children())
+
+        for entry, (low, high) in zip(
+            first["tier_deck"][1:], rabbit_hole.TIER_PASS_BANDS, strict=True
+        ):
+            test = rabbit_hole.test_from_data(entry)
+            assert low <= feasibility.pass_rate(session, test, movies) <= high
+            assert low <= feasibility.pass_rate(session, test, eligible) <= high
+            leaf_counts.append(leaves(test.query))
+        assert all(1 <= count <= 3 for count in leaf_counts)
+        assert any(count > 1 for count in leaf_counts)
         assert len({str(rabbit_hole.draw_deck(session, seed)) for seed in range(20)}) > 10
 
 
 def test_procedural_deck_respects_mode_runtime_bounds(client, procedural_world):
     rules = run_detail(client, procedural_run(client, min_runtime=150, curses=True))["rules_config"]
     with Session(procedural_world) as session:
-        evidence = feasibility.evidence_for(session)
-        ids = [movie_id for movie_id, row in evidence.movies.items() if row.runtime >= 150]
+        ids = [
+            movie_id for movie_id, row in feasibility.movies(session).items() if row.runtime >= 150
+        ]
         for tier in rabbit_hole.tiers_of(rules)[1:]:
             assert feasibility.pass_rate(session, rabbit_hole.tier_tests(tier), ids) >= 0.01
             assert not feasibility.contradicts(
@@ -872,6 +887,9 @@ def test_exact_three_percent_draw_and_one_percent_curse_thresholds(db_engine, mo
         session.add(row)
         session.commit()
         feasibility.invalidate(session)
+        from app.facets.store import invalidate
+
+        invalidate(session, [1], ["production"])
         with pytest.raises(rabbit_hole.RunSetupError, match="four feasible"):
             rabbit_hole.draw_deck(session, 1)
 
@@ -997,7 +1015,7 @@ def test_clients_cannot_forge_or_patch_procedural_state(client, procedural_world
     }
     run_id = procedural_run(client, **fake)
     before = run_detail(client, run_id)["rules_config"]
-    assert before["rh_rules_version"] == 2 and before["tier_deck"][0]["number"] == 1
+    assert before["rh_rules_version"] == 3 and before["tier_deck"][0]["number"] == 1
     assert before["relics"] == {"skip_curse": 0} and before["reroll_tokens"] == 0
     assert before["rh_seed"] != 1 and "curse_skip" not in before
     response = client.patch(f"/api/runs/{run_id}/rules", json=fake)
@@ -1024,7 +1042,7 @@ def test_seeded_reroll_prefers_tokens_and_is_reversible_with_the_hop(
     with Session(procedural_world) as session:
         valid_id = next(
             movie_id
-            for movie_id, row in feasibility.evidence_for(session).movies.items()
+            for movie_id, row in feasibility.movies(session).items()
             if movie_id != ANCHOR and rabbit_hole.compliance(session, tier, row) is True
         )
     step = log(client, runs[0], valid_id).json()
@@ -1052,10 +1070,12 @@ def test_empty_frontier_reroll_spends_nothing(client, procedural_world, monkeypa
     assert run_detail(client, run_id)["rules_config"] == before
 
 
+@pytest.mark.parametrize("version", [2, 3])
 def test_reroll_keeps_curses_and_excludes_a_globally_feasible_frontier_dead_end(
     client,
     procedural_world,
     monkeypatch,
+    version,
 ):
     run_id = procedural_run(client, curses=True)
     rules = run_detail(client, run_id)["rules_config"]
@@ -1065,10 +1085,16 @@ def test_reroll_keeps_curses_and_excludes_a_globally_feasible_frontier_dead_end(
         "start_depth": 15,
         "curses": [rabbit_hole.predicate_data(predicate("non_english"))],
     }
-    update_rules(procedural_world, run_id, tier_deck=rules["tier_deck"], rh_seed=222)
+    update_rules(
+        procedural_world,
+        run_id,
+        tier_deck=rules["tier_deck"],
+        rh_seed=222,
+        rh_rules_version=version,
+    )
     put_at_depth(procedural_world, run_id, 15)
 
-    # The lone reachable film is French, 78 minutes and from 1962.
+    # The lone reachable film is French, 78 minutes and from 1961.
     async def reachable(self, *args, **kwargs):
         from app.schemas.discovery import DiscoveryCandidate
 
@@ -1084,6 +1110,11 @@ def test_reroll_keeps_curses_and_excludes_a_globally_feasible_frontier_dead_end(
         ],
     )
     response = client.post(f"/api/runs/{run_id}/rabbit-hole/reroll")
+    if version == 3:
+        assert response.status_code == 409
+        assert "no resource was spent" in response.json()["detail"]
+        assert "tier_override" not in run_detail(client, run_id)["rules_config"]
+        return
     assert response.status_code == 200, response.text
     override = response.json()["rules_config"]["tier_override"]
     assert override["predicate"]["predicate_id"] == "year_lt"
@@ -1101,7 +1132,7 @@ def test_v2_pool_and_validation_use_the_dealt_predicates(client, procedural_worl
     with Session(procedural_world) as session:
         expected = {
             movie_id
-            for movie_id, row in feasibility.evidence_for(session).movies.items()
+            for movie_id, row in feasibility.movies(session).items()
             if movie_id != ANCHOR
             and is_reality_eligible(row)
             and rabbit_hole.compliance(session, tier, row) is True
@@ -1193,6 +1224,9 @@ def test_the_tier_verdict_is_stamped_after_the_pool_is_final(client, world):
         assert candidate.tier_compliant is None  # discovery keeps it, but judges nothing
 
         session.get(CachedMovie, 14).runtime = 90  # a later pass hydrates the film
+        from app.facets.store import invalidate
+
+        invalidate(session, [14], ["production"])
         session.commit()
         engine.annotate_candidates(pool, rules, history)
 

@@ -347,13 +347,70 @@ def test_rabbit_tier_four_never_rolls_long_haul(client, world):
     assert active["id"] != "epic_length"
     assert chaos.HANDICAPS["epic_length"].label in active["skipped"]
     with Session(world) as session:
-        evidence = feasibility.Evidence(session)
         choices = [
-            h.id for h in chaos.HANDICAPS.values() if evidence.check(h.predicate, [2, 3]).drawable
+            h.id
+            for h in chaos.HANDICAPS.values()
+            if feasibility.check(session, h.predicate, [2, 3]).drawable
         ]
         assert "epic_length" not in choices
         for seed in range(200):
             assert chaos.roll(random.Random(seed), choices)["id"] != "epic_length"
+
+
+@pytest.mark.parametrize(
+    ("rate", "expected"),
+    [(1, 1), (0.5, 2), (0.25, 3), (0.125, 4), (0.0625, 5), (0.03125, 6), (0, 6), (None, 1)],
+)
+def test_measured_difficulty_scales_with_pass_rate(rate, expected):
+    assert feasibility.difficulty(rate) == expected
+
+
+def test_difficulty_is_monotone():
+    values = [feasibility.difficulty(n / 1000) for n in range(1, 1001)]
+    assert values == sorted(values, reverse=True)
+
+
+def test_facet_leaf_bounties_and_legacy_keywords_compile(db_engine):
+    from app.engines.predicates import named_predicate
+    from app.facets.query import FacetQuery
+    from app.services.bounties import custom_bounty, normalize_rule
+
+    with Session(db_engine) as session:
+        session.add_all(
+            [
+                CachedMovie(
+                    tmdb_id=901,
+                    title="Alien",
+                    overview="Indie spaceship story",
+                    original_language="en",
+                    runtime=80,
+                ),
+                CachedMovie(tmdb_id=902, title="Two Words", original_language="fr", runtime=120),
+            ]
+        )
+        session.commit()
+        for concept, matches in (("english", [901]), ("non_english", [902]), ("one_word", [901])):
+            test = named_predicate(concept)
+            assert feasibility.matching_ids(session, test.query, [901, 902]) == matches
+        for rule in (
+            [{"facet": "original_language", "op": "eq", "value": "en"}],
+            [{"type": "keyword", "keywords": ["space"]}],
+            [{"type": "genre", "genre": "horror"}, {"facet": "runtime", "op": "le", "value": 90}],
+        ):
+            bounty = custom_bounty({"id": "ai_test", "rule": rule})
+            assert bounty is not None
+            query = feasibility.query_of(bounty.predicate)
+            assert isinstance(query, FacetQuery)
+            assert feasibility.pass_rate(session, bounty.predicate, [901, 902]) is not None
+        keyword = custom_bounty(
+            {"id": "keyword", "rule": {"type": "keyword", "keywords": ["space"]}}
+        )
+        assert feasibility.verdict(session, keyword.predicate, 901) is True
+        assert feasibility.verdict(session, keyword.predicate, 902) is False
+    assert normalize_rule([{"facet": "runtime", "op": "eq", "value": 90}] * 4) is None
+    assert normalize_rule({"facet": "not_registered", "op": "eq", "value": True}) is None
+    assert normalize_rule({"facet": "runtime", "op": "eq", "value": "90"}) is None
+    assert normalize_rule({"all": [{"facet": "runtime", "op": "lt", "value": 90}]}) is None
 
 
 def test_impossible_or_trivial_reroll_does_not_spend_a_life(client, world):

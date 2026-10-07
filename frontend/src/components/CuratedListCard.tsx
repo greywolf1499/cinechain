@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { Eye, Loader2, Pencil } from "lucide-react";
 import EditListModal from "./EditListModal";
+import ListEntryReview from "./ListEntryReview";
 import ListCover from "./ListCover";
 import SyncBadge from "./SyncBadge";
 import ExpandableText from "./ui/ExpandableText";
@@ -45,6 +46,7 @@ export default function CuratedListCard({
   const queryClient = useQueryClient();
   const [updating, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const syncTask = useTrackedTask<{ matched: number; total_films: number }>({
     dedupeKey: `curated_list_sync:${list.id}`,
     onFinished: () => { void queryClient.invalidateQueries({ queryKey: ["curated"] }); },
@@ -100,7 +102,13 @@ export default function CuratedListCard({
             {list.badge_emoji || "🏅"} {list.badge_prefix}
           </span>
           <span>{list.film_count.toLocaleString()} films</span>
-          {list.is_enabled && list.total_items > 0 && <span>{list.total_items.toLocaleString()} matched</span>}
+          {list.last_synced_at && <span>
+            {list.matched.toLocaleString()} matched · {list.unmatched.toLocaleString()} unmatched
+            {list.ambiguous > 0 && ` · ${list.ambiguous.toLocaleString()} ambiguous`}
+            {` · ${list.tv_titles.toLocaleString()} TV ${list.tv_titles === 1 ? "title" : "titles"}`}
+            {isAdmin && <> — <button type="button" disabled={busy} onClick={() => setReviewing(true)}
+              className="text-accent hover:underline disabled:opacity-50">Review</button></>}
+          </span>}
           {list.watched_count > 0 && (
             <span className="inline-flex items-center gap-1 text-emerald-400">
               <Eye className="h-3 w-3" /> {list.watched_count} watched
@@ -140,6 +148,7 @@ export default function CuratedListCard({
         </div>
       )}
       {editing && <EditListModal list={list} onClose={() => setEditing(false)} onToast={onToast} />}
+      {reviewing && <ListEntryReview list={list} onClose={() => setReviewing(false)} onToast={onToast} />}
     </article>
   );
 }

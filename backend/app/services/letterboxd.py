@@ -16,7 +16,7 @@ never call anything in this module directly from the asyncio event loop.
 
 from __future__ import annotations
 
-import difflib
+import asyncio
 import hashlib
 import json
 import logging
@@ -24,8 +24,8 @@ import math
 import os
 import random
 import re
+import threading
 import time
-import unicodedata
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,7 +38,9 @@ from curl_cffi import requests as curl_requests
 from defusedxml import ElementTree as SafeET
 
 from app.config import get_settings
+from app.services import tmdb_resolver
 from app.services.task_runner import TaskCancelled
+from app.services.tmdb import TMDBDirector, TMDBError
 
 logger = logging.getLogger(__name__)
 
@@ -204,9 +206,7 @@ def normalize_slug(raw: str | None) -> str | None:
     return slug or None
 
 
-def clean_title_str(title: str) -> str:
-    ascii_title = unicodedata.normalize("NFKD", title).encode("ASCII", "ignore").decode("utf-8")
-    return ascii_title.replace('"', "").replace("'", "").strip()
+clean_title_str = tmdb_resolver.clean_title_str
 
 
 def build_paginated_url(base_url: str, page_num: int, detail_mode: bool = False) -> str:
@@ -336,6 +336,7 @@ def parse_detail_entries(soup: BeautifulSoup) -> list[dict[str, Any]]:
                 "slug": slug,
                 "directors": directors,
                 "tmdb_id": parse_id(attr_str(poster, "data-tmdb-id")),
+                "tmdb_type": attr_str(poster, "data-tmdb-type"),
             }
         )
 
@@ -364,6 +365,7 @@ def parse_grid_entries(soup: BeautifulSoup) -> list[dict[str, Any]]:
                 "slug": slug,
                 "directors": [],
                 "tmdb_id": parse_id(attr_str(poster, "data-tmdb-id")),
+                "tmdb_type": attr_str(poster, "data-tmdb-type"),
             }
         )
 
@@ -380,6 +382,10 @@ def has_next_page(soup: BeautifulSoup) -> bool:
 # ---------------------------------------------------------
 # TMDB multi-pass resolution (ported verbatim from the POC)
 # ---------------------------------------------------------
+_tmdb_pacing_lock = threading.Lock()
+_tmdb_next_slot = 0.0
+
+
 def tmdb_auth(api_key: str) -> tuple[dict[str, str], dict[str, str]]:
     if len(api_key) > 50:
         return {"Authorization": f"Bearer {api_key}"}, {}
@@ -394,11 +400,18 @@ def tmdb_get(
     max_retries: int = 3,
 ) -> dict[str, Any] | None:
     """Single TMDB call with 429 backoff. Returns None instead of raising."""
+    global _tmdb_next_slot
     for attempt in range(max_retries):
         try:
+            with _tmdb_pacing_lock:
+                now = time.monotonic()
+                slot = max(now, _tmdb_next_slot)
+                _tmdb_next_slot = slot + 1 / 35
+            if slot > now:
+                time.sleep(slot - now)
             resp = client.get(url, params=params, headers=headers, timeout=10.0)
             if resp.status_code == 429:
-                time.sleep(1)
+                time.sleep(float(resp.headers.get("Retry-After", "1")))
                 continue
             if not resp.ok:
                 return None
@@ -454,48 +467,56 @@ def _match_fields(cand: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-MIN_TITLE_MATCH_RATIO = 0.88
+rank_candidates = tmdb_resolver.rank_candidates
+search_year_order = tmdb_resolver.search_year_order
+slug_search_query = tmdb_resolver.slug_search_query
 
 
-def rank_candidates(
-    results: list[dict[str, Any]], clean_q: str, year: int | None
-) -> list[dict[str, Any]]:
-    """Pure scoring step shared by the sync (scrape) and async (diary import)
-    resolvers: fuzzy title match >= 0.88, release year within +-2, best first."""
-    ranked: list[tuple[float, dict[str, Any]]] = []
-    for cand in results[:10]:
-        cand_title = cand.get("title") or cand.get("original_title") or ""
-        if not cand_title:
-            continue
-        cand_year = parse_year(str(cand.get("release_date") or "")[:4])
-        ratio = difflib.SequenceMatcher(
-            None, clean_q.lower(), clean_title_str(cand_title).lower()
-        ).ratio()
-        if ratio < MIN_TITLE_MATCH_RATIO:
-            continue
-        if year and cand_year and abs(cand_year - year) > 2:
-            continue
-        ranked.append((ratio, cand))
-    ranked.sort(key=lambda x: x[0], reverse=True)
-    return [cand for _, cand in ranked]
+class _SyncMovieMatcher:
+    """The shared async algorithm runs on curl in the scraper's worker thread."""
 
+    def __init__(self, client: curl_requests.Session, api_key: str):
+        self.client = client
+        self.api_key = api_key
+        self.headers, self.params = tmdb_auth(api_key)
+        self.candidates: dict[int, dict[str, Any]] = {}
 
-def search_year_order(year: int | None) -> list[int]:
-    """Exact year first, then +-1 (Letterboxd and TMDB disagree on festival-year releases)."""
-    if year is None:
-        return []
-    return [year, year - 1, year + 1]
+    async def search_movies(
+        self, query: str, page: int = 1, year: int | None = None
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            **self.params,
+            "query": query,
+            "page": page,
+            "include_adult": "false",
+            "language": "en-US",
+        }
+        if year is not None:
+            params["primary_release_year"] = year
+        data = tmdb_get(
+            self.client, "https://api.themoviedb.org/3/search/movie", params, self.headers
+        )
+        if data is None:
+            raise TMDBError("TMDB title search failed after retries.")
+        for movie in data.get("results", []):
+            self.candidates[movie["id"]] = movie
+        return data
 
+    async def find_by_imdb_id(self, imdb_id: str) -> dict[str, Any]:
+        data = tmdb_get(
+            self.client,
+            f"https://api.themoviedb.org/3/find/{imdb_id}",
+            {**self.params, "external_source": "imdb_id"},
+            self.headers,
+        )
+        if data is None:
+            raise TMDBError("TMDB IMDb lookup failed after retries.")
+        for movie in data.get("movie_results", []):
+            self.candidates[movie["id"]] = movie
+        return data
 
-def slug_search_query(slug: str | None, clean_q: str) -> str | None:
-    """Last-resort query from the Letterboxd slug (handles non-Latin titles);
-    None when it would just repeat the title search."""
-    if not slug:
-        return None
-    cleaned_slug = slug.strip("/").split("/")[-1]
-    cleaned_slug = re.sub(r"-(?:18|19|20)\d{2}$", "", cleaned_slug)
-    slug_query = cleaned_slug.replace("-", " ").strip()
-    return slug_query if slug_query and slug_query.lower() != clean_q.lower() else None
+    async def get_movie_directors(self, tmdb_id: int) -> list[TMDBDirector]:
+        return [{"name": name} for name in fetch_tmdb_directors(self.client, tmdb_id, self.api_key)]
 
 
 def resolve_tmdb_multipass(
@@ -505,51 +526,39 @@ def resolve_tmdb_multipass(
     directors: list[str],
     api_key: str,
     slug: str | None = None,
-) -> dict[str, Any] | None:
-    """Multi-pass resolution: exact year -> near year -> title-only fuzzy ->
-    slug fallback (handles international/non-Latin titles). Returns the
-    matched TMDB fields (`tmdb_id`, `title`, `original_title`, ...) or None."""
-    headers, base_params = tmdb_auth(api_key)
-    clean_q = clean_title_str(title) or title.strip()
-    if not clean_q:
-        return None
+    *,
+    imdb_id: str | None = None,
+    inline_id: int | None = None,
+    tmdb_type: str | None = None,
+    load_imdb: Callable[[], str | None] | None = None,
+) -> dict[str, Any]:
+    """Thin sync adapter; all ranking, tiers and ambiguity decisions live in the resolver."""
+    matcher = _SyncMovieMatcher(client, api_key)
 
-    def best_candidate(results: list[dict[str, Any]]) -> dict[str, Any] | None:
-        candidates = rank_candidates(results, clean_q, year)
-        if not candidates:
-            return None
-        if directors and len(candidates) > 1:
-            for cand in candidates:
-                for cand_director in fetch_tmdb_directors(client, cand["id"], api_key):
-                    for target in directors:
-                        if (
-                            difflib.SequenceMatcher(
-                                None, target.lower(), cand_director.lower()
-                            ).ratio()
-                            > 0.8
-                        ):
-                            return cand
-        return candidates[0]
+    async def lazy_imdb() -> str | None:
+        return load_imdb() if load_imdb else None
 
-    for search_year in search_year_order(year):
-        match = best_candidate(tmdb_search(client, clean_q, headers, base_params, search_year))
-        if match:
-            return _match_fields(match)
-
-    match = best_candidate(tmdb_search(client, clean_q, headers, base_params))
-    if match:
-        return _match_fields(match)
-
-    slug_query = slug_search_query(slug, clean_q)
-    if slug_query:
-        slug_results = tmdb_search(client, slug_query, headers, base_params, year) or tmdb_search(
-            client, slug_query, headers, base_params
+    outcome = asyncio.run(
+        tmdb_resolver.resolve_movie(
+            matcher,
+            title,
+            year,
+            slug=slug,
+            directors=directors,
+            imdb_id=imdb_id,
+            inline_id=inline_id,
+            tmdb_type=tmdb_type,
+            load_imdb=lazy_imdb if load_imdb else None,
         )
-        match = best_candidate(slug_results)
-        if match:
-            return _match_fields(match)
-
-    return None
+    )
+    fields = _match_fields(matcher.candidates.get(outcome.tmdb_id, {})) if outcome.tmdb_id else {}
+    return {
+        **fields,
+        "tmdb_id": outcome.tmdb_id,
+        "match_tier": outcome.tier,
+        "status": outcome.status,
+        "reason": outcome.reason,
+    }
 
 
 # ---------------------------------------------------------
@@ -837,7 +846,7 @@ def enrich_entry(
     no_cache: bool,
     progress_callback: ProgressCallback = None,
 ) -> None:
-    """Resolves the TMDB id (inline attribute, deep page, or multi-pass search) in place."""
+    """Resolve what we can and keep an explicit per-entry outcome for review."""
     if is_deep:
         meta = extract_deep_metadata(
             client,
@@ -848,28 +857,64 @@ def enrich_entry(
         )
         entry.update({k: v for k, v in meta.items() if v is not None})
         _drop_non_movie(entry)
-        return
-
-    if entry.get("tmdb_id"):
+    if entry.get("tmdb_type") == "tv":
+        _drop_non_movie(entry)
+        entry.update(
+            status="tv_title",
+            match_tier="inline",
+            reason="TMDB identifies this entry as television.",
+        )
+    elif entry.get("tmdb_id"):
         if entry.get("tmdb_type") is None:
             entry["tmdb_type"] = "movie"
-        _drop_non_movie(entry)
-        return
+        entry.update(status="matched", match_tier="inline", reason=None)
+    elif tmdb_api_key:
+        deep_meta: dict[str, Any] = {}
 
-    if tmdb_api_key:
-        match = resolve_tmdb_multipass(
-            client,
-            str(entry.get("title") or entry["slug"]),
-            entry.get("year"),
-            entry.get("directors", []),
-            tmdb_api_key,
-            entry.get("slug"),
-        )
-        if match:
-            entry.update({k: v for k, v in match.items() if v is not None})
-            _drop_non_movie(entry)
-        else:
-            entry["tmdb_id"], entry["tmdb_type"] = None, None
+        def load_imdb() -> str | None:
+            meta = extract_deep_metadata(
+                client,
+                entry["slug"],
+                no_cache=no_cache,
+                progress_callback=progress_callback,
+            )
+            entry["imdb_id"] = meta.get("imdb_id")
+            deep_meta.update(meta)
+            return None if meta.get("tmdb_type") == "tv" else entry["imdb_id"]
+
+        try:
+            match = resolve_tmdb_multipass(
+                client,
+                str(entry.get("title") or entry["slug"]),
+                entry.get("year"),
+                entry.get("directors", []),
+                tmdb_api_key,
+                entry.get("slug"),
+                imdb_id=entry.get("imdb_id"),
+                load_imdb=load_imdb if not is_deep else None,
+            )
+            # Preserve the Letterboxd source title, rather than replacing it with TMDB's.
+            entry.update({key: value for key, value in match.items() if key != "title"})
+            if deep_meta.get("tmdb_type") == "tv" or entry.get("status") == "tv_title":
+                entry.update(
+                    tmdb_id=None,
+                    tmdb_type="tv",
+                    status="tv_title",
+                    reason="TMDB identifies this entry as television.",
+                )
+            elif deep_meta.get("tmdb_id") and not entry.get("tmdb_id"):
+                entry.update(
+                    tmdb_id=deep_meta["tmdb_id"],
+                    tmdb_type="movie",
+                    status="matched",
+                    match_tier="inline",
+                    reason=None,
+                )
+        except TMDBError as exc:
+            logger.warning("TMDB matching failed for %s: %s", entry["slug"], exc)
+            entry.update(tmdb_id=None, status="unmatched", reason=str(exc), match_tier=None)
+    else:
+        entry.update(status="unmatched", reason="TMDB API key is not configured.", match_tier=None)
 
 
 def _detect_total_films(soup: BeautifulSoup) -> int | None:

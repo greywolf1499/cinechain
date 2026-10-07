@@ -214,6 +214,10 @@ class TMDBClient:
         """Raw TMDB person search (actors, directors... ranked by TMDB's popularity)."""
         return await self._get("/search/person", params={"query": query, "page": page})
 
+    async def find_by_imdb_id(self, imdb_id: str) -> dict[str, Any]:
+        """External-id lookup through the same paced, retrying request path."""
+        return await self._get(f"/find/{imdb_id}", params={"external_source": "imdb_id"})
+
     async def get_person(self, person_id: int) -> dict[str, Any]:
         """Raw `/person/{id}` details (name, birthday, profile)."""
         return await self._get(f"/person/{person_id}")

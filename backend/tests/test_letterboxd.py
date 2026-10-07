@@ -189,12 +189,12 @@ def test_resolve_tmdb_multipass_falls_back_to_title_only():
     assert tmdb_id["tmdb_id"] == 11
 
 
-def test_resolve_tmdb_multipass_returns_none_when_nothing_matches():
+def test_resolve_tmdb_multipass_records_unmatched_when_nothing_matches():
     session = _FakeTmdbSession([[], [], [], []])
     tmdb_id = letterboxd.resolve_tmdb_multipass(
         session, "Totally Obscure Film", 2020, [], "fake-api-key", "totally-obscure-film-2020"
     )
-    assert tmdb_id is None
+    assert tmdb_id["tmdb_id"] is None and tmdb_id["status"] == "unmatched"
 
 
 def test_resolve_tmdb_multipass_rejects_low_similarity_titles():
@@ -204,7 +204,7 @@ def test_resolve_tmdb_multipass_rejects_low_similarity_titles():
     tmdb_id = letterboxd.resolve_tmdb_multipass(
         session, "Parasite", 2019, [], "fake-api-key", "parasite-2019"
     )
-    assert tmdb_id is None
+    assert tmdb_id["tmdb_id"] is None and tmdb_id["status"] == "unmatched"
 
 
 # ---------------------------------------------------------
@@ -254,7 +254,7 @@ def test_scrape_letterboxd_list_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(
         letterboxd,
         "resolve_tmdb_multipass",
-        lambda client, title, year, directors, api_key, slug=None: {
+        lambda client, title, year, directors, api_key, slug=None, **kwargs: {
             "tmdb_id": tmdb_ids_by_slug.get(slug),
             "tmdb_type": "movie",
         },
@@ -400,7 +400,7 @@ PAGE_2_HTML = """
 
 
 def _resolver_by_slug(ids: dict[str, int]):
-    return lambda client, title, year, directors, api_key, slug=None: {
+    return lambda client, title, year, directors, api_key, slug=None, **kwargs: {
         "tmdb_id": ids.get(slug),
         "tmdb_type": "movie",
         "original_language": "en",
@@ -512,6 +512,69 @@ def test_resolve_tmdb_multipass_uses_directors_to_break_ties(monkeypatch):
     )
 
     assert match is not None and match["tmdb_id"] == 2
+
+
+def test_enrichment_fetches_imdb_lazily_and_preserves_source_title(monkeypatch):
+    visits = []
+
+    def deep(*args, **kwargs):
+        visits.append(args[1])
+        return {"imdb_id": "tt1234567"}
+
+    monkeypatch.setattr(letterboxd, "extract_deep_metadata", deep)
+
+    class Session:
+        def get(self, url, params=None, headers=None, timeout=None):
+            if "/find/" in url:
+                assert params["external_source"] == "imdb_id"
+                return _FakeResponse(200, {"movie_results": [{"id": 42, "title": "TMDB title"}]})
+            if params["query"] == "Known":
+                return _FakeResponse(
+                    200, {"results": [{"id": 1, "title": "Known", "release_date": "2000-01-01"}]}
+                )
+            return _FakeResponse(200, {"results": []})
+
+    known = {"title": "Known", "year": 2000, "slug": "known"}
+    letterboxd.enrich_entry(Session(), known, False, "key", False)
+    assert known["match_tier"] == "exact" and not visits
+    missing = {"title": "Source title", "year": 2000, "slug": "source"}
+    letterboxd.enrich_entry(Session(), missing, False, "key", False)
+    assert visits == ["source"] and missing["imdb_id"] == "tt1234567"
+    assert missing["tmdb_id"] == 42 and missing["match_tier"] == "imdb"
+    assert missing["title"] == "Source title"
+
+
+def test_enrichment_records_provider_failure_and_missing_key(monkeypatch):
+    monkeypatch.setattr(letterboxd, "tmdb_get", lambda *args, **kwargs: None)
+    entry = {"title": "Film", "year": 2000, "slug": "film"}
+    letterboxd.enrich_entry(object(), entry, False, "key", False)
+    assert entry["status"] == "unmatched" and entry["tmdb_id"] is None
+    assert "failed after retries" in entry["reason"]
+    letterboxd.enrich_entry(object(), entry, False, None, False)
+    assert "not configured" in entry["reason"]
+
+
+def test_inline_and_lazily_discovered_tv_entries_never_match_movies(monkeypatch):
+    html = """<ul class="poster-list"><li class="poster-container">
+      <div class="film-poster" data-film-slug="series" data-tmdb-id="99"
+           data-tmdb-type="tv"><img alt="Series (2000)"></div></li></ul>"""
+    entry = letterboxd.parse_grid_entries(BeautifulSoup(html, "html.parser"))[0]
+    letterboxd.enrich_entry(object(), entry, False, "key", False)
+    assert entry["status"] == "tv_title" and entry["tmdb_id"] is None
+    monkeypatch.setattr(letterboxd, "tmdb_get", lambda *args, **kwargs: {"results": []})
+    monkeypatch.setattr(
+        letterboxd,
+        "extract_deep_metadata",
+        lambda *args, **kwargs: {
+            "tmdb_id": 99,
+            "tmdb_type": "tv",
+            "imdb_id": "tt1234567",
+        },
+    )
+    lazy = {"title": "Series", "year": 2000, "slug": "series"}
+    letterboxd.enrich_entry(object(), lazy, False, "key", False)
+    assert lazy["status"] == "tv_title" and lazy["tmdb_id"] is None
+    assert "television" in lazy["reason"]
 
 
 def test_extract_deep_metadata_reads_tmdb_and_imdb_ids(tmp_path, monkeypatch):

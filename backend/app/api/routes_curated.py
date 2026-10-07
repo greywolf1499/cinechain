@@ -34,15 +34,17 @@ from app.models.cache import CachedMovie
 from app.models.curated import (
     CanonMovieBadge,
     CuratedList,
+    CuratedListEntry,
     CuratedSourceAccount,
+    EntryStatus,
     LetterboxdWatchlist,
 )
 from app.models.run import RunStep
 from app.models.system import SystemTask
 from app.models.user import User
-from app.services import image_cache, letterboxd, settings_repo, task_runner
+from app.services import cache_repo, image_cache, letterboxd, settings_repo, task_runner
 from app.services.bridge_paths import parse_countries
-from app.services.tmdb import TMDBClient
+from app.services.tmdb import TMDBClient, TMDBNotFoundError
 from app.utils.ids import utcnow
 
 logger = logging.getLogger(__name__)
@@ -262,6 +264,10 @@ class CuratedListOut(BaseModel):
     account_display_name: str | None = None
     # Films from this list already watched in any run (the "popularity" sort).
     watched_count: int = 0
+    matched: int = 0
+    unmatched: int = 0
+    tv_titles: int = 0
+    ambiguous: int = 0
 
     @classmethod
     def from_model(cls, row: CuratedList) -> CuratedListOut:
@@ -278,6 +284,7 @@ class CuratedListOut(BaseModel):
             badge_color=row.badge_color,
             is_ranked=row.is_ranked,
             total_items=row.total_items,
+            matched=row.total_items,
             is_enabled=row.is_enabled,
             film_count=row.film_count,
             description=row.description,
@@ -321,12 +328,12 @@ def list_curated_lists(
     ]
 
     results = [
-        CuratedListOut.from_model(by_preset[preset_key])
+        _list_out(session, by_preset[preset_key])
         if preset_key in by_preset
         else CuratedListOut.from_preset(preset_key, preset)
         for preset_key, preset in letterboxd.PRESETS.items()
     ]
-    results.extend(CuratedListOut.from_model(row) for row in other_rows)
+    results.extend(_list_out(session, row) for row in other_rows)
     return results
 
 
@@ -414,18 +421,73 @@ def _badge_label(curated_list: CuratedList, rank: int | None) -> str:
 def _persist_sync_result(
     session: Session, curated_list: CuratedList, result: dict
 ) -> dict[str, int]:
-    """Replaces the list's badges in a single transaction: surviving badges are updated, the
-    ones no longer on the list are deleted and the list row is stamped, all committed once. A
-    failed scrape never reaches this function, so the previous snapshot survives untouched."""
+    """Replace source outcomes and movie badges together; keep manual links by source slug."""
     films = result["films"]
-    tv_titles = sum(1 for film in films if film.get("tmdb_type") == "tv")
+    previous = session.exec(
+        select(CuratedListEntry).where(CuratedListEntry.list_id == curated_list.id)
+    ).all()
+    by_position = {entry.position: entry for entry in previous}
+    manual = {
+        entry.slug: entry.tmdb_id
+        for entry in previous
+        if entry.slug and entry.match_tier == "manual"
+    }
+    counts = {"matched": 0, "unmatched": 0, "tv_titles": 0, "ambiguous": 0}
+    attempted_at = utcnow()
     wanted: dict[int, int | None] = {}
-    for film in films:
-        # A `tv` TMDB id is a series id, never a movie id: it must not become a movie badge.
-        if not film.get("tmdb_id") or film.get("tmdb_type") == "tv":
-            continue
-        wanted.setdefault(film["tmdb_id"], film.get("rank") if result["is_ranked"] else None)
+    for position, film in enumerate(films, start=1):
+        slug = str(film.get("slug") or "")
+        entry = by_position.pop(position, None) or CuratedListEntry(
+            list_id=curated_list.id,
+            position=position,
+            slug=slug,
+            title=str(film.get("title") or slug or "Untitled"),
+        )
+        entry.slug = slug
+        entry.title = str(film.get("title") or slug or "Untitled")
+        entry.year = film.get("year")
+        entry.imdb_id = film.get("imdb_id")
+        entry.tmdb_id = film.get("tmdb_id")
+        entry.match_tier = film.get("match_tier") or ("inline" if entry.tmdb_id else None)
+        entry.status = film.get("status") or ("matched" if entry.tmdb_id else "unmatched")
+        entry.reason = film.get("reason")
+        entry.attempted_at = attempted_at
+        if film.get("tmdb_type") == "tv" or entry.status == "tv_title":
+            entry.tmdb_id = None
+            entry.status = "tv_title"
+            entry.reason = entry.reason or "TMDB identifies this entry as television."
+        if slug in manual and manual[slug] is not None:
+            entry.tmdb_id = manual[slug]
+            entry.match_tier = "manual"
+            entry.status = "matched"
+            entry.reason = None
+        if entry.status == "matched" and not entry.tmdb_id:
+            entry.status = "unmatched"
+            entry.reason = "No TMDB movie id was returned."
+        if entry.status != "matched":
+            entry.tmdb_id = None
+        counts["tv_titles" if entry.status == "tv_title" else entry.status] += 1
+        session.add(entry)
+        if entry.tmdb_id:
+            wanted.setdefault(entry.tmdb_id, position if result["is_ranked"] else None)
+    for removed in by_position.values():
+        session.delete(removed)
 
+    _replace_badges(session, curated_list, wanted)
+    curated_list.is_ranked = result["is_ranked"]
+    curated_list.total_items = len(wanted)
+    curated_list.film_count = len(films)
+    curated_list.is_enabled = True
+    curated_list.last_synced_at = attempted_at
+    curated_list.last_sync_error = None
+    session.add(curated_list)
+    session.commit()
+    return {**counts, "total": len(films)}
+
+
+def _replace_badges(
+    session: Session, curated_list: CuratedList, wanted: dict[int, int | None]
+) -> None:
     kept: set[int] = set()
     for badge in session.exec(
         select(CanonMovieBadge).where(CanonMovieBadge.curated_list_id == curated_list.id)
@@ -448,15 +510,6 @@ def _persist_sync_result(
                 rank=rank,
             )
         )
-
-    curated_list.is_ranked = result["is_ranked"]
-    curated_list.total_items = len(wanted)
-    curated_list.is_enabled = True
-    curated_list.last_synced_at = utcnow()
-    curated_list.last_sync_error = None
-    session.add(curated_list)
-    session.commit()
-    return {"matched": len(wanted), "total": len(films), "tv_titles": tv_titles}
 
 
 @router.post("/sync/{list_id}", status_code=status.HTTP_202_ACCEPTED, response_model=TaskOut)
@@ -498,6 +551,8 @@ def sync_curated_list(
             "matched": counts["matched"],
             "total_films": counts["total"],
             "tv_titles": counts["tv_titles"],
+            "unmatched": counts["unmatched"],
+            "ambiguous": counts["ambiguous"],
             "is_ranked": result["is_ranked"],
         }
 
@@ -712,6 +767,7 @@ def _find_list_by_url(session: Session, url: str) -> CuratedList | None:
 
 def _list_out(session: Session, row: CuratedList) -> CuratedListOut:
     out = CuratedListOut.from_model(row)
+    _entry_counts(session, [out])
     account = (
         session.get(CuratedSourceAccount, row.source_account_id) if row.source_account_id else None
     )
@@ -719,6 +775,105 @@ def _list_out(session: Session, row: CuratedList) -> CuratedListOut:
         out.account_username = account.username
         out.account_display_name = account.display_name
     return out
+
+
+def _entry_counts(session: Session, lists: list[CuratedListOut]) -> None:
+    if not lists:
+        return
+    by_id = {row.id: row for row in lists}
+    counts = session.exec(
+        select(CuratedListEntry.list_id, CuratedListEntry.status, func.count())
+        .where(col(CuratedListEntry.list_id).in_(by_id))
+        .group_by(CuratedListEntry.list_id, CuratedListEntry.status)
+    ).all()
+    for list_id in {item[0] for item in counts}:
+        by_id[list_id].matched = 0
+    for list_id, entry_status, count in counts:
+        setattr(by_id[list_id], "tv_titles" if entry_status == "tv_title" else entry_status, count)
+
+
+class ListEntryOut(BaseModel):
+    list_id: str
+    position: int
+    slug: str
+    title: str
+    year: int | None
+    imdb_id: str | None
+    tmdb_id: int | None
+    match_tier: str | None
+    status: EntryStatus
+    reason: str | None
+    attempted_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ManualMatchRequest(BaseModel):
+    tmdb_id: int = Field(gt=0)
+
+
+@router.get("/lists/{list_id}/entries", response_model=list[ListEntryOut])
+def list_entries(
+    list_id: str,
+    status: EntryStatus | None = None,
+    session: Session = Depends(get_session),
+    _admin: User = Depends(get_current_admin),
+) -> list[CuratedListEntry]:
+    if session.get(CuratedList, list_id) is None:
+        raise HTTPException(404, detail="Unknown curated list")
+    statement = select(CuratedListEntry).where(CuratedListEntry.list_id == list_id)
+    if status:
+        statement = statement.where(CuratedListEntry.status == status)
+    return list(session.exec(statement.order_by(col(CuratedListEntry.position))).all())
+
+
+@router.patch("/lists/{list_id}/entries/{position}", response_model=ListEntryOut)
+async def match_entry(
+    list_id: str,
+    position: int,
+    body: ManualMatchRequest,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    admin: User = Depends(get_current_admin),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> CuratedListEntry:
+    row = session.get(CuratedList, list_id)
+    entry = session.exec(
+        select(CuratedListEntry).where(
+            CuratedListEntry.list_id == list_id,
+            CuratedListEntry.position == position,
+        )
+    ).first()
+    if row is None or entry is None:
+        raise HTTPException(404, detail="List entry not found")
+    try:
+        await cache_repo.get_movie(session, tmdb, body.tmdb_id)
+    except TMDBNotFoundError as exc:
+        raise HTTPException(404, detail="TMDB movie not found") from exc
+    entry.tmdb_id = body.tmdb_id
+    entry.status = "matched"
+    entry.match_tier = "manual"
+    entry.reason = None
+    entry.attempted_at = utcnow()
+    session.add(entry)
+    entries = session.exec(
+        select(CuratedListEntry)
+        .where(
+            CuratedListEntry.list_id == list_id,
+        )
+        .order_by(col(CuratedListEntry.position))
+    ).all()
+    wanted: dict[int, int | None] = {}
+    for item in entries:
+        if item.status == "matched" and item.tmdb_id:
+            wanted.setdefault(item.tmdb_id, item.position if row.is_ranked else None)
+    _replace_badges(session, row, wanted)
+    row.total_items = len(wanted)
+    session.add(row)
+    session.commit()
+    session.refresh(entry)
+    _queue_canon_hydration(background_tasks, session, row, admin.id, tmdb)
+    return entry
 
 
 def _unwrap_proxy_url(url: str) -> str:
@@ -993,6 +1148,7 @@ def browse_curated_lists(
         out.account_username = username
         out.account_display_name = display_name
         items.append(out)
+    _entry_counts(session, items)
     return ListPage(
         items=items,
         total=int(total),

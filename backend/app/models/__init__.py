@@ -8,6 +8,7 @@ from app.models.cache import (
     CachedMovieCast,
     CachedMovieDirector,
 )
+from app.models.curated import CuratedListEntry
 from app.models.daily import DailyPuzzle, DailyPuzzleAttempt
 from app.models.run import Run, RunParticipant, RunStep
 from app.models.system import SystemSetting, SystemTask
@@ -22,6 +23,7 @@ __all__ = [
     "CachedMovie",
     "CachedMovieCast",
     "CachedMovieDirector",
+    "CuratedListEntry",
     "DailyPuzzle",
     "DailyPuzzleAttempt",
     "Run",

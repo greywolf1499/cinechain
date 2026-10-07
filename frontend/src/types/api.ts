@@ -1085,6 +1085,24 @@ export interface CuratedListSummary {
 	account_username: string | null;
 	account_display_name: string | null;
 	watched_count: number;
+	matched: number;
+	unmatched: number;
+	tv_titles: number;
+	ambiguous: number;
+}
+
+export interface CuratedListEntry {
+	list_id: string;
+	position: number;
+	slug: string;
+	title: string;
+	year: number | null;
+	imdb_id: string | null;
+	tmdb_id: number | null;
+	match_tier: string | null;
+	status: "matched" | "unmatched" | "tv_title" | "ambiguous";
+	reason: string | null;
+	attempted_at: string;
 }
 
 export interface Page<T> {

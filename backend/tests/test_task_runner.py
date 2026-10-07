@@ -389,7 +389,7 @@ def test_task_migration_preserves_rows_and_has_one_head(config_dir):
     backend = Path(__file__).resolve().parents[1]
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "migrations"))
-    assert ScriptDirectory.from_config(config).get_heads() == ["b3c4d5e6f7a8"]
+    assert len(ScriptDirectory.from_config(config).get_heads()) == 1
     command.upgrade(config, "a2b3c4d5e6f7")
     db = create_engine(get_settings().database_url)
     with db.begin() as connection:

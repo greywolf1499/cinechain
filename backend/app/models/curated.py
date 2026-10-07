@@ -2,7 +2,9 @@
 per-user Letterboxd watchlist sync."""
 
 from datetime import datetime
+from typing import Literal
 
+from sqlalchemy import CheckConstraint, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from app.utils.ids import new_id, utcnow
@@ -69,6 +71,35 @@ class CanonMovieBadge(SQLModel, table=True):
     movie_id: int = Field(index=True)  # TMDB movie id
     badge_label: str
     rank: int | None = None
+
+
+EntryStatus = Literal["matched", "unmatched", "tv_title", "ambiguous"]
+
+
+class CuratedListEntry(SQLModel, table=True):
+    """The source snapshot, including titles that could not become movie badges."""
+
+    __tablename__ = "curated_list_entries"
+    __table_args__ = (
+        UniqueConstraint("list_id", "position", name="uq_curated_entry_position"),
+        CheckConstraint(
+            "status IN ('matched', 'unmatched', 'tv_title', 'ambiguous')",
+            name="ck_curated_entry_status",
+        ),
+    )
+
+    id: str = Field(default_factory=new_id, primary_key=True)
+    list_id: str = Field(foreign_key="curated_lists.id", index=True)
+    position: int
+    slug: str
+    title: str
+    year: int | None = None
+    imdb_id: str | None = None
+    tmdb_id: int | None = None
+    match_tier: str | None = None
+    status: str = "unmatched"
+    reason: str | None = None
+    attempted_at: datetime = Field(default_factory=utcnow)
 
 
 class LetterboxdWatchlist(SQLModel, table=True):

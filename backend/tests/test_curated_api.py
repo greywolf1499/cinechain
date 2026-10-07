@@ -17,7 +17,7 @@ from app.db import get_session
 from app.engines.regional_deep_dive import RegionalDeepDiveEngine
 from app.main import app
 from app.models.cache import CachedMovie
-from app.models.curated import CanonMovieBadge, CuratedList
+from app.models.curated import CanonMovieBadge, CuratedList, CuratedListEntry
 from app.models.system import SystemTask
 from app.models.user import User
 from app.services import letterboxd
@@ -345,6 +345,8 @@ def test_sync_preset_persists_badges_and_updates_list_metadata(client, monkeypat
         "matched": 2,
         "total_films": 2,
         "tv_titles": 0,
+        "unmatched": 0,
+        "ambiguous": 0,
         "is_ranked": True,
     }
     assert task["progress_data"]["progress"]["stage"] == "page_done"
@@ -1178,6 +1180,8 @@ def test_tv_entries_are_counted_but_never_become_movie_badges(client, monkeypatc
         "matched": 1,
         "total_films": 2,
         "tv_titles": 1,
+        "unmatched": 0,
+        "ambiguous": 0,
         "is_ranked": True,
     }
     with Session(client.db_engine) as session:
@@ -1208,3 +1212,223 @@ def test_a_failure_after_the_scrape_keeps_the_previous_badges(client, monkeypatc
         assert sorted(badge.movie_id for badge in badges) == [10543, 496243]
         row = session.exec(select(CuratedList).where(CuratedList.preset_key is not None)).first()
         assert row.total_items == 2
+
+
+def _sync_review_fixture(client, monkeypatch):
+    films = [
+        {
+            "title": "Matched",
+            "year": 2000,
+            "slug": "matched",
+            "tmdb_id": 1,
+            "match_tier": "exact",
+            "status": "matched",
+        },
+        {
+            "title": "Missing",
+            "year": 2001,
+            "slug": "missing",
+            "tmdb_id": None,
+            "status": "unmatched",
+            "reason": "No movie found.",
+            "imdb_id": "tt1234567",
+        },
+        {"title": "TV", "slug": "tv", "tmdb_id": 3, "tmdb_type": "tv"},
+        {
+            "title": "Ambiguous",
+            "slug": "ambiguous",
+            "status": "ambiguous",
+            "reason": "Multiple movies.",
+        },
+    ]
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(films))
+    result = _run_task(client, "/api/curated/sync/sight-and-sound-2022")
+    with Session(client.db_engine) as session:
+        list_id = (
+            session.exec(
+                select(CuratedList).where(CuratedList.preset_key == "sight-and-sound-2022")
+            )
+            .one()
+            .id
+        )
+    return list_id, films, result
+
+
+def test_entries_and_exact_stats_are_persisted_and_filterable(client, monkeypatch):
+    _register_and_login(client)
+    list_id, _, task = _sync_review_fixture(client, monkeypatch)
+    assert task["progress_data"]["result"] == {
+        "matched": 1,
+        "unmatched": 1,
+        "tv_titles": 1,
+        "ambiguous": 1,
+        "total_films": 4,
+        "is_ranked": True,
+    }
+    entries = client.get(f"/api/curated/lists/{list_id}/entries").json()
+    assert [entry["position"] for entry in entries] == [1, 2, 3, 4]
+    assert entries[1]["imdb_id"] == "tt1234567"
+    assert entries[2]["tmdb_id"] is None and entries[2]["status"] == "tv_title"
+    assert all(entry["attempted_at"] for entry in entries)
+    missing = client.get(f"/api/curated/lists/{list_id}/entries?status=unmatched").json()
+    assert [entry["title"] for entry in missing] == ["Missing"]
+    assert client.get(f"/api/curated/lists/{list_id}/entries?status=bogus").status_code == 422
+    assert client.get("/api/curated/lists/missing/entries").status_code == 404
+    for path in ("/api/curated/lists", "/api/curated/lists/browse"):
+        data = client.get(path).json()
+        rows = data if isinstance(data, list) else data["items"]
+        row = next(row for row in rows if row["id"] == list_id)
+        assert (row["matched"], row["unmatched"], row["tv_titles"], row["ambiguous"]) == (
+            1,
+            1,
+            1,
+            1,
+        )
+
+
+def test_manual_match_survives_reorder_by_slug_and_replaces_badges(client, monkeypatch):
+    _register_and_login(client)
+    list_id, films, _ = _sync_review_fixture(client, monkeypatch)
+    response = client.patch(f"/api/curated/lists/{list_id}/entries/2", json={"tmdb_id": 42})
+    assert response.status_code == 200, response.text
+    assert response.json()["match_tier"] == "manual" and response.json()["tmdb_id"] == 42
+    with Session(client.db_engine) as session:
+        badges = session.exec(
+            select(CanonMovieBadge).where(CanonMovieBadge.curated_list_id == list_id)
+        ).all()
+        assert sorted((badge.movie_id, badge.rank) for badge in badges) == [(1, 1), (42, 2)]
+    reordered = [films[1], films[0], films[2], films[3]]
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(reordered))
+    task = _run_task(client, f"/api/curated/sync/{list_id}")
+    assert task["progress_data"]["result"]["matched"] == 2
+    entries = client.get(f"/api/curated/lists/{list_id}/entries").json()
+    assert entries[0]["slug"] == "missing" and entries[0]["match_tier"] == "manual"
+    assert entries[0]["tmdb_id"] == 42
+    # A changed slug at the same position must not inherit the previous manual match.
+    reordered[0] = {**reordered[0], "slug": "different-film"}
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape(reordered))
+    _run_task(client, f"/api/curated/sync/{list_id}")
+    assert client.get(f"/api/curated/lists/{list_id}/entries").json()[0]["tmdb_id"] is None
+    with Session(client.db_engine) as session:
+        assert [badge.movie_id for badge in session.exec(select(CanonMovieBadge)).all()] == [1]
+
+
+def test_review_endpoints_are_admin_only_and_validate_manual_movie(client, monkeypatch):
+    _register_and_login(client)
+    list_id, _, _ = _sync_review_fixture(client, monkeypatch)
+    base = f"/api/curated/lists/{list_id}/entries"
+    assert client.patch(f"{base}/99", json={"tmdb_id": 42}).status_code == 404
+    assert client.patch(f"{base}/2", json={"tmdb_id": 0}).status_code == 422
+    monkeypatch.setattr(
+        TMDBClient, "get_movie", AsyncMock(side_effect=TMDBNotFoundError("missing"))
+    )
+    assert client.patch(f"{base}/2", json={"tmdb_id": 404}).status_code == 404
+    assert client.get(base).json()[1]["status"] == "unmatched"
+    _register_and_login(client, "bob")
+    assert client.get(base).status_code == 403
+    assert client.patch(f"{base}/2", json={"tmdb_id": 42}).status_code == 403
+    client.post("/api/auth/logout")
+    assert client.get(base).status_code == 401
+    assert client.patch(f"{base}/2", json={"tmdb_id": 42}).status_code == 401
+
+
+def test_commit_failure_rolls_back_entries_and_badges_together(client, monkeypatch):
+    _register_and_login(client)
+    list_id, _, _ = _sync_review_fixture(client, monkeypatch)
+    with Session(client.db_engine) as session:
+        row = session.get(CuratedList, list_id)
+        monkeypatch.setattr(
+            session, "commit", lambda: (_ for _ in ()).throw(RuntimeError("disk full"))
+        )
+        with pytest.raises(RuntimeError, match="disk full"):
+            routes_curated._persist_sync_result(
+                session,
+                row,
+                {
+                    "is_ranked": False,
+                    "films": [{"title": "New", "slug": "new", "tmdb_id": 55}],
+                },
+            )
+        session.rollback()
+    with Session(client.db_engine) as session:
+        entries = session.exec(
+            select(CuratedListEntry)
+            .where(CuratedListEntry.list_id == list_id)
+            .order_by(CuratedListEntry.position)
+        ).all()
+        assert [entry.slug for entry in entries] == ["matched", "missing", "tv", "ambiguous"]
+        assert [badge.movie_id for badge in session.exec(select(CanonMovieBadge)).all()] == [1]
+        assert session.get(CuratedList, list_id).film_count == 4
+
+
+def test_entry_positions_are_unique_and_duplicate_movies_have_one_badge(client, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    _register_and_login(client)
+    list_id, films, _ = _sync_review_fixture(client, monkeypatch)
+    monkeypatch.setattr(letterboxd, "scrape_letterboxd_list", _fake_scrape([films[0], films[0]]))
+    task = _run_task(client, f"/api/curated/sync/{list_id}")
+    assert task["progress_data"]["result"]["matched"] == 2
+    with Session(client.db_engine) as session:
+        assert len(session.exec(select(CanonMovieBadge)).all()) == 1
+        assert len(session.exec(select(CuratedListEntry)).all()) == 2
+        session.add(
+            CuratedListEntry(list_id=list_id, position=1, slug="duplicate", title="Duplicate")
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
+def test_entry_migration_preserves_legacy_badges_and_has_one_head(config_dir):
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import inspect, text
+
+    from app.config import get_settings
+
+    backend = Path(__file__).resolve().parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "migrations"))
+    assert ScriptDirectory.from_config(config).get_heads() == ["c4d5e6f7a8b9"]
+    command.upgrade(config, "b3c4d5e6f7a8")
+    db = create_engine(get_settings().database_url)
+    with db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO curated_lists (id, title, url, badge_prefix, badge_color, is_ranked, "
+                "total_items, is_enabled, film_count, preview_posters, created_at) "
+                "VALUES ('old', 'Old', 'https://letterboxd.com/test/list/old/', 'OLD', '#ffffff', "
+                "0, 1, 1, 1, '[]', '2026-01-01')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO canon_movie_badges (id, curated_list_id, movie_id, badge_label) "
+                "VALUES ('badge', 'old', 42, 'OLD')"
+            )
+        )
+    command.upgrade(config, "head")
+    with Session(db) as session:
+        assert session.get(CanonMovieBadge, "badge").movie_id == 42
+        assert not session.exec(select(CuratedListEntry)).all()
+        session.add(
+            CuratedListEntry(
+                list_id="old",
+                position=1,
+                slug="film",
+                title="Film",
+                tmdb_id=42,
+                status="matched",
+                match_tier="manual",
+            )
+        )
+        session.commit()
+        assert session.exec(select(CuratedListEntry)).one().tmdb_id == 42
+    command.downgrade(config, "b3c4d5e6f7a8")
+    assert "curated_list_entries" not in inspect(db).get_table_names()
+    with db.begin() as connection:
+        assert connection.execute(text("SELECT movie_id FROM canon_movie_badges")).scalar() == 42
+    db.dispose()

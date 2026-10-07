@@ -25,7 +25,8 @@ import { cn } from "../lib/cn";
 import { isAntiCheatLocked } from "../lib/antiCheat";
 import { isScenicRoute, usedIntermediateIds } from "../lib/bridge";
 import { connectionMetadata } from "../lib/connections";
-import { useCreateStep, useEngines, useRun, useRuns } from "../lib/queries";
+import { useEngines, useRun, useRuns } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import type {
   BridgeResult,
   BridgeRoute,
@@ -111,7 +112,7 @@ export default function BridgePage() {
   const { data: engines } = useEngines();
   const [selectedRunId, setSelectedRunId] = useState("");
   const { data: selectedRun } = useRun(selectedRunId || undefined);
-  const createStep = useCreateStep(selectedRunId);
+  const createStep = useLogFilm(selectedRunId);
   const runIdFromQuery = searchParams.get("run_id");
   // A run-scoped solve (?run_id=) follows that run's own rules: Chrono Climb, World
   // Passport and Auteur Relay constrain the search. Engines without a Bridge Solver

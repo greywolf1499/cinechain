@@ -8,7 +8,8 @@ import SplitMeter from "./SplitMeter";
 import MovieSearchAutocomplete from "./MovieSearchAutocomplete";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
-import { useCreateStep, useSplitPool } from "../lib/queries";
+import { useSplitPool } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import {
   SPLIT_TEAMS,
   settlementOf,
@@ -35,7 +36,7 @@ export default function SplitBoard({
   const [checking, setChecking] = useState(false);
   const [pickerVersion, setPickerVersion] = useState(0);
   const request = useRef(0);
-  const createStep = useCreateStep(run.id);
+  const createStep = useLogFilm(run.id);
   const queryClient = useQueryClient();
   const pool = useSplitPool(run.id, scan);
   const scores = run.rules_config.split_scores ?? { team_a: 0, team_b: 0 };
@@ -74,10 +75,7 @@ export default function SplitBoard({
   async function logNoContest() {
     if (!picked) return;
     try {
-      await createStep.mutateAsync({
-        movie_id: picked.tmdb_id, status: "watched",
-        watched_at: new Date().toISOString(), no_contest: true,
-      });
+      await createStep.logWatched(picked.tmdb_id, { no_contest: true });
       setPicked(null);
       setPickerVersion((version) => version + 1);
       setReason(null);
@@ -142,7 +140,7 @@ export default function SplitBoard({
                   <p role="status">{reason ?? "No qualifying scores available."}</p>
                   <div className="mt-2 flex gap-3">
                     <button type="button" disabled={createStep.isPending} onClick={() => void checkRatings(picked)} className="underline">Retry ratings</button>
-                    <button type="button" disabled={createStep.isPending} onClick={() => void logNoContest()} className="underline">{createStep.isPending ? "Logging..." : "Log as no-contest"}</button>
+                    <button type="button" disabled={createStep.isPending} onClick={() => void logNoContest()} className="underline">{createStep.isPending ? "Logging..." : "Log watched · no-contest"}</button>
                   </div>
                 </>
               )}
@@ -186,10 +184,17 @@ export default function SplitBoard({
                   </div>
                   <button
                     type="button"
+                    disabled={createStep.isPending}
+                    onClick={() => void createStep.queue(candidate.movie_id).catch((error: Error) => setReason(error.message))}
+                    className="shrink-0 rounded-md border border-app-border px-2.5 py-1.5 text-[11px] text-zinc-300 disabled:opacity-50"
+                  >Queue</button>
+                  <button
+                    type="button"
+                    disabled={createStep.isPending}
                     onClick={() => setFilm(candidate)}
                     className="shrink-0 rounded-md bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-zinc-950 hover:bg-accent-strong"
                   >
-                    Log Movie
+                    Log watched
                   </button>
                   <button
                     type="button"

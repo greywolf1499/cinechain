@@ -147,7 +147,7 @@ function TunnelCard({
           <span className={cn("rounded-full px-1.5 py-0.5 text-[9px] font-semibold", style.chip)}>Seed</span>
         )}
         {step.status === "planned" && (
-          <span className="rounded-full bg-app-surface-hover px-1.5 py-0.5 text-[9px] text-zinc-400">Planned</span>
+          <span className="rounded-full bg-app-surface-hover px-1.5 py-0.5 text-[9px] text-zinc-400">Up next</span>
         )}
         {collided && (
           <span className="rounded-full bg-fuchsia-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-fuchsia-300">

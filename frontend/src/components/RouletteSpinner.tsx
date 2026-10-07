@@ -7,7 +7,8 @@ import MoviePoster from "./MoviePoster";
 import RouletteFilters, { EMPTY_FILTERS, filtersToParams, type RouletteFilterState } from "./RouletteFilters";
 import { ApiError, api } from "../lib/api";
 import { cn } from "../lib/cn";
-import { useCreateStep, useLlmStatus } from "../lib/queries";
+import { useLlmStatus } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import type { GenreOut, RouletteMovie, RouletteSpinResult, TeaserResult } from "../types/api";
 
 const SPIN_MIN_MS = 1400; // the suspense is the point - never reveal instantly
@@ -18,7 +19,7 @@ const BLIND_DRAFT_SIZE = 3;
 
 /** Movie Night Roulette: filter, spin, watch the pick come into focus, then log it. */
 export default function RouletteSpinner({ runId }: { runId: string }) {
-  const createStep = useCreateStep(runId);
+  const createStep = useLogFilm(runId);
   const { data: genres } = useQuery({
     queryKey: ["movies", "genres"],
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
@@ -108,11 +109,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
     if (!movie) return;
     setMessage(null);
     try {
-      await createStep.mutateAsync({
-        movie_id: movie.tmdb_id,
-        status: watched ? "watched" : "planned",
-        watched_at: watched ? new Date().toISOString() : null,
-      });
+      await (watched ? createStep.logWatched(movie.tmdb_id) : createStep.queue(movie.tmdb_id));
       setPick(null);
       setDraft([]);
       setPhase("idle");
@@ -226,9 +223,9 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
           key={drawId}
           movies={draft}
           poolSize={poolSize}
-          logging={createStep.isPending}
+          runId={runId}
           teasers={teasers}
-          onLog={(movie, watched) => log(movie, watched)}
+          onLogged={() => { setPick(null); setDraft([]); setPhase("idle"); }}
         />
       )}
 
@@ -279,7 +276,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
               className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
             >
               {createStep.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-              Log as Watched
+              Log watched
             </button>
             <button
               type="button"
@@ -288,7 +285,7 @@ export default function RouletteSpinner({ runId }: { runId: string }) {
               className="flex items-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:opacity-60"
             >
               <Ticket className="h-3.5 w-3.5" />
-              Plan for Later
+              Queue
             </button>
           </div>
         </div>

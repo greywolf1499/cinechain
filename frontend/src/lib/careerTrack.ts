@@ -54,7 +54,7 @@ export function trackStatuses(
     const step = steps.find((s) => s.movie_id === film.movie_id);
     if (step) {
       statuses.set(film.movie_id, step.status === "watched" ? "watched" : "planned");
-      furthest = Math.max(furthest, index);
+      if (step.status === "watched") furthest = Math.max(furthest, index);
     }
   });
   const nextIndex = Math.min(furthest + 1, track.length - 1);

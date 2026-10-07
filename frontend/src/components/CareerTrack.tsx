@@ -5,7 +5,8 @@ import QueuedFilmActions from "./QueuedFilmActions";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { MILESTONES, careerGroup, decadeOf, marathonPacing, trackStatuses } from "../lib/careerTrack";
-import { useCreateStep, useUpdateRunRules, useWrapMarathon } from "../lib/queries";
+import { useUpdateRunRules, useWrapMarathon } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import Popover from "./ui/Popover";
 import type { AuteurFilm, CareerContext, CareerFilm, CareerMilestone, RunDetail } from "../types/api";
 
@@ -155,7 +156,7 @@ export function QueuedFilm({
   if (locked || step === undefined) {
     return (
       <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-sky-300">
-        <Check className="h-3.5 w-3.5" /> Queued
+        <Check className="h-3.5 w-3.5" /> Up next
       </span>
     );
   }
@@ -170,28 +171,12 @@ export default function CareerTrack({ run }: { run: RunDetail }) {
   const track = (run.rules_config.filmography ?? []) as CareerFilm[];
   const actorName = run.rules_config.actor?.name ?? "the actor";
   const locked = run.status !== "active";
-  const createStep = useCreateStep(run.id);
-  const [pendingId, setPendingId] = useState<number | null>(null);
+  const logFilm = useLogFilm(run.id);
+  const pendingId = logFilm.pendingMovieId;
   const [message, setMessage] = useState<string | null>(null);
   const { statuses } = trackStatuses(track, run.steps);
   const watched = [...statuses.values()].filter((s) => s === "watched").length;
 
-  async function log(film: CareerFilm, watchedNow: boolean) {
-    setPendingId(film.movie_id);
-    setMessage(null);
-    try {
-      await createStep.mutateAsync({
-        movie_id: film.movie_id,
-        status: watchedNow ? "watched" : "planned",
-        watched_at: watchedNow ? new Date().toISOString() : null,
-        force: false,
-      });
-    } catch (err) {
-      setMessage(err instanceof ApiError ? err.message : "Could not log that film.");
-    } finally {
-      setPendingId(null);
-    }
-  }
 
   return (
     <section aria-label="Career progression track" className="flex flex-col gap-4">
@@ -264,7 +249,7 @@ export default function CareerTrack({ run }: { run: RunDetail }) {
                       <button
                         type="button"
                         disabled={pendingId !== null}
-                        onClick={() => void log(film, false)}
+                        onClick={() => void logFilm.queue(film.movie_id).catch((error: Error) => setMessage(error.message))}
                         className="rounded-md border border-app-border px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 hover:bg-app-surface-hover disabled:opacity-50"
                       >
                         Queue
@@ -272,11 +257,11 @@ export default function CareerTrack({ run }: { run: RunDetail }) {
                       <button
                         type="button"
                         disabled={pendingId !== null}
-                        onClick={() => void log(film, true)}
+                        onClick={() => void logFilm.logWatched(film.movie_id).catch((error: Error) => setMessage(error.message))}
                         className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-zinc-950 hover:bg-accent-strong disabled:opacity-50"
                       >
                         {pendingId === film.movie_id && <Loader2 className="h-3 w-3 animate-spin" />}
-                        Log Watched
+                        Log watched
                       </button>
                     </div>
                   )

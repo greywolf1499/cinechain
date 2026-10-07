@@ -3,9 +3,9 @@ import { Loader2 } from "lucide-react";
 import Modal from "./Modal";
 import SplitMeter from "./SplitMeter";
 import { ApiError } from "../lib/api";
-import { useCreateStep } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import { SPLIT_TEAMS, isValidHousehold, settlePoint, settlementOf } from "../lib/splitScore";
-import type { SplitCandidate } from "../types/api";
+import type { RunStep, SplitCandidate } from "../types/api";
 
 /** Log a split film: the household agrees one joint rating (1-100) and the closer side gets the
  * point (the server settles it; a tie goes to the audience). */
@@ -14,13 +14,15 @@ export default function HouseholdRatingModal({
   film,
   onClose,
   onRatingsFailed,
+  step,
 }: {
   runId: string;
   film: SplitCandidate | null;
   onClose: () => void;
   onRatingsFailed: (film: SplitCandidate, reason: string) => void;
+  step?: RunStep;
 }) {
-  const createStep = useCreateStep(runId);
+  const createStep = useLogFilm(runId);
   const [score, setScore] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [awarded, setAwarded] = useState<string | null>(null);
@@ -40,13 +42,10 @@ export default function HouseholdRatingModal({
     if (!film || !valid) return;
     setError(null);
     try {
-      const step = await createStep.mutateAsync({
-        movie_id: film.movie_id,
-        status: "watched",
-        watched_at: new Date().toISOString(),
-        household_score: rating,
-      });
-      const point = settlementOf(step)?.point_to ?? winner;
+      const logged = step
+        ? await createStep.markWatched(step, { household_score: rating })
+        : await createStep.logWatched(film.movie_id, { household_score: rating });
+      const point = settlementOf(logged)?.point_to ?? winner;
       setAwarded(point ? `Point to ${SPLIT_TEAMS[point].label}!` : "Logged.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not log that film.");
@@ -54,7 +53,7 @@ export default function HouseholdRatingModal({
   }
 
   return (
-    <Modal open={film !== null} onClose={close} title="Log Movie">
+    <Modal open={film !== null} onClose={close} title="Log watched">
       {film && (
         <div className="flex flex-col gap-4">
           <div>
@@ -103,7 +102,7 @@ export default function HouseholdRatingModal({
                 <div className="text-xs text-amber-300">
                   <p role="alert">{error}</p>
                   <button type="button" onClick={() => onRatingsFailed(film, error)} className="mt-2 underline">
-                    Retry ratings / Log as no-contest
+                    Retry ratings / Log watched · no-contest
                   </button>
                 </div>
               )}
@@ -122,7 +121,7 @@ export default function HouseholdRatingModal({
                   className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-accent-strong disabled:opacity-50"
                 >
                   {createStep.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
-                  Log Watched
+                  Log watched
                 </button>
               </div>
             </>

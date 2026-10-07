@@ -677,6 +677,8 @@ export function useMarkStepWatched(runId: string) {
 			stepId: string;
 			watched_at?: string | null;
 			user_notes?: string | null;
+			household_score?: number;
+			no_contest?: boolean;
 		}) => api.patch<RunStep>(`/runs/${runId}/steps/${stepId}/mark-watched`, { ...payload, ...actingFields(runId) }),
 		onSuccess: (step) => {
 			notifyTableLog(step);

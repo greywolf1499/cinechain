@@ -235,6 +235,26 @@ def test_logging_a_qualifying_film_completes_the_bounty(client, db_engine):
     assert rules["active_bounties"][:2] == ["time_capsule", "epic_odyssey"]
 
 
+@pytest.mark.parametrize("endpoint", ["mark-watched", ""])
+def test_slot_bounties_are_awarded_on_watch_not_queue(client, db_engine, endpoint):
+    run_id = make_run(client, "decade_sieve", target_decade=1990, bounty_board=True).json()["id"]
+    set_board(db_engine, run_id, ["short_king"])
+    with respx.mock:
+        mock_film(1, runtime=80, year=1999)
+        queued = log(client, run_id, 1, status="planned")
+        assert queued.status_code == 201, queued.text
+        assert not queued.json()["transition_metadata"]
+        assert rules_of(client, run_id)["completed_bounties"] == []
+        url = f"/api/runs/{run_id}/steps/{queued.json()['id']}" + (
+            f"/{endpoint}" if endpoint else ""
+        )
+        watched = client.patch(url, json={"watched_at": "2000-01-01T12:00:00Z"})
+    assert watched.status_code == 200, watched.text
+    assert watched.json()["transition_metadata"]["completed_bounty"] == "short_king"
+    assert watched.json()["transition_metadata"]["bounty_reward"] == "star"
+    assert rules_of(client, run_id)["completed_bounties"] == ["short_king"]
+
+
 def test_a_film_that_meets_no_bounty_changes_nothing(client, db_engine):
     run_id = make_run(client, bounty_board=True).json()["id"]
     set_board(db_engine, run_id, ["short_king", "time_capsule", "epic_odyssey"])
@@ -490,13 +510,88 @@ def test_only_split_films_can_be_logged(client, db_engine):
     assert unrated.status_code == 409 and "No Rotten Tomatoes" in unrated.json()["detail"]["reason"]
 
 
-def test_a_split_film_needs_a_watched_step_and_a_valid_household_score(client, db_engine):
+def test_a_watched_split_film_needs_a_valid_household_score(client, db_engine):
     seed_ratings(db_engine)
     run_id = make_split(client)
     assert log(client, run_id, 1).status_code == 422  # no rating
-    assert rate(client, run_id, 1, 85, status="planned").status_code == 422
     assert rate(client, run_id, 1, 0).status_code == 422
     assert rate(client, run_id, 1, 101).status_code == 422
+
+
+@pytest.mark.parametrize("endpoint", ["mark-watched", ""])
+@pytest.mark.parametrize("no_contest", [False, True])
+def test_split_queue_settles_only_on_watch(client, db_engine, endpoint, no_contest):
+    seed_ratings(db_engine)
+    run_id = make_split(client)
+    queued = log(client, run_id, 1, status="planned")
+    assert queued.status_code == 201, queued.text
+    step = queued.json()
+    assert step["watched_at"] is None
+    assert not step["transition_metadata"]
+    assert rules_of(client, run_id)["split_scores"] == {"team_a": 0, "team_b": 0}
+    url = f"/api/runs/{run_id}/steps/{step['id']}" + (f"/{endpoint}" if endpoint else "")
+    watched = {} if endpoint else {"watched_at": "2026-01-01T12:00:00Z"}
+    refused = client.patch(url, json=watched)
+    assert refused.status_code == 422, refused.text
+    for invalid_score in (0, 101):
+        assert (
+            client.patch(url, json={**watched, "household_score": invalid_score}).status_code == 422
+        )
+    assert client.get(f"/api/runs/{run_id}").json()["steps"][0]["status"] == "planned"
+    forged = {
+        "point_to": "team_b",
+        "critic_score": 0,
+        "household_score": 1,
+        "split_no_contest": True,
+    }
+    result = client.patch(
+        url,
+        json={
+            **watched,
+            "no_contest": no_contest,
+            "transition_metadata": forged,
+            **forged,
+            "household_score": 85,
+        },
+    )
+    assert result.status_code == 200, result.text
+    meta = result.json()["transition_metadata"]
+    assert result.json()["status"] == "watched"
+    if no_contest:
+        assert meta == {"split_no_contest": True}
+    else:
+        assert meta["point_to"] == "team_a"
+        assert meta["critic_score"] == 90 and meta["household_score"] == 85
+        assert "split_no_contest" not in meta
+    assert rules_of(client, run_id)["split_scores"] == {"team_a": int(not no_contest), "team_b": 0}
+    assert client.patch(url, json=watched).status_code == (409 if endpoint else 200)
+
+
+@pytest.mark.parametrize("endpoint", ["mark-watched", ""])
+def test_slot_play_order_follows_watching_not_queue_or_historical_date(client, db_engine, endpoint):
+    seed_ratings(db_engine)
+    run_id = make_split(client)
+    first = log(client, run_id, 1, status="planned").json()
+    second = log(client, run_id, 2, status="planned").json()
+    for step in (second, first):
+        url = f"/api/runs/{run_id}/steps/{step['id']}" + (f"/{endpoint}" if endpoint else "")
+        response = client.patch(
+            url, json={"household_score": 85, "watched_at": "2000-01-01T12:00:00Z"}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["watched_at"].startswith("2000-01-01")
+    steps = client.get(f"/api/runs/{run_id}").json()["steps"]
+    assert [step["id"] for step in steps] == [second["id"], first["id"]]
+    assert all(step["status"] == "watched" for step in steps)
+
+
+def test_slot_queue_can_unqueue_an_older_planned_film(client, db_engine):
+    seed_ratings(db_engine)
+    run_id = make_split(client)
+    first = log(client, run_id, 1, status="planned").json()
+    second = log(client, run_id, 2, status="planned").json()
+    assert client.delete(f"/api/runs/{run_id}/steps/{first['id']}").status_code == 204
+    assert [s["id"] for s in client.get(f"/api/runs/{run_id}").json()["steps"]] == [second["id"]]
 
 
 def test_a_client_cannot_forge_the_settlement(client, db_engine):

@@ -24,6 +24,7 @@ import {
   User,
 } from "lucide-react";
 import ChainTimeline from "../components/ChainTimeline";
+import UpNextShelf from "../components/UpNextShelf";
 import EditRulesModal from "../components/EditRulesModal";
 import ForkInTheRoadModal from "../components/ForkInTheRoadModal";
 import Modal from "../components/Modal";
@@ -168,7 +169,9 @@ export default function RunDetailPage() {
   const capabilities = (
     engine?.capabilities ?? (run.game_type === "cinechain" ? ["discover_candidates", "solve_bridge"] : [])
   ).filter((capability) => capability !== "solve_bridge" || castLinked);
-  const lastStep = run.steps[run.steps.length - 1];
+  const playSteps = engine?.queue_policy === "slot"
+    ? run.steps.filter((step) => step.status === "watched") : run.steps;
+  const lastStep = playSteps[playSteps.length - 1];
   const participantNames = run.participants
     .map((p) => users?.find((u) => u.id === p.user_id)?.display_name ?? p.user_id)
     .join(", ");
@@ -292,6 +295,7 @@ export default function RunDetailPage() {
       {!seat?.pending && <ForkOfferPanel run={run} users={users} frontier={lastStep} />}
       {run.game_type !== MEET_IN_THE_MIDDLE && <GoldenVetoBar run={run} users={users} />}
 
+      {engine && engine.queue_policy !== "none" && <UpNextShelf run={run} />}
       {run.game_type === MARCH_MADNESS && run.rules_config.bracket ? (
         <BracketView run={run} users={users} currentUserId={currentUser?.id} />
       ) : run.game_type === METHOD_ACTOR && run.rules_config.filmography ? (

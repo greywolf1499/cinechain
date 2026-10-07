@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import Modal from "./Modal";
-import { useMarkStepWatched } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 
 export default function MarkWatchedModal({
   open,
@@ -18,11 +18,10 @@ export default function MarkWatchedModal({
 }) {
   const [watchedDate, setWatchedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
-  const markWatched = useMarkStepWatched(runId);
+  const markWatched = useLogFilm(runId);
 
   async function handleSubmit() {
-    await markWatched.mutateAsync({
-      stepId,
+    await markWatched.markWatched({ id: stepId }, {
       watched_at: new Date(watchedDate).toISOString(),
       user_notes: notes.trim() || null,
     });
@@ -30,7 +29,7 @@ export default function MarkWatchedModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={`Mark "${movieTitle}" as watched`} widthClassName="max-w-sm">
+    <Modal open={open} onClose={onClose} title={`Log watched · ${movieTitle}`} widthClassName="max-w-sm">
       <div className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5 text-xs font-medium text-zinc-400">
           Watched on
@@ -59,8 +58,9 @@ export default function MarkWatchedModal({
           className="flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
         >
           {markWatched.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-          Mark as watched
+          Log watched
         </button>
+        {markWatched.isError && <p role="alert" className="text-xs text-red-300">{markWatched.error.message}</p>}
       </div>
     </Modal>
   );

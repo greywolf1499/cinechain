@@ -61,6 +61,7 @@ class BaseChallengeEngine(ABC):
     capabilities: ClassVar[list[str]]
     requires: ClassVar[list[str]] = []
     seed_policy: ClassVar[Literal["none", "free", "derived", "pair"]] = "free"
+    queue_policy: ClassVar[Literal["frontier", "slot", "none"]] = "frontier"
     discovery_filters: ClassVar[list[FilterSpec]] = []
     rule_fields: ClassVar[list[RuleField]] = [
         RuleField(

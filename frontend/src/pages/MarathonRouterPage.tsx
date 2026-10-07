@@ -490,7 +490,7 @@ function OptimizedSequence({
           className="flex items-center gap-2 rounded-md bg-accent px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
         >
           {queueing && <Loader2 className="h-4 w-4 animate-spin" />}
-          {"\u{1F37F}"} Queue as Challenge Run
+          {"\u{1F37F}"} Start a run from this
         </button>
       </div>
     </section>

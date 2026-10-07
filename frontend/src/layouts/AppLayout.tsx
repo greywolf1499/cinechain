@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Film, Wrench, BookUser, ListChecks, Users, Settings, LogOut, Menu, X } from "lucide-react";
 import { useAuthStore } from "../store/authStore";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
+import { FILM_TOAST_EVENT } from "../lib/useLogFilm";
+import Toast, { type ToastState } from "../components/Toast";
 
 const NAV_ITEMS = [
   { to: "/runs", label: "Runs", icon: Film },
@@ -19,6 +21,14 @@ export default function AppLayout() {
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  useEffect(() => {
+    const receive = (event: Event) => {
+      if (event instanceof CustomEvent) setToast(event.detail as ToastState);
+    };
+    window.addEventListener(FILM_TOAST_EVENT, receive);
+    return () => window.removeEventListener(FILM_TOAST_EVENT, receive);
+  }, []);
 
   async function handleLogout() {
     try {
@@ -118,7 +128,7 @@ export default function AppLayout() {
       <main className="mx-auto w-full max-w-6xl min-w-0 px-4 py-6">
         <Outlet />
       </main>
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
-

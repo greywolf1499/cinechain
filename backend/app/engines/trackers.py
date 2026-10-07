@@ -30,6 +30,7 @@ class TrackerEngine(BaseChallengeEngine):
     Solver - the Pick Next hub is replaced by the mode's own UI."""
 
     supports_json_rules = True
+    queue_policy = "slot"
     modifier_scopes = frozenset({"film", "sequence"})
     capabilities: ClassVar[list[str]] = ["validate_next_step", "compute_stats"]
 

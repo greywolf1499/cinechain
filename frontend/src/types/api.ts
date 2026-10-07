@@ -439,6 +439,7 @@ export interface EngineMeta {
 	requires?: string[];
 	unavailable_reason?: string | null;
 	seed_policy: "none" | "free" | "derived" | "pair";
+	queue_policy: "frontier" | "slot" | "none";
 	tagline?: string;
 	tags?: string[];
 	rulebook?: RuleSection;

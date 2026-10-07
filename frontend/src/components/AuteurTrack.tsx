@@ -3,12 +3,11 @@ import { Check } from "lucide-react";
 import LogFilmButtons from "./LogFilmButtons";
 import MarathonProgressBar from "./MarathonProgressBar";
 import MoviePoster from "./MoviePoster";
-import { ApiError } from "../lib/api";
 import { auteurProgress, formatRuntime } from "../lib/auteurTrack";
 import { marathonPacing, trackStatuses } from "../lib/careerTrack";
 import { CareerEraHeading, MarathonWrap, MilestoneBadge, MissingMilestones, QueuedFilm } from "./CareerTrack";
 import { cn } from "../lib/cn";
-import { useCreateStep } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import type { AuteurFilm, RunDetail } from "../types/api";
 
 /** The director's filmography in release order: year, poster and runtime per film, a progress
@@ -17,28 +16,12 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
   const films = (run.rules_config.filmography ?? []) as AuteurFilm[];
   const directorName = run.rules_config.director?.name ?? "the director";
   const locked = run.status !== "active";
-  const createStep = useCreateStep(run.id);
-  const [pendingId, setPendingId] = useState<number | null>(null);
+  const logFilm = useLogFilm(run.id);
+  const pendingId = logFilm.pendingMovieId;
   const [message, setMessage] = useState<string | null>(null);
   const { statuses } = trackStatuses(films, run.steps);
   const progress = auteurProgress(films, run.steps);
 
-  async function log(film: AuteurFilm, watchedNow: boolean) {
-    setPendingId(film.movie_id);
-    setMessage(null);
-    try {
-      await createStep.mutateAsync({
-        movie_id: film.movie_id,
-        status: watchedNow ? "watched" : "planned",
-        watched_at: watchedNow ? new Date().toISOString() : null,
-        force: false,
-      });
-    } catch (err) {
-      setMessage(err instanceof ApiError ? err.message : "Could not log that film.");
-    } finally {
-      setPendingId(null);
-    }
-  }
 
   return (
     <section aria-label="Auteur track" className="flex flex-col gap-4">
@@ -106,8 +89,8 @@ export default function AuteurTrack({ run }: { run: RunDetail }) {
                   <LogFilmButtons
                     busy={pendingId === film.movie_id}
                     disabled={pendingId !== null}
-                    onQueue={() => void log(film, false)}
-                    onWatch={() => void log(film, true)}
+                    onQueue={() => void logFilm.queue(film.movie_id).catch((error: Error) => setMessage(error.message))}
+                    onWatch={() => void logFilm.logWatched(film.movie_id).catch((error: Error) => setMessage(error.message))}
                   />
                 )
               )}

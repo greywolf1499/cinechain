@@ -213,7 +213,7 @@ export default function MovieDetailModal({
                 ) : (
                   <Check className="h-3.5 w-3.5" />
                 )}
-                Mark as Watched
+                Log watched
               </button>
               <button
                 type="button"

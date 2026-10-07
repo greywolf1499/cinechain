@@ -8,7 +8,8 @@ import OnServerBadge, { onServerCardClass } from "./OnServerBadge";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { allowsMovieRepeats, findExistingStepNumber, forcePricing } from "../lib/rules";
-import { useCreateStep, useJellyfinLookup } from "../lib/queries";
+import { useJellyfinLookup } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import type {
   MovieSummary,
   RulesConfig,
@@ -68,7 +69,7 @@ export default function ForkInTheRoadModal({
   const [decade, setDecade] = useState<number | null>(null);
   const [genreId, setGenreId] = useState<number | null>(null);
   const [guardByMovieId, setGuardByMovieId] = useState<Record<number, GuardStatus>>({});
-  const createStep = useCreateStep(runId);
+  const createStep = useLogFilm(runId);
 
   const allowRepeats = allowsMovieRepeats(rulesConfig);
   const pricing = forcePricing(rulesConfig);
@@ -232,7 +233,7 @@ export default function ForkInTheRoadModal({
                     onClick={() => handleLog(movie)}
                     className="shrink-0 rounded-md bg-accent px-2.5 py-1.5 text-xs font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
                   >
-                    Log as next
+                    Log watched
                   </button>
                 ) : !guard ? (
                   <button
@@ -240,7 +241,7 @@ export default function ForkInTheRoadModal({
                     onClick={() => checkFrontierLink(movie)}
                     className="shrink-0 rounded-md bg-accent px-2.5 py-1.5 text-xs font-semibold text-zinc-950 transition-colors hover:bg-accent-strong"
                   >
-                    Log as next
+                    Log watched
                   </button>
                 ) : guard.state === "checking" ? (
                   <span className="flex shrink-0 items-center gap-1.5 text-xs text-zinc-500">

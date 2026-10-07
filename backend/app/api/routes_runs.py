@@ -224,9 +224,8 @@ def _step_fields_from_movie(movie: CachedMovie) -> dict:
 
 
 def _last_step(session: Session, run_id: str) -> RunStep | None:
-    return session.exec(
-        select(RunStep).where(RunStep.run_id == run_id).order_by(RunStep.logged_at.desc())
-    ).first()
+    history = _play_history(session, run_id)
+    return history[-1] if history else None
 
 
 def _run_history(session: Session, run_id: str) -> list[RunStep]:
@@ -236,6 +235,15 @@ def _run_history(session: Session, run_id: str) -> list[RunStep]:
             select(RunStep).where(RunStep.run_id == run_id).order_by(RunStep.logged_at)
         ).all()
     )
+
+
+def _play_history(session: Session, run_id: str) -> list[RunStep]:
+    history = _run_history(session, run_id)
+    run = session.get(Run, run_id)
+    engine_class = ENGINE_REGISTRY.get(run.game_type) if run else None
+    if engine_class is not None and engine_class.queue_policy == "slot":
+        return [step for step in history if step.status == "watched"]
+    return history
 
 
 # Metadata keys only the server may set: a client-supplied `collision` would be a free win.
@@ -352,9 +360,7 @@ def _apply_run_outcome(session: Session, tmdb: TMDBClient, run: Run) -> None:
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if engine_class is None:
         return
-    steps = session.exec(
-        select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.logged_at)
-    ).all()
+    steps = _play_history(session, run.id)
     engine = engine_class(session, tmdb)
     engine.sync_run_state(run, steps)
     outcome = engine.evaluate_run_outcome(run, list(steps))
@@ -396,7 +402,7 @@ async def _enforce_run_rules(
     linked_metadata: dict | None = None
     broke_a_rule = False
     overlay_engine = get_engine(run.game_type, session, tmdb)
-    overlay_history = _run_history(session, run.id)
+    overlay_history = _play_history(session, run.id)
     checks = overlay_engine.overlay_checks(movie, rules, overlay_history)
     skipping = set(payload.skip_overlays)
     if skipping:
@@ -529,7 +535,7 @@ async def _enforce_run_rules(
     if previous is not None and run.game_type == RT_SPLIT and payload.no_contest:
         engine = RottenTomatoesSplitEngine(session, tmdb)
         earlier = await cache_repo.get_movie(session, tmdb, previous.movie_id, require_detail=True)
-        reason = engine.modifier_violation(earlier, movie, rules, _run_history(session, run.id))
+        reason = engine.modifier_violation(earlier, movie, rules, _play_history(session, run.id))
         if reason:
             raise HTTPException(
                 status_code=409,
@@ -543,7 +549,7 @@ async def _enforce_run_rules(
             cast_limit=rules.get("max_cast_order"),
             rules=rules,
             previous_transition=previous.transition_metadata,
-            history=side_steps if tunnel else _run_history(session, run.id),
+            history=side_steps if tunnel else _play_history(session, run.id),
         )
         if not result.valid and result.blocked:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
@@ -1025,7 +1031,7 @@ def update_run_rules(
                 422, detail="Number in title on a filtered checklist can only be chosen at creation"
             )
         try:
-            merged = engine.prepare_overlays(merged, _run_history(session, run.id))
+            merged = engine.prepare_overlays(merged, _play_history(session, run.id))
         except RunSetupError as exc:
             raise HTTPException(exc.status_code, detail=str(exc)) from exc
     if run.game_type in ("method_actor", "auteur_marathon") and "order" in update:
@@ -1091,6 +1097,106 @@ def remove_participant(
     session.commit()
 
 
+async def _settle_on_watch(
+    session: Session,
+    run: Run,
+    step: RunStep,
+    payload: RunStepCreate | MarkWatchedRequest | RunStepUpdate,
+    tmdb: TMDBClient,
+    omdb: OMDbClient | None,
+) -> None:
+    if run.game_type != RT_SPLIT:
+        if payload.no_contest:
+            raise HTTPException(
+                422, detail="No-contest is only available on Rotten Tomatoes Split runs"
+            )
+        return
+    if not payload.no_contest and payload.household_score is None:
+        raise HTTPException(
+            422, detail="Log a split film with the household's rating (1-100), or as no-contest"
+        )
+    metadata = dict(step.transition_metadata or {})
+    for key in (
+        "household_score",
+        "critic_score",
+        "audience_score",
+        "divergence",
+        "point_to",
+        "split_no_contest",
+    ):
+        metadata.pop(key, None)
+    if payload.no_contest:
+        metadata["split_no_contest"] = True
+    else:
+        if omdb is not None:
+            await cache_repo.get_movie_ratings(session, tmdb, omdb, step.movie_id)
+        assert payload.household_score is not None
+        engine = RottenTomatoesSplitEngine(session, tmdb)
+        result = await engine.validate_candidate(step.movie_id, _run_rules(run))
+        if not result.valid:
+            raise HTTPException(409, detail=result.model_dump())
+        metadata.update(engine.settle(step.movie_id, payload.household_score))
+    step.transition_metadata = metadata
+
+
+async def _award_step_bounty(
+    session: Session, tmdb: TMDBClient, run: Run, step: RunStep, movie: CachedMovie
+) -> None:
+    rules = run.rules_config or {}
+    if not bounties.board_enabled(rules):
+        return
+    engine = get_engine(run.game_type, session, tmdb)
+    if engine.queue_policy == "slot" and step.status != "watched":
+        return
+    history = _play_history(session, run.id)
+    bounty = await bounties.evaluate(
+        session,
+        tmdb,
+        rules,
+        movie,
+        feasible=lambda quest: engine.bounty_feasible(rules, history, quest).drawable,
+        context=_bounty_context(engine, rules, history),
+    )
+    if bounty is None:
+        return
+    metadata = {
+        **(step.transition_metadata or {}),
+        bounties.COMPLETED_METADATA_KEY: bounty[0],
+        bounties.REPLACEMENT_METADATA_KEY: bounty[1],
+        "bounty_reward": engine.bounty_reward,
+    }
+    before_lives = lives_of(rules)[0] if run.game_type == rabbit_hole.RABBIT_HOLE else None
+    run.rules_config = engine.award_bounty(rules, *bounty)
+    if before_lives is not None:
+        metadata["bounty_life_awarded"] = (
+            run.rules_config.get(LIVES_KEY, before_lives) > before_lives
+        )
+    step.transition_metadata = metadata
+    session.add(run)
+    session.add(step)
+
+
+async def _check_slot_watch(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) -> None:
+    engine = get_engine(run.game_type, session, tmdb)
+    if engine.queue_policy != "slot" or run.game_type == RT_SPLIT:
+        return
+    history = _play_history(session, run.id)
+    previous = history[-1] if history else None
+    result = (
+        await engine.validate_candidate(step.movie_id, _run_rules(run))
+        if previous is None
+        else await engine.validate_next_step(
+            previous.movie_id,
+            step.movie_id,
+            rules=_run_rules(run),
+            previous_transition=previous.transition_metadata,
+            history=history,
+        )
+    )
+    if not result.valid:
+        raise HTTPException(409, detail=result.model_dump())
+
+
 async def _log_step(
     session: Session,
     tmdb: TMDBClient,
@@ -1102,6 +1208,13 @@ async def _log_step(
 ) -> RunStep:
     """Validate and add one step, then evaluate the run's outcome. Caller commits."""
     actor = _acting_user(session, run, user, payload.acting_participant_id)
+    if payload.status not in ("planned", "watched"):
+        raise HTTPException(422, detail="Choose planned or watched")
+    if (
+        payload.status == "planned"
+        and get_engine(run.game_type, session, tmdb).queue_policy == "none"
+    ):
+        raise HTTPException(422, detail="This mode does not support queueing films")
     split = run.game_type == RT_SPLIT
     if payload.no_contest and not split:
         raise HTTPException(
@@ -1115,56 +1228,15 @@ async def _log_step(
         else None
     )
     movie = await cache_repo.get_movie(session, tmdb, payload.movie_id, require_detail=True)
-    if split and not payload.no_contest:
-        if payload.status != "watched" or payload.household_score is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Log a split film as watched, with the household's rating (1-100)",
-            )
-        if omdb is not None:  # the scores the split is judged on come from OMDb
-            await cache_repo.get_movie_ratings(session, tmdb, omdb, movie.tmdb_id)
+    settlement = RunStep(run_id=run.id, **_step_fields_from_movie(movie))
+    if payload.status == "watched":
+        await _settle_on_watch(session, run, settlement, payload, tmdb, omdb)
     extra_metadata, linked_metadata = await _enforce_run_rules(
         session, tmdb, run, movie, payload, actor, fork_team
     )
     if (run.rules_config or {}).get("table_mode") is True:
         extra_metadata["acting_participant_id"] = actor.id
-    if split:
-        if payload.no_contest:
-            extra_metadata["split_no_contest"] = True
-        else:
-            assert payload.household_score is not None
-            extra_metadata.update(
-                RottenTomatoesSplitEngine(session, tmdb).settle(
-                    movie.tmdb_id, payload.household_score
-                )
-            )
-    rules = run.rules_config or {}
-    engine = get_engine(run.game_type, session, tmdb) if bounties.board_enabled(rules) else None
-    history = [
-        *_run_history(session, run.id),
-        RunStep(
-            run_id=run.id,
-            movie_id=movie.tmdb_id,
-            movie_title=movie.title,
-            transition_metadata=extra_metadata,
-        ),
-    ]
-    bounty = await bounties.evaluate(
-        session,
-        tmdb,
-        rules,
-        movie,
-        feasible=(lambda quest: engine.bounty_feasible(rules, history, quest).drawable)
-        if engine
-        else None,
-        context=_bounty_context(engine, rules, history) if engine else "",
-    )
-    if bounty is not None:
-        assert engine is not None
-        extra_metadata[bounties.COMPLETED_METADATA_KEY] = bounty[0]
-        extra_metadata[bounties.REPLACEMENT_METADATA_KEY] = bounty[1]
-        extra_metadata["bounty_reward"] = engine.bounty_reward
-
+    extra_metadata.update(settlement.transition_metadata or {})
     transition_metadata = _without_server_keys(
         linked_metadata if linked_metadata is not None else payload.transition_metadata
     )
@@ -1188,27 +1260,15 @@ async def _log_step(
     )
     session.add(step)
     session.flush()
-    if bounty is not None:
-        assert engine is not None
-        before_lives = (
-            lives_of(run.rules_config)[0] if run.game_type == rabbit_hole.RABBIT_HOLE else None
-        )
-        awarded_rules = engine.award_bounty(run.rules_config or {}, *bounty)
-        if before_lives is not None:
-            extra_metadata["bounty_life_awarded"] = (
-                awarded_rules.get(LIVES_KEY, before_lives) > before_lives
-            )
-            step.transition_metadata = {
-                **(step.transition_metadata or {}),
-                "bounty_life_awarded": extra_metadata["bounty_life_awarded"],
-            }
-        run.rules_config = awarded_rules
-        session.add(run)
+    await _award_step_bounty(session, tmdb, run, step, movie)
+    engine = get_engine(run.game_type, session, tmdb)
     if chaos.active(run.rules_config) is not None:
         # The handicap was for this step only.
         run.rules_config = chaos.clear(run.rules_config or {})
         session.add(run)
-    if engine is not None:
+    if bounties.board_enabled(run.rules_config) and (
+        engine.queue_policy != "slot" or step.status == "watched"
+    ):
         _expire_bounties(session, engine, run, step)
     _apply_run_outcome(session, tmdb, run)
     return step
@@ -1232,13 +1292,14 @@ async def create_step(
 
 
 @router.patch("/{run_id}/steps/{step_id}/mark-watched", response_model=RunStepPublic)
-def mark_step_watched(
+async def mark_step_watched(
     step_id: str,
     payload: MarkWatchedRequest,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
+    omdb: OMDbClient = Depends(get_omdb_client),
 ):
     _ensure_run_open(run)
     step = session.get(RunStep, step_id)
@@ -1252,6 +1313,7 @@ def mark_step_watched(
     if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
         raise HTTPException(403, detail="Switch to the participant who queued this film")
     _check_watched_overlays(session, tmdb, run, step)
+    await _check_slot_watch(session, tmdb, run, step)
     if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (
         2,
         3,
@@ -1265,14 +1327,20 @@ def mark_step_watched(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"It's {TugOfWarEngine(session, tmdb).team_name(run, next_team)}'s pull",
                 )
+    await _settle_on_watch(session, run, step, payload, tmdb, omdb)
     step.status = "watched"
-    if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 3:
+    if get_engine(run.game_type, session, tmdb).queue_policy == "slot" or (
+        run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 3
+    ):
         step.logged_at = utcnow()
     step.watched_at = payload.watched_at or utcnow()
     if payload.user_notes is not None:
         step.user_notes = payload.user_notes
     session.add(step)
     session.flush()
+    if get_engine(run.game_type, session, tmdb).queue_policy == "slot":
+        movie = await cache_repo.get_movie(session, tmdb, step.movie_id, require_detail=True)
+        await _award_step_bounty(session, tmdb, run, step, movie)
     if bounties.board_enabled(run.rules_config):
         _expire_bounties(session, get_engine(run.game_type, session, tmdb), run, step)
     _apply_run_outcome(session, tmdb, run)
@@ -1282,13 +1350,14 @@ def mark_step_watched(
 
 
 @router.patch("/{run_id}/steps/{step_id}", response_model=RunStepPublic)
-def update_step(
+async def update_step(
     step_id: str,
     payload: RunStepUpdate,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
+    omdb: OMDbClient = Depends(get_omdb_client),
 ):
     step = session.get(RunStep, step_id)
     if step is None or step.run_id != run.id:
@@ -1298,6 +1367,7 @@ def update_step(
     if became_watched:
         _ensure_run_open(run)
         _check_watched_overlays(session, tmdb, run, step)
+        await _check_slot_watch(session, tmdb, run, step)
         if (run.rules_config or {}).get("table_mode") is True and _step_actor_id(step) != actor.id:
             raise HTTPException(403, detail="Switch to the participant who queued this film")
         if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (
@@ -1316,7 +1386,10 @@ def update_step(
                         status_code=status.HTTP_409_CONFLICT,
                         detail=f"It's {name}'s pull",
                     )
-        if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 3:
+        await _settle_on_watch(session, run, step, payload, tmdb, omdb)
+        if get_engine(run.game_type, session, tmdb).queue_policy == "slot" or (
+            run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 3
+        ):
             step.logged_at = utcnow()
     if payload.user_notes is not None:
         step.user_notes = payload.user_notes
@@ -1341,6 +1414,9 @@ def update_step(
             step.transition_metadata = metadata or None
     session.add(step)
     session.flush()
+    if became_watched and get_engine(run.game_type, session, tmdb).queue_policy == "slot":
+        movie = await cache_repo.get_movie(session, tmdb, step.movie_id, require_detail=True)
+        await _award_step_bounty(session, tmdb, run, step, movie)
     if became_watched and bounties.board_enabled(run.rules_config):
         _expire_bounties(session, get_engine(run.game_type, session, tmdb), run, step)
     _apply_run_outcome(session, tmdb, run)
@@ -1405,7 +1481,7 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
             run.rules_config = restored
         session.add(run)
     reopen = collided and run.status == RUN_STATUS_COMPLETED
-    remaining = _run_history(session, run.id)
+    remaining = _play_history(session, run.id)
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if engine_class is not None:
         engine_class(session, tmdb).sync_run_state(run, remaining)
@@ -1470,7 +1546,10 @@ def delete_step(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
 
     last_step = _last_step(session, run.id)
-    if last_step is None or last_step.id != step.id:
+    slot_queue = (
+        get_engine(run.game_type, session, tmdb).queue_policy == "slot" and step.status == "planned"
+    )
+    if not slot_queue and (last_step is None or last_step.id != step.id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Only the most recently logged step can be deleted",
@@ -1770,7 +1849,7 @@ async def validate_step(
     failed = [
         key
         for key, verdict in engine.overlay_checks(
-            movie, rules, _run_history(session, run.id)
+            movie, rules, _play_history(session, run.id)
         ).items()
         if verdict.ok is False
     ]
@@ -1794,7 +1873,7 @@ async def validate_step(
                     cast_limit=rules.get("max_cast_order"),
                     rules=skip_rules,
                     previous_transition=previous.transition_metadata,
-                    history=_run_history(session, run.id),
+                    history=_play_history(session, run.id),
                 )
             )
             if not other.valid:
@@ -1821,7 +1900,7 @@ async def validate_step(
         cast_limit=rules.get("max_cast_order"),
         rules=rules,
         previous_transition=previous.transition_metadata,
-        history=side_steps if side_steps is not None else _run_history(session, run.id),
+        history=side_steps if side_steps is not None else _play_history(session, run.id),
     )
     if result.valid and isinstance(engine, MeetInTheMiddleEngine):
         result.collision = await engine.collides(payload.movie_id, opposing_steps, rules)
@@ -2312,7 +2391,7 @@ async def roll_custom_bounty(
     try:
         engine = get_engine(run.game_type, session, tmdb)
         rules = run.rules_config or {}
-        history = _run_history(session, run.id)
+        history = _play_history(session, run.id)
         run.rules_config = await bounties.roll_custom(
             session,
             rules,
@@ -2350,7 +2429,7 @@ def _expire_bounties(
     rules = run.rules_config or {}
     if not bounties.board_enabled(rules):
         return
-    history = _run_history(session, run.id)
+    history = _play_history(session, run.id)
     engine._bounty_evidence = None
     feasibility.invalidate(session)
     active = bounties.active_bounties(rules)
@@ -2412,7 +2491,7 @@ def discard_bounty(
     if rules.get("bounty_discards_left", 1) <= 0:
         raise HTTPException(409, detail="The free discard has already been used")
     engine = get_engine(run.game_type, session, tmdb)
-    history = _run_history(session, run.id)
+    history = _play_history(session, run.id)
     replacement = bounties.draw_replacement(
         active,
         rules.get(bounties.COMPLETED_KEY) or [],
@@ -2441,7 +2520,7 @@ async def _reachable_pool(
     off_tier: bool = False,
     include_overlay_failures: bool = False,
 ) -> list[int]:
-    history = _run_history(session, run.id)
+    history = _play_history(session, run.id)
     rules = _run_rules(run)
     if not history:
         seeds = await engine.seed_candidates(rules)
@@ -2493,7 +2572,7 @@ async def _overlay_skip_options(
 ) -> list[dict]:
     from app.engines.modifier_registry import contexts
 
-    history = _run_history(session, run.id)
+    history = _play_history(session, run.id)
     rules = _run_rules(run)
     specs = [
         (spec, ctx)
@@ -2557,7 +2636,7 @@ def _check_watched_overlays(session: Session, tmdb: TMDBClient, run: Run, step: 
     ):
         return
     engine = get_engine(run.game_type, session, tmdb)
-    history = [other for other in _run_history(session, run.id) if other.id != step.id]
+    history = [other for other in _play_history(session, run.id) if other.id != step.id]
     movie = session.get(CachedMovie, step.movie_id)
     if movie is None:
         raise HTTPException(
@@ -2598,7 +2677,7 @@ async def roll_chaos(
         if evidence.check(handicap.predicate, ids).drawable
         and not feasibility.contradicts(
             handicap.predicate,
-            engine.bounty_bounds(_run_rules(run), _run_history(session, run.id)),
+            engine.bounty_bounds(_run_rules(run), _play_history(session, run.id)),
         )
     ]
     if not feasible_ids:
@@ -2675,6 +2754,10 @@ async def discover_next_movies(
             status_code=422, detail="Off-tier discovery is only supported by Rabbit Hole."
         )
     previous = _last_step(session, run.id)
+    if engine.queue_policy == "slot":
+        if previous is None:
+            raise HTTPException(422, detail="Discovery needs a watched frontier film")
+        frontier_movie_id = previous.movie_id
     try:
         candidates = await engine.discover_with_modifiers(
             frontier_movie_id=frontier_movie_id,
@@ -2686,7 +2769,7 @@ async def discover_next_movies(
                 if previous is not None and previous.movie_id == frontier_movie_id
                 else None
             ),
-            history=_run_history(session, run.id),
+            history=_play_history(session, run.id),
             **(
                 {"include_off_tier": include_off_tier}
                 if isinstance(engine, RabbitHoleEngine)
@@ -2720,4 +2803,4 @@ async def discover_next_movies(
         candidate.existing_step_number = step_number_by_movie_id.get(candidate.movie_id)
         row = session.get(CachedMovie, candidate.movie_id)
         candidate.runtime = row.runtime if row is not None else None
-    return engine.annotate_candidates(candidates, rules, _run_history(session, run.id))
+    return engine.annotate_candidates(candidates, rules, _play_history(session, run.id))

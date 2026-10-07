@@ -476,7 +476,7 @@ function ResultModal({
           className="flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
         >
           {convert.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Popcorn className="h-4 w-4" />}
-          [ 🍿 Queue as Challenge Run ]
+          [ 🍿 Start a run from this ]
         </button>
       </div>
     </Modal>

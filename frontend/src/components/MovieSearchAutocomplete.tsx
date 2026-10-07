@@ -10,7 +10,7 @@ import { connectionMetadata } from "../lib/connections";
 import { roleBadgeText } from "../lib/crewRoles";
 import { tugNextTeam } from "../lib/tugOfWar";
 import LinkBonusBadges from "./LinkBonusBadges";
-import { useCreateStep } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import MoviePoster from "./MoviePoster";
 import Popover from "./ui/Popover";
 import type { MovieSummary, RulesConfig, RunStep, ValidationResult } from "../types/api";
@@ -54,7 +54,7 @@ export default function MovieSearchAutocomplete({
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsId = useId();
 
-  const createStep = useCreateStep(runId ?? "");
+  const createStep = useLogFilm(runId ?? "");
 
   const { data, isFetching } = useQuery({
     queryKey: ["movies", "search", debouncedQuery, underdog],
@@ -213,7 +213,7 @@ export default function MovieSearchAutocomplete({
                       onChange={() => setWatchStatus("watched")}
                       className="accent-accent"
                     />
-                    I've watched this
+                    Log watched
                   </label>
                   <label className="flex items-center gap-1.5">
                     <input
@@ -223,7 +223,7 @@ export default function MovieSearchAutocomplete({
                       onChange={() => setWatchStatus("planned")}
                       className="accent-accent"
                     />
-                    Plan for later / Up next
+                    Queue
                   </label>
                 </div>
                 {watchStatus === "watched" && (
@@ -239,7 +239,7 @@ export default function MovieSearchAutocomplete({
                 <div className="mt-2 flex flex-wrap gap-2">
                   {validation.valid ? (
                     <LogButton pending={createStep.isPending} onClick={() => handleLog(false)}>
-                      Log this movie
+                      {watchStatus === "planned" ? "Queue" : "Log watched"}
                     </LogButton>
                   ) : (
                     !validation.blocked &&

@@ -54,10 +54,10 @@ import { pendulumState } from "../lib/pendulum";
 import { isoToFlagEmoji } from "../lib/countries";
 import { effectiveCooldown } from "../lib/modifiers";
 import ExpandableText from "./ui/ExpandableText";
+import { useLogFilm } from "../lib/useLogFilm";
 import ClampedLabel from "./ui/ClampedLabel";
 import {
   useCanonBadgesBulk,
-  useCreateStep,
   useOfferFork,
   useDiscoverCandidates,
   useEngines,
@@ -478,7 +478,7 @@ function DiscoveryGrid({
   });
   const { data: badgesMap } = useCanonBadgesBulk(tmdbIds);
 
-  const createStep = useCreateStep(runId);
+  const createStep = useLogFilm(runId);
   const allowRepeats = allowsMovieRepeats(rulesConfig);
 
   function ratingSortValue(candidate: DiscoveryCandidate, key: "imdb" | "rt"): number {
@@ -1315,7 +1315,7 @@ function CandidateCard({
               className="flex flex-1 items-center justify-center gap-1 rounded-md border border-app-border px-2 py-1.5 text-[10px] font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:opacity-60"
             >
               {pending && <Loader2 className="h-3 w-3 animate-spin" />}
-              Queue Up Next
+              Queue
             </button>
             <button
               type="button"
@@ -1324,7 +1324,7 @@ function CandidateCard({
               className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-[10px] font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
             >
               {pending && <Loader2 className="h-3 w-3 animate-spin" />}
-              Log Watched
+              Log watched
             </button>
           </div>
         )}
@@ -1572,7 +1572,7 @@ function MovieScreenView({
   const { data: jellyfinStatus } = useJellyfinLookup([screen.movieId]);
   const { data: badgesMap } = useCanonBadgesBulk([screen.movieId]);
 
-  const createStep = useCreateStep(runId);
+  const createStep = useLogFilm(runId);
   const [guard, setGuard] = useState<GuardStatus | null>(null);
 
   const allowRepeats = allowsMovieRepeats(rulesConfig);
@@ -1728,7 +1728,7 @@ function MovieScreenView({
               {(createStep.isPending || guard?.state === "checking") && (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               )}
-              Queue Up Next
+              Queue
             </button>
             <button
               type="button"
@@ -1739,7 +1739,7 @@ function MovieScreenView({
               {(createStep.isPending || guard?.state === "checking") && (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               )}
-              {skips.length ? `Spend ${skips.length} wildcard${skips.length === 1 ? "" : "s"} & log watched` : "Log Watched"}
+              {skips.length ? `Spend ${skips.length} wildcard${skips.length === 1 ? "" : "s"} & log watched` : "Log watched"}
             </button>
           </div>
         );
@@ -1823,8 +1823,8 @@ function FrontierGuardPanel({
     return (
       <p className="rounded-md bg-app-surface-hover px-3 py-2 text-xs text-zinc-400">
         {castLinked
-          ? "Connection to the frontier is unknown yet - click Queue Up Next or Log Watched to check."
-          : "This film hasn't been checked against the rule yet - click Queue Up Next or Log Watched to check."}
+          ? "Connection to the frontier is unknown yet - click Queue or Log watched to check."
+          : "This film hasn't been checked against the rule yet - click Queue or Log watched to check."}
       </p>
     );
   }

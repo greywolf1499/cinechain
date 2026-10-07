@@ -3,6 +3,7 @@ import { Check, Clock, Dices, EyeOff, Loader2, Minus, Plus, Sparkles, ThumbsUp, 
 import MoviePoster from "./MoviePoster";
 import ExpandableText from "./ui/ExpandableText";
 import { cn } from "../lib/cn";
+import { useLogFilm } from "../lib/useLogFilm";
 import type { RouletteMovie } from "../types/api";
 
 // Posters and titles stay masked behind a heavy blur until a card is chosen.
@@ -24,16 +25,19 @@ function decadeLabel(year: number | null): string | null {
 export default function BlindDraft({
   movies,
   poolSize,
-  logging,
-  onLog,
+  runId,
+  onLogged,
   teasers = { status: "off" },
 }: {
   movies: RouletteMovie[];
   poolSize: number;
-  logging: boolean;
-  onLog: (movie: RouletteMovie, watched: boolean) => void;
+  runId: string;
+  onLogged: () => void;
   teasers?: TeaserState;
 }) {
+  const logFilm = useLogFilm(runId);
+  const logging = logFilm.isPending;
+  const [error, setError] = useState<string | null>(null);
   const [votes, setVotes] = useState<Record<number, number>>({});
   const [chosenId, setChosenId] = useState<number | null>(null);
   const [sharp, setSharp] = useState(false); // flips a frame after the choice so the unblur animates
@@ -244,21 +248,22 @@ export default function BlindDraft({
                   <button
                     type="button"
                     disabled={logging}
-                    onClick={() => onLog(movie, true)}
+                    onClick={() => void logFilm.logWatched(movie.tmdb_id).then(onLogged).catch((error: Error) => setError(error.message))}
                     className="flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
                   >
                     {logging ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                    Log as Watched
+                    Log watched
                   </button>
                   <button
                     type="button"
                     disabled={logging}
-                    onClick={() => onLog(movie, false)}
+                    onClick={() => void logFilm.queue(movie.tmdb_id).then(onLogged).catch((error: Error) => setError(error.message))}
                     className="flex items-center justify-center gap-1.5 rounded-md border border-app-border px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:opacity-60"
                   >
                     <Ticket className="h-3.5 w-3.5" />
-                    Plan for Later
+                    Queue
                   </button>
+                  {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
                 </div>
               )}
             </div>

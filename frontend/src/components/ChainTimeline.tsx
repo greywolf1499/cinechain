@@ -14,7 +14,8 @@ import { cn } from "../lib/cn";
 import { parseOriginCountries } from "../lib/countries";
 import CountryFlags from "./CountryFlags";
 import { HISTORICAL_TIME_TRAVEL, narrativeSettingText, stepLeap } from "../lib/historicalEra";
-import { useCanonBadgesBulk, useUpdateStep } from "../lib/queries";
+import { useCanonBadgesBulk } from "../lib/queries";
+import { useLogFilm } from "../lib/useLogFilm";
 import type { ActorClickPayload } from "./actorClickTypes";
 import type { CanonBadge, RunStep } from "../types/api";
 
@@ -77,7 +78,7 @@ export default function ChainTimeline({
   const [markWatchedStep, setMarkWatchedStep] = useState<RunStep | null>(null);
   const [editEraStep, setEditEraStep] = useState<RunStep | null>(null);
   const timeTravel = gameType === HISTORICAL_TIME_TRAVEL;
-  const quickMarkWatched = useUpdateStep(runId);
+  const quickMarkWatched = useLogFilm(runId);
   const { data: badgesMap } = useCanonBadgesBulk(steps.map((s) => s.movie_id));
 
   useEffect(() => {
@@ -125,13 +126,15 @@ export default function ChainTimeline({
               badges={badgesMap?.[String(row.step.movie_id)]}
               onOpen={() => setSelectedStep(row.step)}
               onQuickMarkWatched={() =>
-                quickMarkWatched.mutate({ stepId: row.step.id, watched_at: new Date().toISOString() })
+                void quickMarkWatched.markWatched(row.step).catch(() => {
+                  setMarkWatchedStep(row.step);
+                })
               }
               locked={locked}
               showEra={timeTravel}
               onEditEra={() => setEditEraStep(row.step)}
               quickMarkWatchedPending={
-                quickMarkWatched.isPending && quickMarkWatched.variables?.stepId === row.step.id
+                quickMarkWatched.isPending && quickMarkWatched.variables?.kind === "watch" && quickMarkWatched.variables.step.id === row.step.id
               }
             />
           ) : (
@@ -269,7 +272,7 @@ function StationRow({
               <CountryFlags codes={countries} />
               {isPlanned ? (
                 <span className="rounded-full bg-accent/15 px-1.5 py-0.5 font-medium text-accent">
-                  🎟️ Up Next
+                  🎟️ Up next
                 </span>
               ) : (
                 <span className="rounded-full bg-emerald-950 px-1.5 py-0.5 font-medium text-emerald-400">
@@ -333,7 +336,7 @@ function StationRow({
             ) : (
               <Check className="h-3 w-3" />
             )}
-            Mark as Watched
+            Log watched
           </button>
         )}
       </div>

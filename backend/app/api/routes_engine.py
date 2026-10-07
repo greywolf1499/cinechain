@@ -70,6 +70,7 @@ class EngineMeta(BaseModel):
     capabilities: list[str]
     requires: list[str]
     seed_policy: Literal["none", "free", "derived", "pair"]
+    queue_policy: Literal["frontier", "slot", "none"]
     unavailable_reason: str | None = None
     tagline: str
     tags: list[str]
@@ -134,6 +135,7 @@ def list_engines(
             capabilities=cls.capabilities,
             requires=cls.requires,
             seed_policy=cls.seed_policy,
+            queue_policy=cls.queue_policy,
             discovery_filters=cls.discovery_filters,
             rule_fields=cls.rule_fields,
             presets=cls.presets,

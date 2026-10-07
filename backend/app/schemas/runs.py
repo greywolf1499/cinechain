@@ -143,6 +143,8 @@ class MarkWatchedRequest(BaseModel):
     acting_participant_id: str | None = None
     watched_at: datetime | None = None
     user_notes: str | None = None
+    household_score: int | None = Field(default=None, ge=1, le=100)
+    no_contest: bool = False
 
 
 class RunStepUpdate(BaseModel):
@@ -150,6 +152,8 @@ class RunStepUpdate(BaseModel):
     user_notes: str | None = None
     transition_metadata: dict[str, Any] | None = None
     watched_at: datetime | None = None
+    household_score: int | None = Field(default=None, ge=1, le=100)
+    no_contest: bool = False
 
 
 class RunStepPublic(BaseModel):

@@ -13,11 +13,97 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.db import get_session
+from app.engines.registry import ENGINE_REGISTRY
+from app.engines.trackers import DecadeSieveEngine
 from app.main import app
 from app.models.cache import CachedMovie
-from app.models.run import RunStep
+from app.models.run import Run, RunStep
 
 TMDB_BASE = "https://api.themoviedb.org/3"
+
+
+def test_every_engine_publishes_its_queue_policy(client):
+    _register_and_login(client, "alice")
+    engines = {engine["game_type"]: engine for engine in client.get("/api/engines").json()}
+    slot = {
+        "method_actor",
+        "auteur_marathon",
+        "regional_deep_dive",
+        "rt_split",
+        "roulette",
+        "decade_sieve",
+    }
+    assert set(engines) == set(ENGINE_REGISTRY)
+    for game_type, engine in engines.items():
+        expected = (
+            "none" if game_type == "march_madness" else "slot" if game_type in slot else "frontier"
+        )
+        assert engine["queue_policy"] == expected
+
+
+@pytest.mark.parametrize("policy", ["slot", "frontier"])
+def test_discovery_uses_the_policy_frontier(client, db_engine, monkeypatch, policy):
+    _register_and_login(client, "alice")
+    monkeypatch.setattr(DecadeSieveEngine, "queue_policy", policy)
+    run = client.post(
+        "/api/runs",
+        json={
+            "name": "Queue policy",
+            "game_type": "decade_sieve",
+            "rules_config": {"target_decade": 1990},
+        },
+    ).json()
+    with Session(db_engine) as session:
+        session.add(RunStep(run_id=run["id"], movie_id=1, movie_title="Watched", status="watched"))
+        session.add(RunStep(run_id=run["id"], movie_id=2, movie_title="Up next", status="planned"))
+        session.commit()
+    seen = {}
+
+    async def discover(self, frontier_movie_id, **kwargs):
+        seen["frontier"] = frontier_movie_id
+        seen["history"] = [step.movie_id for step in kwargs["history"]]
+        return []
+
+    monkeypatch.setattr(DecadeSieveEngine, "discover_with_modifiers", discover)
+    response = client.get(f"/api/runs/{run['id']}/discover", params={"frontier_movie_id": 2})
+    assert response.status_code == 200, response.text
+    assert seen == {
+        "frontier": 1 if policy == "slot" else 2,
+        "history": [1] if policy == "slot" else [1, 2],
+    }
+
+
+def test_slot_outcome_folds_ignore_the_queue(client, db_engine, monkeypatch):
+    from app.api.routes_runs import _apply_run_outcome
+
+    _register_and_login(client, "alice")
+    run = client.post(
+        "/api/runs",
+        json={
+            "name": "Fold policy",
+            "game_type": "decade_sieve",
+            "rules_config": {"target_decade": 1990},
+        },
+    ).json()
+    seen = []
+    monkeypatch.setattr(
+        DecadeSieveEngine,
+        "sync_run_state",
+        lambda self, run, steps: seen.append([s.movie_id for s in steps]),
+    )
+    monkeypatch.setattr(
+        DecadeSieveEngine,
+        "evaluate_run_outcome",
+        lambda self, run, steps: seen.append([s.movie_id for s in steps]),
+    )
+    with Session(db_engine) as session:
+        session.add(RunStep(run_id=run["id"], movie_id=1, movie_title="Watched", status="watched"))
+        session.add(RunStep(run_id=run["id"], movie_id=2, movie_title="Up next", status="planned"))
+        session.commit()
+        persisted_run = session.get(Run, run["id"])
+        assert persisted_run is not None
+        _apply_run_outcome(session, app.state.tmdb, persisted_run)
+    assert seen == [[1], [1]]
 
 
 @pytest.fixture()

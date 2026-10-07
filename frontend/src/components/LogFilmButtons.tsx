@@ -29,7 +29,7 @@ export default function LogFilmButtons({
         className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-zinc-950 hover:bg-accent-strong disabled:opacity-50"
       >
         {busy && <Loader2 className="h-3 w-3 animate-spin" />}
-        Log Watched
+        Log watched
       </button>
     </div>
   );

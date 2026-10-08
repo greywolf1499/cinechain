@@ -299,6 +299,12 @@ def test_pick_next_offers_trope_sharers_and_exposes_tropes(client, fake_model):
         respx.get(f"{TMDB_BASE}/movie/1/similar").mock(
             return_value=httpx.Response(200, json={"results": []})
         )
+        respx.get(f"{TMDB_BASE}/movie/1/keywords").mock(
+            return_value=httpx.Response(200, json={"keywords": []})
+        )
+        respx.get(f"{TMDB_BASE}/discover/movie").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
         log(client, run_id, 1)
         pool = {
             c["movie_id"]: c

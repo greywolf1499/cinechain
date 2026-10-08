@@ -63,13 +63,15 @@ async def shape_pool(
     *,
     chaser: bool = False,
     sort_by: str | None = None,
+    hydrate_budget: int = HYDRATE_BUDGET,
+    deadline: float | None = None,
 ) -> list[int]:
     """`movie_ids` narrowed and ordered for the options: `chaser` keeps only palate cleansers
     (fetching the runtime of lighthearted films whose detail isn't cached), `sort_by="underdog"`
     keeps films with popularity >= 1.0, least popular first. Without options the order is kept."""
     ids = list(dict.fromkeys(movie_ids))
     if chaser:
-        ids = await _chasers(session, tmdb, ids)
+        ids = await _chasers(session, tmdb, ids, hydrate_budget, deadline)
     if sort_by == UNDERDOG:
         rows = {i: session.get(CachedMovie, i) for i in ids}
         ranked = [
@@ -81,9 +83,10 @@ async def shape_pool(
     return ids
 
 
-async def _chasers(session: Session, tmdb: TMDBClient, ids: list[int]) -> list[int]:
-    deadline = time.monotonic() + HYDRATE_SECONDS
-    budget = HYDRATE_BUDGET
+async def _chasers(
+    session: Session, tmdb: TMDBClient, ids: list[int], budget: int, deadline: float | None
+) -> list[int]:
+    deadline = deadline if deadline is not None else time.monotonic() + HYDRATE_SECONDS
     kept: list[int] = []
     for movie_id in ids:
         row = session.get(CachedMovie, movie_id)

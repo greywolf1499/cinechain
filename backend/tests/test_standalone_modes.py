@@ -266,6 +266,12 @@ def test_semantic_pool_is_the_best_plot_matches_with_no_cast(client, fake_model)
         respx.get(f"{TMDB_BASE}/movie/1/similar").mock(
             return_value=httpx.Response(200, json={"results": []})
         )
+        respx.get(f"{TMDB_BASE}/movie/1/keywords").mock(
+            return_value=httpx.Response(200, json={"keywords": []})
+        )
+        respx.get(f"{TMDB_BASE}/discover/movie").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
         log(client, run_id, 1)
         pool = client.get(f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}).json()
 
@@ -282,6 +288,12 @@ def test_semantic_pool_also_uses_already_embedded_cache_rows(client, db_engine, 
             return_value=httpx.Response(200, json={"results": []})
         )
         respx.get(f"{TMDB_BASE}/movie/1/similar").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        respx.get(f"{TMDB_BASE}/movie/1/keywords").mock(
+            return_value=httpx.Response(200, json={"keywords": []})
+        )
+        respx.get(f"{TMDB_BASE}/discover/movie").mock(
             return_value=httpx.Response(200, json={"results": []})
         )
         with Session(db_engine) as session:

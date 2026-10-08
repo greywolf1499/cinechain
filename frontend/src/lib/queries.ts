@@ -3,7 +3,10 @@ import { api } from "./api";
 import { actingFields, notifyTableLog, syncTableRun } from "./tableMode";
 import type {
 	AcquisitionStatus,
+	CacheHealth,
 	CacheStats,
+	DiscoveryDiagnostics,
+	DiscoveryEnvelope,
 	CanonBadge,
 	IntegrationStatus,
 	AccountKind,
@@ -57,6 +60,7 @@ export const queryKeys = {
 	run: (id: string) => ["runs", id] as const,
 	runStats: (id: string) => ["runs", id, "stats"] as const,
 	cacheStats: ["system", "cache-stats"] as const,
+	cacheHealth: ["system", "cache-health"] as const,
 	curatedLists: ["curated", "lists"] as const,
 	watchlistStatus: ["curated", "watchlist", "status"] as const,
 	integrationsStatus: ["integrations", "status"] as const,
@@ -404,25 +408,70 @@ export interface DiscoverOptions {
 	/** Underdog B-Sides: least popular first, dead entries (popularity < 1) dropped. */
 	underdog?: boolean;
 	includeOffTier?: boolean;
+	/** Force the server's bounded dry-pool widening ladder ("Search wider"). */
+	wider?: boolean;
 }
 
+interface DiscoverResult {
+	candidates: DiscoveryCandidate[];
+	/** Null only when an older server ignored `envelope=1` and returned the bare list. */
+	diagnostics: DiscoveryDiagnostics | null;
+}
+
+function discoverQuery(
+	runId: string,
+	frontierMovieId: number | undefined,
+	mode: "or" | "and",
+	options: DiscoverOptions,
+) {
+	const { chaser = false, underdog = false, includeOffTier = false, wider = false } = options;
+	return {
+		queryKey: [...queryKeys.discover(runId, frontierMovieId ?? 0, mode), { chaser, underdog, includeOffTier, wider }],
+		queryFn: async (): Promise<DiscoverResult> => {
+			const data = await api.get<DiscoveryEnvelope | DiscoveryCandidate[]>(
+				`/runs/${runId}/discover?frontier_movie_id=${frontierMovieId}&mode=${mode}&envelope=1` +
+					(chaser ? "&chaser=true" : "") +
+					(includeOffTier ? "&include_off_tier=true" : "") +
+					(underdog ? "&sort_by=underdog" : "") +
+					(wider ? "&wider=1" : ""),
+			);
+			return Array.isArray(data) ? { candidates: data, diagnostics: null } : data;
+		},
+		enabled: !!frontierMovieId,
+	};
+}
+
+/** The discovery pool. Shares one request (envelope) with `useDiscoverDiagnostics`. */
 export function useDiscoverCandidates(
 	runId: string,
 	frontierMovieId: number | undefined,
 	mode: "or" | "and",
 	options: DiscoverOptions = {},
 ) {
-	const { chaser = false, underdog = false, includeOffTier = false } = options;
 	return useQuery({
-		queryKey: [...queryKeys.discover(runId, frontierMovieId ?? 0, mode), { chaser, underdog, includeOffTier }],
-		queryFn: () =>
-			api.get<DiscoveryCandidate[]>(
-				`/runs/${runId}/discover?frontier_movie_id=${frontierMovieId}&mode=${mode}` +
-					(chaser ? "&chaser=true" : "") +
-					(includeOffTier ? "&include_off_tier=true" : "") +
-					(underdog ? "&sort_by=underdog" : ""),
-			),
-		enabled: !!frontierMovieId,
+		...discoverQuery(runId, frontierMovieId, mode, options),
+		select: (result: DiscoverResult) => result.candidates,
+	});
+}
+
+/** Server funnel counts for the same pool request as `useDiscoverCandidates`. */
+export function useDiscoverDiagnostics(
+	runId: string,
+	frontierMovieId: number | undefined,
+	mode: "or" | "and",
+	options: DiscoverOptions = {},
+) {
+	return useQuery({
+		...discoverQuery(runId, frontierMovieId, mode, options),
+		select: (result: DiscoverResult) => result.diagnostics,
+	});
+}
+
+/** Data Spa coverage, families and provider budgets. Refreshed by Spa task completion. */
+export function useCacheHealth() {
+	return useQuery({
+		queryKey: queryKeys.cacheHealth,
+		queryFn: () => api.get<CacheHealth>("/system/cache/health"),
 	});
 }
 

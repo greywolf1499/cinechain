@@ -769,7 +769,8 @@ async def get_movie_ratings(
 ) -> CachedMovieRating | None:
     """JIT read-through for OMDb ratings. Returns None (no HTTP call at all)
     whenever OMDb isn't configured, so this is a no-op for installs without an
-    OMDb key - never blocks/slows down a plain movie-detail fetch."""
+    OMDb key - never blocks/slows down a plain movie-detail fetch.
+    Raises BudgetExhausted before HTTP when the daily provider quota is spent."""
     if not omdb.enabled:  # cheap short-circuit, avoids a wasted movie lookup
         return None
     repo = CacheRepo(session)
@@ -786,6 +787,10 @@ async def get_movie_ratings(
     movie = await get_movie(session, tmdb, tmdb_id)
     if not movie.imdb_id and movie.origin_country is None:
         movie = await get_movie(session, tmdb, tmdb_id, require_detail=True)
+    from app.services.provider_budgets import BudgetExhausted, reserve
+
+    if not await anyio.to_thread.run_sync(reserve, session.get_bind(), "omdb"):
+        raise BudgetExhausted("OMDb daily budget exhausted; try again tomorrow")
     lookup = (
         await omdb.lookup_by_imdb_id(movie.imdb_id)
         if movie.imdb_id

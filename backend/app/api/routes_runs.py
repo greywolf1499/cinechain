@@ -3,11 +3,14 @@ import logging
 import random
 import time
 from datetime import timedelta
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client, run_participant_guard
+from app.api.routes_tasks import TaskOut
 from app.db import get_session
 from app.engines import chaos, rabbit_hole
 from app.engines.base import BaseChallengeEngine, RunSetupError
@@ -65,6 +68,7 @@ from app.models.user import User
 from app.schemas.discovery import (
     DiscoveryCandidate,
     DiscoveryConnection,
+    DiscoveryEnvelope,
     TugLookahead,
     TugReachable,
 )
@@ -2778,7 +2782,7 @@ async def get_run_stats(
     return await engine.compute_stats(steps)
 
 
-@router.get("/{run_id}/discover", response_model=list[DiscoveryCandidate])
+@router.get("/{run_id}/discover", response_model=list[DiscoveryCandidate] | DiscoveryEnvelope)
 async def discover_next_movies(
     frontier_movie_id: int = Query(...),
     mode: str = Query(default="or", pattern="^(or|and)$"),
@@ -2788,6 +2792,8 @@ async def discover_next_movies(
     include_off_tier: bool = Query(
         default=False, description="Rabbit Hole only: include linked films that cost a life"
     ),
+    envelope: bool = Query(default=False),
+    wider: bool = Query(default=False),
     sort_by: str | None = Query(
         default=None,
         pattern="^underdog$",
@@ -2796,7 +2802,7 @@ async def discover_next_movies(
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
-) -> list[DiscoveryCandidate]:
+) -> list[DiscoveryCandidate] | DiscoveryEnvelope:
     """Unified "Pick Next" pool: every top-billed cast member's filmography,
     pooled into one set of candidates (Phase 13). Movies already logged in
     this run are NOT excluded from the pool - they're flagged
@@ -2826,6 +2832,7 @@ async def discover_next_movies(
                 else None
             ),
             history=_play_history(session, run.id),
+            wider=wider,
             **(
                 {"include_off_tier": include_off_tier}
                 if isinstance(engine, RabbitHoleEngine)
@@ -2851,7 +2858,13 @@ async def discover_next_movies(
     if chaser or sort_by:
         by_id = {c.movie_id: c for c in candidates}
         kept = await pool_options.shape_pool(
-            session, tmdb, [c.movie_id for c in candidates], chaser=chaser, sort_by=sort_by
+            session,
+            tmdb,
+            [c.movie_id for c in candidates],
+            chaser=chaser,
+            sort_by=sort_by,
+            hydrate_budget=engine._hydration_left or 0,
+            deadline=engine._hydration_deadline,
         )
         candidates = [by_id[movie_id] for movie_id in kept]
     for candidate in candidates:
@@ -2859,4 +2872,61 @@ async def discover_next_movies(
         candidate.existing_step_number = step_number_by_movie_id.get(candidate.movie_id)
         row = session.get(CachedMovie, candidate.movie_id)
         candidate.runtime = row.runtime if row is not None else None
-    return engine.annotate_candidates(candidates, rules, _play_history(session, run.id))
+    candidates = engine.annotate_candidates(candidates, rules, _play_history(session, run.id))
+    engine.discovery_diagnostics.after_filters = len(candidates)
+    if not candidates and engine.discovery_diagnostics.after_modifiers:
+        engine.discovery_diagnostics.reason = (
+            "The discovery filters hid every film. Turn off the filters."
+        )
+    return (
+        DiscoveryEnvelope(candidates=candidates, diagnostics=engine.discovery_diagnostics)
+        if envelope
+        else candidates
+    )
+
+
+class RunPrepareRequest(BaseModel):
+    treatment: Literal["details", "people", "ratings", "embeddings", "facets", "fix_all"] = (
+        "fix_all"
+    )
+
+
+@router.post("/{run_id}/prepare", response_model=TaskOut)
+async def prepare_run_pool(
+    background_tasks: BackgroundTasks,
+    payload: RunPrepareRequest | None = None,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    user: User = Depends(get_current_user),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> TaskOut:
+    from app.services import data_spa
+
+    payload = payload or RunPrepareRequest()
+    frontier = _last_step(session, run.id)
+    if frontier is None:
+        raise HTTPException(422, detail="Log or queue a frontier film before preparing this run.")
+    engine = get_engine(run.game_type, session, tmdb)
+    try:
+        candidates = await engine.discover_with_modifiers(
+            frontier.movie_id,
+            cast_limit=_run_rules(run).get("max_cast_order"),
+            rules=_run_rules(run),
+            previous_transition=frontier.transition_metadata,
+            history=_play_history(session, run.id),
+        )
+    except NotImplementedError:
+        raise HTTPException(422, detail="This mode has no discovery pool to prepare.") from None
+    ids = list(
+        dict.fromkeys([frontier.movie_id, *(candidate.movie_id for candidate in candidates)])
+    )[:200]
+    task = data_spa.submit(
+        background_tasks,
+        session,
+        payload.treatment,
+        user.id,
+        movie_ids=ids,
+        run_id=run.id,
+        batch_cap=200,
+    )
+    return TaskOut.from_model(task)

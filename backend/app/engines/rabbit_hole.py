@@ -391,10 +391,14 @@ def draw_facet_deck(
         for test in candidates:
             if test.id in used:
                 continue
-            cache_rate = feasibility.pass_rate(session, test, cache_ids)
-            pool_rate = feasibility.pass_rate(session, test, eligible_ids)
+            cache_counts = feasibility.counts(session, test, cache_ids)
+            pool_counts = feasibility.counts(session, test, eligible_ids)
+            cache_rate = cache_counts["pass_rate"]
+            pool_rate = pool_counts["pass_rate"]
             if (
-                cache_rate is None
+                cache_counts["unknown"]
+                or pool_counts["unknown"]
+                or cache_rate is None
                 or pool_rate is None
                 or not (low <= cache_rate <= high and low <= pool_rate <= high)
             ):
@@ -428,10 +432,17 @@ def draw_facet_deck(
                         ]
                     ),
                 )
+                if combined.query.size() > 64:
+                    continue
+                pool_counts = feasibility.counts(session, combined, eligible_ids)
+                cache_counts = feasibility.counts(session, combined, cache_ids)
                 if (
-                    combined.query.size() <= 64
-                    and (feasibility.pass_rate(session, combined, eligible_ids) or 0) >= 0.01
-                    and (feasibility.pass_rate(session, combined, cache_ids) or 0) >= 0.01
+                    not pool_counts["unknown"]
+                    and not cache_counts["unknown"]
+                    and (
+                        (pool_counts["pass_rate"] or 0) >= 0.01
+                        and (cache_counts["pass_rate"] or 0) >= 0.01
+                    )
                 ):
                     inherited.append(
                         {
@@ -1001,8 +1012,9 @@ class RabbitHoleEngine(CineChainEngine):
         history: Sequence[RunStep] | None = None,
         *,
         include_off_tier: bool = False,
+        wider: bool = False,
     ) -> list[DiscoveryCandidate]:
-        pool = await self.discover_candidates(
+        return await super().discover_with_modifiers(
             frontier_movie_id,
             mode,
             cast_limit,
@@ -1010,8 +1022,8 @@ class RabbitHoleEngine(CineChainEngine):
             previous_transition,
             history,
             include_off_tier=include_off_tier,
+            wider=wider,
         )
-        return await self.filter_by_modifiers(frontier_movie_id, pool, rules, history)
 
     async def discover_candidates(
         self,
@@ -1044,6 +1056,29 @@ class RabbitHoleEngine(CineChainEngine):
             candidate.upcoming_tier_warning = state.upcoming_tier_warning
             kept.append(candidate)
         return kept
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        pool = await super().widen_pool(frontier, rules, history, rung)
+        if self._discovery_options.get("include_off_tier"):
+            return pool
+        tier = tier_for_depth(len(history or []), rules)
+        if rung == 3:
+            matches = set(
+                feasibility.matching_ids(
+                    self.session,
+                    feasibility.query_of(tier_tests(tier)),
+                    [candidate.movie_id for candidate in pool],
+                )
+            )
+            return [candidate for candidate in pool if candidate.movie_id in matches]
+        return [
+            candidate
+            for candidate in pool
+            if (row := self.session.get(CachedMovie, candidate.movie_id)) is not None
+            and compliance(self.session, tier, row) is not False
+        ]
 
     def annotate_candidates(
         self,

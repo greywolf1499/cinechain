@@ -5,6 +5,14 @@ from pydantic import BaseModel, computed_field
 from app.utils.countries import parse_countries
 
 
+class DiscoveryDiagnostics(BaseModel):
+    engine_pool: int = 0
+    after_modifiers: int = 0
+    after_filters: int = 0
+    widened: bool = False
+    reason: str | None = None
+
+
 class DiscoveryConnection(BaseModel):
     # actor | director (director links carry the director's id/name) | craft (Crew & Craft Trail:
     # `actor_id`/`actor_name` are the shared person, `role_in_*` what they were on each film)
@@ -63,6 +71,11 @@ class DiscoveryCandidate(BaseModel):
     @property
     def origin_countries(self) -> list[str]:
         return parse_countries(self.origin_country)
+
+
+class DiscoveryEnvelope(BaseModel):
+    candidates: list[DiscoveryCandidate]
+    diagnostics: DiscoveryDiagnostics
 
 
 class TugReachable(BaseModel):

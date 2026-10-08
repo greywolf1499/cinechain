@@ -400,9 +400,72 @@ class SemanticTropeEngine(FeatureEngine):
         self._trope_sources.update({movie.tmdb_id: source(movie) for movie in pending})
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
-        result = await super().validate_candidate(movie_id, rules)
-        await self.prepare_tropes([await self._load(movie_id, hydrate=True)])
-        return result
+        movie = await self._load(movie_id, hydrate=True)
+        if not (movie.overview or "").strip():
+            return ValidationResult(
+                valid=False,
+                blocked=True,
+                reason="This film has no plot overview. Choose another seed or repair its details in Data Spa.",
+            )
+        if not await movie_features.ensure_embeddings(self.session, [movie]):
+            return ValidationResult(
+                valid=False,
+                blocked=True,
+                reason="Download the embedding model in Settings > AI & Embeddings",
+            )
+        await self.prepare_tropes([movie])
+        return ValidationResult(valid=True)
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        if self.cast_link_required(rules):
+            return await super().widen_pool(frontier, rules, history, rung)
+        row = await self._load(frontier, hydrate=True)
+        if embeddings.decode_embedding(row.overview_embedding) is None:
+            self.discovery_reason = "Download the embedding model in Settings > AI & Embeddings"
+            return []
+        if rung == 1:
+            stubs = await self.tmdb.get_related_movies(frontier, page=2)
+        elif rung == 2:
+            params: dict = {"primary_release_date.lte": today_iso()}
+            if row.genre_ids:
+                params["with_genres"] = "|".join(map(str, row.genre_ids[:3]))
+            keywords = await self.tmdb.get_movie_keyword_ids(frontier)
+            if keywords:
+                params["with_keywords"] = "|".join(map(str, keywords[:3]))
+            stubs = await self.tmdb.discover_movies(pages=1, **params)
+        else:
+            from app.facets.query import FacetQuery
+            from app.services import feasibility
+
+            query = (
+                FacetQuery(facet="genre", op="has_any", value=list(row.genre_ids))
+                if row.genre_ids
+                else FacetQuery(all=[])
+            )
+            ids = self.session.exec(
+                select(CachedMovie.tmdb_id).order_by(col(CachedMovie.popularity).desc()).limit(200)
+            ).all()
+            matches = feasibility.matching_ids(self.session, query, ids)
+            cached = [
+                movie
+                for movie_id in matches
+                if (movie := self.session.get(CachedMovie, movie_id)) is not None
+            ]
+            await self.prepare(cached[:POOL_FEATURE_BUDGET])
+            return self._scored_candidates(row, cached, best_first="high")
+        films = await cache_repo.store_stubs(self.session, stubs)
+        candidates = [
+            candidate_from_row(film)
+            for film in films
+            if film.tmdb_id != frontier and is_reality_eligible(film)
+        ]
+        hydrated = await self._hydrate_pool(candidates)
+        await self.prepare([*hydrated.values()][:POOL_FEATURE_BUDGET])
+        if row.extracted_tropes:
+            await self.prepare_tropes([*hydrated.values()][:POOL_TROPE_BUDGET])
+        return self._scored_candidates(row, list(hydrated.values()), best_first="high")
 
     async def validate_primary(
         self,
@@ -483,6 +546,7 @@ class SemanticTropeEngine(FeatureEngine):
             embeddings.decode_embedding(frontier.overview_embedding) is None
             and not frontier.extracted_tropes
         ):
+            self.discovery_reason = "Download the embedding model in Settings > AI & Embeddings"
             return []
         pool: dict[int, CachedMovie] = {}
 

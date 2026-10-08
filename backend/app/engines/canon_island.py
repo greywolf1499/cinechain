@@ -140,3 +140,13 @@ class CanonIslandEngine(CineChainEngine):
             return candidates
         allowed = self._allowed_subset(list_id, [c.movie_id for c in candidates])
         return [c for c in candidates if c.movie_id in allowed]
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        candidates = await super().widen_pool(frontier, rules, history, rung)
+        list_id = (rules or {}).get(ALLOWED_LIST_KEY)
+        if not list_id:
+            return []
+        allowed = self._allowed_subset(list_id, [candidate.movie_id for candidate in candidates])
+        return [candidate for candidate in candidates if candidate.movie_id in allowed]

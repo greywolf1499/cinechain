@@ -24,11 +24,12 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 import httpx
-from sqlmodel import select
+from sqlmodel import col, select
 
 from app.engines import chaos, modifiers
 from app.engines.cinechain import CineChainEngine
 from app.engines.rulebook import RuleSection
+from app.facets.query import FacetQuery
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate, DiscoveryConnection
@@ -40,7 +41,7 @@ from app.schemas.engine import (
     SuggestionFilters,
     ValidationResult,
 )
-from app.services import cache_repo, pathfinder
+from app.services import cache_repo, feasibility, pathfinder
 from app.services.graph import PathConstraints
 from app.services.movie_filters import is_reality_eligible, passes_filters
 from app.services.tmdb import TMDBError
@@ -86,6 +87,37 @@ class MutatorEngine(CineChainEngine):
         if not self.optional_cast_link:
             return True
         return bool(self.active_modifiers(rules).get(modifiers.CAST_LINK_KEY, False))
+
+    def widening_query(
+        self, frontier: CachedMovie, rules: dict | None, history: Sequence[RunStep] | None
+    ) -> FacetQuery | None:
+        return None
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        if self.cast_link_required(rules):
+            pool = await super().widen_pool(frontier, rules, history, rung)
+            row = await self._load(frontier, hydrate=True, rules=rules)
+            return await self._filter_pool(row, pool, rules)
+        if rung != 3:
+            return []
+        row = await self._load(frontier, hydrate=True, rules=rules)
+        query = self.widening_query(row, rules, history)
+        if query is None:
+            return []
+        ids = self.session.exec(
+            select(CachedMovie.tmdb_id).order_by(col(CachedMovie.popularity).desc()).limit(200)
+        ).all()
+        matches = feasibility.matching_ids(self.session, query, ids)
+        pool = [
+            candidate_from_row(movie)
+            for movie_id in matches
+            if movie_id != frontier
+            and (movie := self.session.get(CachedMovie, movie_id)) is not None
+            and is_reality_eligible(movie)
+        ]
+        return await self._filter_pool(row, pool, rules)
 
     def validate_rules_config(self, rules: dict | None) -> list[str]:
         problems = super().validate_rules_config(rules)
@@ -371,6 +403,56 @@ class ChronoClimbEngine(MutatorEngine):
     def _direction(self, rules: dict | None) -> str:
         return self.active_modifiers(rules)[modifiers.CHRONO_KEY]
 
+    def widening_query(
+        self, frontier: CachedMovie, rules: dict | None, history: Sequence[RunStep] | None
+    ) -> FacetQuery | None:
+        year = parse_release_year(frontier.release_date)
+        if year is None:
+            return None
+        return FacetQuery(
+            facet="release_year",
+            op="lt" if self._direction(rules) == "descent" else "gt",
+            value=year,
+        )
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        if self.cast_link_required(rules) or rung == 3:
+            return await super().widen_pool(frontier, rules, history, rung)
+        row = await self._load(frontier, hydrate=True, rules=rules)
+        year = parse_release_year(row.release_date)
+        if year is None:
+            self.discovery_reason = (
+                "The frontier's release year is missing. Prepare this run's details."
+            )
+            return []
+        descent = self._direction(rules) == "descent"
+        low, high = (
+            (year - 10 * (rung + 1), year - 10 * rung - 1)
+            if descent
+            else (year + 10 * rung + 1, year + 10 * (rung + 1))
+        )
+        low = max(1888, low)
+        films = await cache_repo.discover_movies(
+            self.session,
+            self.tmdb,
+            pages=1,
+            **{
+                "primary_release_date.gte": f"{low:04d}-01-01",
+                "primary_release_date.lte": min(today_iso(), f"{high:04d}-12-31"),
+            },
+        )
+        return await self._filter_pool(
+            row,
+            [
+                candidate_from_row(film)
+                for film in films
+                if is_reality_eligible(film) and film.tmdb_id != frontier
+            ],
+            rules,
+        )
+
     def validate_rules_config(self, rules: dict | None) -> list[str]:
         problems = super().validate_rules_config(rules)
         direction = (rules or {}).get("direction")
@@ -538,6 +620,48 @@ class WorldPassportEngine(MutatorEngine):
     # Anti yo-yo: the last 3 countries are locked out, so US -> UK -> US -> UK can't happen.
     default_modifiers: ClassVar[dict[str, Any]] = {modifiers.COOLDOWN_KEY: 3}
 
+    def widening_query(
+        self, frontier: CachedMovie, rules: dict | None, history: Sequence[RunStep] | None
+    ) -> FacetQuery:
+        locked = self.cooldown_countries(rules, history, frontier)
+        home = primary_country(frontier)
+        if home:
+            locked = [*locked, home]
+        return FacetQuery.model_validate(
+            {"not": {"facet": "origin_country", "op": "has_any", "value": list(set(locked))}}
+        )
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        if self.cast_link_required(rules) or rung == 3:
+            return await super().widen_pool(frontier, rules, history, rung)
+        row = await self._load(frontier, hydrate=True, rules=rules)
+        locked = {primary_country(row), *self.cooldown_countries(rules, history, row)} - {None}
+        countries = [country for country in PASSPORT_COUNTRIES if country not in locked]
+        if not countries:
+            return []
+        start = frontier % len(countries)
+        countries = countries[start:] + countries[:start]
+        sampled = countries[
+            PASSPORT_COUNTRIES_PER_POOL + (rung - 1) * 4 : PASSPORT_COUNTRIES_PER_POOL + rung * 4
+        ]
+        pool = []
+        for country in sampled:
+            films = await cache_repo.discover_movies(
+                self.session,
+                self.tmdb,
+                pages=1,
+                with_origin_country=country,
+                **{"primary_release_date.lte": today_iso()},
+            )
+            pool.extend(
+                candidate_from_row(film)
+                for film in films[:PASSPORT_FILMS_PER_COUNTRY]
+                if film.tmdb_id != frontier and is_reality_eligible(film)
+            )
+        return await self._filter_pool(row, pool, rules)
+
     def pair_violation(
         self, earlier: CachedMovie, later: CachedMovie, rules: dict | None = None
     ) -> str | None:
@@ -684,6 +808,20 @@ class AuteurRelayEngine(MutatorEngine):
         return PathConstraints(
             alternate_edges=True, use_directors=True, start_tag=start_connection_type
         )
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        candidates = await super().widen_pool(frontier, rules, history, rung)
+        required = OPPOSITE_KIND.get((self._discovery_previous or {}).get("connection_type") or "")
+        if required:
+            for candidate in candidates:
+                candidate.connections = [
+                    connection
+                    for connection in candidate.connections
+                    if connection.kind == required
+                ]
+        return [candidate for candidate in candidates if candidate.connections]
 
     async def _validate_link(
         self,

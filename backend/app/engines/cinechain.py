@@ -37,6 +37,7 @@ from app.services import bounties, cache_repo, feasibility, pathfinder
 from app.services.bridge_paths import parse_countries
 from app.services.movie_filters import is_reality_eligible, passes_filters
 from app.services.tmdb import TMDBError
+from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
 from app.utils.dates import parse_release_year
 
 
@@ -429,6 +430,110 @@ class CineChainEngine(BaseChallengeEngine):
         if mode == "and":
             results = [c for c in results if len(c.connections) >= 2]
         return results
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        limit = self._discovery_cast_limit or (rules or {}).get("max_cast_order") or 15
+        if rung == 3:
+            from app.engines import chaos
+            from app.facets.query import FacetQuery
+            from app.services import feasibility
+
+            repo = cache_repo.CacheRepo(self.session)
+            cast = repo.get_cached_cast(frontier, limit) or []
+            cached_pool: dict[int, DiscoveryCandidate] = {}
+            for member in cast:
+                for movie in repo.get_cached_actor_credits(member["actor_id"]) or []:
+                    if movie.tmdb_id == frontier or not is_reality_eligible(movie):
+                        continue
+                    candidate = cached_pool.setdefault(
+                        movie.tmdb_id,
+                        DiscoveryCandidate(
+                            movie_id=movie.tmdb_id,
+                            title=movie.title,
+                            poster_path=movie.poster_path,
+                            release_year=parse_release_year(movie.release_date),
+                            genre_ids=movie.genre_ids or [],
+                            origin_country=movie.origin_country,
+                            popularity=movie.popularity,
+                        ),
+                    )
+                    candidate.connections.append(
+                        DiscoveryConnection(
+                            actor_id=member["actor_id"],
+                            actor_name=member["name"],
+                            character_in_frontier=member["character_name"],
+                        )
+                    )
+            handicap = chaos.active(rules)
+            query = feasibility.query_of(handicap.predicate) if handicap else FacetQuery(all=[])
+            matches = set(feasibility.matching_ids(self.session, query, cached_pool))
+            return [
+                candidate
+                for movie_id, candidate in cached_pool.items()
+                if movie_id in matches
+                and (self._discovery_mode != "and" or len(candidate.connections) >= 2)
+            ]
+        if rung == 1:
+            cast = await self.tmdb.get_movie_credits(frontier)
+            cache_repo.CacheRepo(self.session).upsert_cast(frontier, cast, limit + 10)
+        pool = await self.discover_candidates(
+            frontier,
+            self._discovery_mode,
+            limit + 10,
+            rules,
+            self._discovery_previous,
+            history,
+            **self._discovery_options,
+        )
+        # Broader billing is a source of filmographies, not permission to break the run's link rule.
+        original = await cache_repo.get_movie_cast(self.session, self.tmdb, frontier, limit)
+        allowed = {member["actor_id"] for member in original}
+        names = {member["actor_id"]: member for member in original}
+        kept = []
+        for candidate in pool:
+            candidate.connections = [
+                connection
+                for connection in candidate.connections
+                if connection.kind != "actor" or connection.actor_id in allowed
+            ]
+            if not candidate.connections:
+                repo = cache_repo.CacheRepo(self.session)
+                candidate_cast = repo.get_cached_cast(candidate.movie_id, limit)
+                if candidate_cast is None and (self._hydration_left or 0) > 0:
+                    self._hydration_left = (self._hydration_left or 0) - 1
+                    try:
+                        candidate_cast = await fetch_with_backoff(
+                            lambda movie_id=candidate.movie_id: cache_repo.get_movie_cast(
+                                self.session,
+                                self.tmdb,
+                                movie_id,
+                                limit,
+                            ),
+                            self._hydration_deadline,
+                        )
+                    except DeadlineReached:
+                        self._hydration_left = 0
+                        self.discovery_reason = (
+                            "Some cast links are unverified. Prepare this run's people."
+                        )
+                for member in candidate_cast or []:
+                    actor_id = member["actor_id"]
+                    if actor_id in allowed:
+                        candidate.connections.append(
+                            DiscoveryConnection(
+                                actor_id=actor_id,
+                                actor_name=names[actor_id]["name"],
+                                character_in_frontier=names[actor_id]["character_name"],
+                                character_in_candidate=member["character_name"],
+                            )
+                        )
+            if candidate.connections and (
+                self._discovery_mode != "and" or len(candidate.connections) >= 2
+            ):
+                kept.append(candidate)
+        return kept
 
     async def compute_stats(self, steps: list[RunStep]) -> RunStats:
         return compute_run_stats(steps)

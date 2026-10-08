@@ -22,6 +22,17 @@ def test_task_titles_cover_all_submitted_names():
             for target in node.targets
             if isinstance(target, ast.Name)
         }
+        mappings = {
+            target.id: [value.value for value in node.value.values]
+            for node in tree.body
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
+            if all(
+                isinstance(value, ast.Constant) and isinstance(value.value, str)
+                for value in node.value.values
+            )
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -37,6 +48,14 @@ def test_task_titles_cover_all_submitted_names():
                 if len(node.args) > 2
                 else next(keyword.value for keyword in node.keywords if keyword.arg == "name")
             )
+            if (
+                isinstance(argument, ast.Subscript)
+                and isinstance(argument.value, ast.Name)
+                and argument.value.id in mappings
+            ):
+                # A literal name table: every value it can produce must have a title.
+                names.update(mappings[argument.value.id])
+                continue
             name = (
                 argument.value
                 if isinstance(argument, ast.Constant)

@@ -266,13 +266,13 @@ class TMDBClient:
                 break
         return stubs
 
-    async def get_related_movies(self, tmdb_id: int) -> list[TMDBPersonCredit]:
+    async def get_related_movies(self, tmdb_id: int, page: int = 1) -> list[TMDBPersonCredit]:
         """TMDB's recommendations for a film, then its "similar" titles (deduped)."""
         seen: set[int] = set()
         related: list[TMDBPersonCredit] = []
         for path in (f"/movie/{tmdb_id}/recommendations", f"/movie/{tmdb_id}/similar"):
             try:
-                data = await self._get(path)
+                data = await self._get(path, params={"page": page} if page != 1 else None)
             except TMDBNotFoundError:
                 continue
             for entry in data.get("results", []):
@@ -280,6 +280,10 @@ class TMDBClient:
                     seen.add(entry["id"])
                     related.append(_normalize_person_credit(entry))
         return related
+
+    async def get_movie_keyword_ids(self, tmdb_id: int) -> list[int]:
+        data = await self._get(f"/movie/{tmdb_id}/keywords")
+        return [keyword["id"] for keyword in data.get("keywords", []) if "id" in keyword]
 
     async def get_movie(self, tmdb_id: int) -> TMDBMovie:
         data = await self._get(f"/movie/{tmdb_id}")

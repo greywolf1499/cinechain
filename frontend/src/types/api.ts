@@ -906,6 +906,44 @@ export interface CacheFlushResult {
 	db_size_after: number | null;
 }
 
+/** Data Spa treatments (`POST /system/spa/{treatment}`, `POST /runs/{id}/prepare`). */
+export type SpaTreatment = "details" | "people" | "ratings" | "embeddings" | "facets" | "fix_all";
+
+export interface CoverageCount {
+	known: number;
+	total: number;
+}
+
+export interface ProviderBudget {
+	provider: string;
+	day: string;
+	used: number;
+	limit: number;
+	remaining: number;
+}
+
+/** `GET /system/cache/health`: SQL coverage counts per data family. */
+export interface CacheHealth {
+	total_movies: number;
+	coverage: Record<Exclude<SpaTreatment, "fix_all">, CoverageCount>;
+	families: Record<string, CoverageCount>;
+	budgets: ProviderBudget[];
+}
+
+/** `GET /runs/{id}/discover?envelope=1` funnel counts. */
+export interface DiscoveryDiagnostics {
+	engine_pool: number;
+	after_modifiers: number;
+	after_filters: number;
+	widened: boolean;
+	reason: string | null;
+}
+
+export interface DiscoveryEnvelope {
+	candidates: DiscoveryCandidate[];
+	diagnostics: DiscoveryDiagnostics;
+}
+
 export interface CacheStats {
 	cached_movies: number;
 	cached_actors: number;

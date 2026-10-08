@@ -852,6 +852,15 @@ class TugOfWarEngine(CineChainEngine):
             previous_transition,
             history,
         )
+        return self.annotate_candidates(candidates, rules, history)
+
+    def annotate_candidates(
+        self,
+        candidates: list[DiscoveryCandidate],
+        rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
+    ) -> list[DiscoveryCandidate]:
+        candidates = super().annotate_candidates(candidates, rules, history)
         rules = rules or {}
         if rules.get(TUG_RULES_VERSION_KEY) not in (2, 3):
             return candidates

@@ -10,6 +10,8 @@ export function useTrackedTask<R>(options: {
 	onFinished?: (task: SystemTask<R>) => void;
 	resumeNames?: string[];
 	dedupeKey?: string;
+	/** Resume any active task this predicate accepts (e.g. one run's preparation). */
+	match?: (task: SystemTask<unknown>) => boolean;
 }) {
 	const { data: tasks, track, streamError } = useLiveTasks();
 	const userId = useAuthStore((state) => state.user?.id);
@@ -21,6 +23,7 @@ export function useTrackedTask<R>(options: {
 	onFinished.current = options.onFinished;
 	const task = (tasks?.find((item) =>
 		!isFinished(item) && (options.dedupeKey ? item.dedupe_key === options.dedupeKey :
+			options.match ? options.match(item) :
 			item.user_id === userId && options.resumeNames?.includes(item.name))) ??
 		tasks?.find((item) => item.id === taskId)) as SystemTask<R> | undefined;
 	useEffect(() => {

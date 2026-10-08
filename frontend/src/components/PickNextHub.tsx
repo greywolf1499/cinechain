@@ -53,11 +53,15 @@ import { pendulumState } from "../lib/pendulum";
 import { isoToFlagEmoji } from "../lib/countries";
 import { effectiveCooldown } from "../lib/modifiers";
 import { useLogFilm } from "../lib/useLogFilm";
+import { useTrackedTask } from "../lib/useTrackedTask";
+import { describeProgress, taskPausedReason } from "../lib/tasks";
+import TaskProgressBar from "./TaskProgressBar";
 import ClampedLabel from "./ui/ClampedLabel";
 import {
   useCanonBadgesBulk,
   useOfferFork,
   useDiscoverCandidates,
+  useDiscoverDiagnostics,
   useEngines,
   useRunSuggestions,
   useJellyfinLookup,
@@ -74,11 +78,13 @@ import type {
   CastMember,
   DiscoveryCandidate,
   DiscoveryConnection,
+  DiscoveryDiagnostics,
   GenreOut,
   MovieRatings,
   MovieSummary,
   RulesConfig,
   RunStep,
+  SpaTreatment,
   ValidationResult,
 } from "../types/api";
 
@@ -411,12 +417,18 @@ function DiscoveryGrid({
     queryKey: ["movies", "genres"],
     queryFn: () => api.get<GenreOut[]>("/movies/genres"),
   });
+  // "Search wider" forces the server's bounded widening ladder for this exact pool only.
+  const poolContext = JSON.stringify([frontierStep.movie_id, mode, chaser, underdog, includeOffTier]);
+  const [widerContext, setWiderContext] = useState<string | null>(null);
+  const wider = widerContext === poolContext;
+  const discoverOptions = { chaser, underdog, includeOffTier, wider };
   const { data: candidates, isLoading: poolLoading, isError: poolError, error: poolFailure, refetch: retryPool } = useDiscoverCandidates(
     runId,
     frontierStep.movie_id,
     mode,
-    { chaser, underdog, includeOffTier },
+    discoverOptions,
   );
+  const { data: diagnostics } = useDiscoverDiagnostics(runId, frontierStep.movie_id, mode, discoverOptions);
   const isLoading = poolLoading || !engine && !enginesError;
   const pool = useMemo(() => {
     const byId = new Map((candidates ?? []).map((candidate) => [candidate.movie_id, candidate]));
@@ -952,7 +964,26 @@ function DiscoveryGrid({
           </div>
         ) : (
           <div className="flex flex-col items-center gap-3 py-6 text-center text-sm text-zinc-500">
-            <p>No films match these filters.</p>
+            {pool.length === 0 ? (
+              <DryPoolPanel
+                runId={runId}
+                diagnostics={diagnostics ?? null}
+                hideDetails={roulette}
+                treatment={recommendedTreatment(gameType, diagnostics ?? null)}
+                wider={wider}
+                onWiden={() => setWiderContext(poolContext)}
+              />
+            ) : (
+              <>
+                <p role="status">
+                  Your filters hid {pool.length} {pool.length === 1 ? "film" : "films"} the engine found.
+                </p>
+                <button type="button" onClick={clearFilters}
+                  className="rounded-md border border-app-border px-3 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-app-surface-hover">
+                  Clear filters
+                </button>
+              </>
+            )}
             {canSearchFurther && <button type="button" disabled={suggestions.isPending} onClick={searchFurther}
               className="rounded-md border border-accent px-3 py-2 text-accent disabled:opacity-50">
               {suggestions.isPending ? "Searching..." : `Search further in ${searchLabel}`}
@@ -976,6 +1007,7 @@ function DiscoveryGrid({
                   allowRepeats={allowRepeats} renderCard={renderCandidate} /> : undefined} />
           <p className="text-xs text-zinc-500" role="status">
             Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} best matches · narrow with a filter
+            {diagnostics?.widened && " · pool widened beyond the engine's first pass"}
           </p>
         </>
       )}
@@ -1864,6 +1896,80 @@ function ActorScreenView({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+const TREATMENT_LABELS: Record<SpaTreatment, string> = {
+  details: "film details",
+  people: "cast & crew",
+  ratings: "ratings",
+  embeddings: "plot embeddings",
+  facets: "film facets",
+  fix_all: "all missing data",
+};
+
+/** The Data Spa treatment most likely to refill this run's pool. */
+function recommendedTreatment(gameType: string, diagnostics: DiscoveryDiagnostics | null): SpaTreatment {
+  if (gameType === SEMANTIC_TROPE) return "embeddings";
+  if (diagnostics && diagnostics.engine_pool > 0 && diagnostics.after_filters < diagnostics.after_modifiers) return "facets";
+  return "fix_all";
+}
+
+/** The engine (not the client filters) came back empty: explain why and offer recovery. */
+function DryPoolPanel({ runId, diagnostics, hideDetails, treatment, wider, onWiden }: {
+  runId: string;
+  diagnostics: DiscoveryDiagnostics | null;
+  /** Hidden-information modes (Tagline Roulette): never echo server text that could name films. */
+  hideDetails: boolean;
+  treatment: SpaTreatment;
+  wider: boolean;
+  onWiden: () => void;
+}) {
+  const prepare = useTrackedTask({
+    match: (task) => task.name.startsWith("spa_") && !!task.dedupe_key?.startsWith(`spa:run:${runId}:`),
+  });
+  const active = prepare.task && (prepare.task.status === "pending" || prepare.task.status === "running") ? prepare.task : null;
+  const finished = prepare.task && !active ? prepare.task : null;
+  const reason = hideDetails ? null : diagnostics?.reason;
+  return (
+    <div className="flex w-full max-w-md flex-col items-center gap-3">
+      <p className="font-medium text-zinc-300">The engine found no films for this step.</p>
+      {reason && <p className="text-zinc-400">{reason}</p>}
+      {diagnostics && (
+        <p className="text-xs text-zinc-500" role="status">
+          Engine pool {diagnostics.engine_pool} · after modifiers {diagnostics.after_modifiers} · after rules{" "}
+          {diagnostics.after_filters}{diagnostics.widened ? " · already widened" : ""}
+        </p>
+      )}
+      <div className="flex flex-wrap justify-center gap-2">
+        <button type="button" disabled={wider} onClick={onWiden}
+          className="rounded-md border border-accent px-3 py-2 text-accent disabled:cursor-not-allowed disabled:opacity-50">
+          {wider ? "Searched wider" : "Search wider"}
+        </button>
+        <button type="button" disabled={prepare.busy}
+          onClick={() => void prepare.start(`/runs/${runId}/prepare`, { treatment })}
+          className="inline-flex items-center gap-1.5 rounded-md border border-app-border px-3 py-2 text-zinc-200 hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+          title={`Repairs ${TREATMENT_LABELS[treatment]} for this run's pool in the background`}>
+          {prepare.busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {active ? "Preparing this run..." : "Prepare this run"}
+        </button>
+      </div>
+      {active && (
+        <div className="flex w-full flex-col gap-1" aria-live="polite">
+          <TaskProgressBar task={active} />
+          <p className="text-xs text-zinc-500">Repairing {TREATMENT_LABELS[active.name.replace(/^spa_/, "") as SpaTreatment] ?? TREATMENT_LABELS[treatment]} · {describeProgress(active)}</p>
+        </div>
+      )}
+      {finished && taskPausedReason(finished) ? <p role="status" className="text-xs text-amber-300">
+        Preparation paused: {taskPausedReason(finished)}. The pool was refreshed with what was repaired; prepare again after the budget resets to continue.
+      </p> : finished?.status === "completed" && <p role="status" className="text-xs text-zinc-500">
+        Preparation finished; the pool has been refreshed.
+      </p>}
+      {finished?.status === "failed" && <p role="alert" className="text-xs text-red-300">
+        Preparation failed: {finished.progress_data?.error?.message ?? finished.error ?? "unknown error"}
+      </p>}
+      {prepare.error && <p role="alert" className="text-xs text-red-300">{prepare.error}</p>}
     </div>
   );
 }

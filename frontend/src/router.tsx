@@ -12,6 +12,7 @@ import BingoPage from "./pages/BingoPage";
 import MarathonRouterPage from "./pages/MarathonRouterPage";
 import MapPage from "./pages/MapPage";
 import SettingsLayout from "./pages/settings/SettingsLayout";
+import DataSpaPage from "./pages/settings/DataSpaPage";
 import {
   EngineSettings,
   GeneralSettings,
@@ -58,6 +59,7 @@ export const router = createBrowserRouter([
               { path: "general", element: <GeneralSettings /> },
               { path: "engine", element: <EngineSettings /> },
               { path: "integrations", element: <IntegrationsSettings /> },
+              { path: "data-spa", element: <DataSpaPage /> },
               { path: "tasks", element: <TasksSettings /> },
               { path: "*", element: <Navigate to="general" replace /> },
             ],

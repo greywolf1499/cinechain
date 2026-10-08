@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, ClassVar, Literal
 
+import httpx
 from sqlmodel import Session
 
 from app.engines import chaos, modifiers
@@ -19,7 +22,7 @@ from app.models.run import (
     Run,
     RunStep,
 )
-from app.schemas.discovery import DiscoveryCandidate
+from app.schemas.discovery import DiscoveryCandidate, DiscoveryDiagnostics
 from app.schemas.engine import (
     ConstraintInfo,
     FilterSpec,
@@ -32,13 +35,16 @@ from app.schemas.engine import (
 )
 from app.services import bounties, cache_repo, feasibility
 from app.services.movie_filters import is_reality_eligible
-from app.services.tmdb import TMDBClient
+from app.services.tmdb import TMDBClient, TMDBError
 from app.services.tmdb_backoff import DeadlineReached, fetch_with_backoff
 
 # Modifier checks need each candidate's country/runtime, which search/credit stubs
 # lack: hydrate this many per request (most popular first), the rest stay "unverified".
 HYDRATE_BUDGET = 30
 HYDRATE_SECONDS = 20.0
+DRY_POOL_MIN = 8
+DISCOVERY_SECONDS = 12.0
+logger = logging.getLogger(__name__)
 
 
 class RunSetupError(Exception):
@@ -118,6 +124,9 @@ class BaseChallengeEngine(ABC):
         # engine's own pool filter and the modifier filter.
         self._hydration_left: int | None = None
         self._hydration_deadline = 0.0
+        self.discovery_diagnostics = DiscoveryDiagnostics()
+        self.discovery_reason: str | None = None
+        self._discovery_options: dict[str, Any] = {}
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:
@@ -279,7 +288,16 @@ class BaseChallengeEngine(ABC):
                     row = fetched or row
                 except DeadlineReached:
                     self._hydration_left = 0
-                except Exception:  # noqa: BLE001 - leave this film unverified
+                    self.discovery_reason = (
+                        "Some film details are missing. Prepare this run before searching again."
+                    )
+                except (TMDBError, httpx.HTTPError) as exc:
+                    logger.warning(
+                        "Candidate %s detail hydration failed: %s", candidate.movie_id, exc
+                    )
+                    self.discovery_reason = (
+                        "Some film details could not be fetched. Prepare this run or try again."
+                    )
                     self.session.rollback()
                 candidate.origin_country = row.origin_country
             rows[candidate.movie_id] = row
@@ -331,12 +349,95 @@ class BaseChallengeEngine(ABC):
         rules: dict | None = None,
         previous_transition: dict | None = None,
         history: Sequence[RunStep] | None = None,
+        *,
+        wider: bool = False,
+        **options: Any,
     ) -> list[DiscoveryCandidate]:
-        """The primary candidate generator's pool, narrowed by the run's active modifiers."""
-        pool = await self.discover_candidates(
-            frontier_movie_id, mode, cast_limit, rules, previous_transition, history
+        """One bounded ladder; every extra candidate still passes the original rules."""
+        from app.engines.mutators import POOL_FETCH_ERRORS
+
+        self.discovery_diagnostics = DiscoveryDiagnostics()
+        self.discovery_reason = None
+        self._discovery_options = options
+        self._discovery_mode = mode
+        self._discovery_cast_limit = cast_limit
+        self._discovery_previous = previous_transition
+        deadline = time.monotonic() + DISCOVERY_SECONDS
+        if self._hydration_left is None:
+            self._hydration_left = HYDRATE_BUDGET
+            self._hydration_deadline = deadline
+        else:
+            self._hydration_deadline = min(self._hydration_deadline, deadline)
+        raw: dict[int, DiscoveryCandidate] = {}
+        kept: list[DiscoveryCandidate] = []
+        try:
+            async with asyncio.timeout(DISCOVERY_SECONDS):
+                try:
+                    initial = await self.discover_candidates(
+                        frontier_movie_id,
+                        mode,
+                        cast_limit,
+                        rules,
+                        previous_transition,
+                        history,
+                        **options,
+                    )
+                except POOL_FETCH_ERRORS as exc:
+                    logger.warning("Discovery failed for %s: %s", self.game_type, exc)
+                    self.discovery_reason = (
+                        "The movie provider is unavailable. Prepare this run or try again."
+                    )
+                    initial = []
+                raw.update((candidate.movie_id, candidate) for candidate in initial)
+                self.discovery_diagnostics.engine_pool = len(raw)
+                kept = await self.filter_by_modifiers(
+                    frontier_movie_id, list(raw.values()), rules, history
+                )
+                self.discovery_diagnostics.after_modifiers = len(kept)
+                if len(kept) < DRY_POOL_MIN or wider:
+                    for rung in (1, 2, 3):
+                        if len(kept) >= DRY_POOL_MIN and not wider:
+                            break
+                        try:
+                            extra = await self.widen_pool(frontier_movie_id, rules, history, rung)
+                        except POOL_FETCH_ERRORS as exc:
+                            logger.warning(
+                                "Discovery widening failed for %s: %s", self.game_type, exc
+                            )
+                            self.discovery_reason = (
+                                "The movie provider is unavailable. Prepare this run or try again."
+                            )
+                            continue
+                        added = [candidate for candidate in extra if candidate.movie_id not in raw]
+                        raw.update((candidate.movie_id, candidate) for candidate in added)
+                        self.discovery_diagnostics.engine_pool = len(raw)
+                        if added:
+                            self.discovery_diagnostics.widened = True
+                            accepted = await self.filter_by_modifiers(
+                                frontier_movie_id, added, rules, history
+                            )
+                            kept.extend(accepted)
+                            self.discovery_diagnostics.after_modifiers = len(kept)
+        except TimeoutError:
+            logger.info("Discovery deadline reached for %s", self.game_type)
+            self.discovery_reason = (
+                "Search reached its 12-second limit. Prepare this run or search wider."
+            )
+        self.discovery_diagnostics.after_filters = len(kept)
+        self.discovery_diagnostics.reason = self.discovery_reason or (
+            "The engine found no films after widening. Prepare this run or choose another frontier."
+            if not raw
+            else "The run's modifiers hid every film. Review the active rules."
+            if not kept
+            else None
         )
-        return await self.filter_by_modifiers(frontier_movie_id, pool, rules, history)
+        return kept
+
+    async def widen_pool(
+        self, frontier: int, rules: dict | None, history: Sequence[RunStep] | None, rung: int
+    ) -> list[DiscoveryCandidate]:
+        """Engine-specific extra sources, then a cache-only facet rung. Never relax rules."""
+        return []
 
     async def describe_run_constraint(
         self,

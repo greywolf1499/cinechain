@@ -1147,6 +1147,18 @@ def test_v2_pool_and_validation_use_the_dealt_predicates(client, procedural_worl
     assert state["curses"] == [rabbit_hole.predicate_data(test) for test in tier.curses]
 
 
+@pytest.mark.parametrize("seed", [181387955878742, 1, 222])
+def test_new_facet_decks_do_not_use_unknowns_as_proven_passes(procedural_world, seed):
+    with Session(procedural_world) as session:
+        ids = list(feasibility.movies(session))
+        deck = rabbit_hole.draw_facet_deck(session, seed, ids, curses=True)
+        for index in range(1, len(deck)):
+            tier = tier_for_depth(index * 5, {"rh_rules_version": 3, "tier_deck": deck})
+            result = feasibility.counts(session, rabbit_hole.tier_tests(tier), ids)
+            assert result["unknown"] == 0, deck[index]
+            assert result["matches"] > 0
+
+
 def test_skip_curse_is_explicit_one_hop_and_keeps_other_rules(client, procedural_world):
     run_id = procedural_run(client, curses=True)
     rules = run_detail(client, run_id)["rules_config"]

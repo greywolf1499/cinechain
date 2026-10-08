@@ -12,7 +12,7 @@ from app.models.cache import (
 from app.models.curated import CuratedListEntry
 from app.models.daily import DailyPuzzle, DailyPuzzleAttempt
 from app.models.run import Run, RunParticipant, RunStep
-from app.models.system import SystemSetting, SystemTask
+from app.models.system import ProviderBudget, SystemSetting, SystemTask
 from app.models.user import User
 
 __all__ = [
@@ -29,6 +29,7 @@ __all__ = [
     "DailyPuzzleAttempt",
     "MovieFacet",
     "MovieFacetStatus",
+    "ProviderBudget",
     "Run",
     "RunParticipant",
     "RunStep",

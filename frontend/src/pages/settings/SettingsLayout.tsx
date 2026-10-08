@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Cpu, ListTodo, Plug, SlidersHorizontal, type LucideIcon } from "lucide-react";
+import { Cpu, ListTodo, Plug, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
 import PageHeading from "../../components/PageHeading";
 import { cn } from "../../lib/cn";
 import { useAuthStore } from "../../store/authStore";
@@ -16,6 +16,7 @@ const CATEGORIES: Category[] = [
   { to: "general", label: "General", hint: "Users, theme, cache", icon: SlidersHorizontal },
   { to: "engine", label: "Engine", hint: "Timeouts, rulesets", icon: Cpu, adminOnly: true },
   { to: "integrations", label: "Integrations", hint: "TMDB, Jellyfin, Letterboxd", icon: Plug },
+  { to: "data-spa", label: "Data Spa", hint: "Cache health, repairs", icon: Sparkles },
   { to: "tasks", label: "Tasks & Logs", hint: "Background jobs", icon: ListTodo },
 ];
 
@@ -25,7 +26,7 @@ export default function SettingsLayout() {
 
   return (
     <div>
-      <PageHeading title="Settings" subtitle="Household, engine, integrations and background tasks" />
+      <PageHeading title="Settings" subtitle="Household, engine, integrations, cache health and background tasks" />
       <div className="flex flex-col gap-6 md:flex-row md:items-start">
         <nav
           aria-label="Settings categories"

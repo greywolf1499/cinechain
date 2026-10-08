@@ -410,18 +410,329 @@ def test_semantic_hybrid_pool_is_filtered_and_scored(client, fake_model):
     assert constraint["kind"] == "semantic"
 
 
-def test_semantic_is_lenient_when_the_model_is_unavailable(client, monkeypatch):
+def test_semantic_is_lenient_for_later_hops_when_the_model_is_unavailable(
+    client, monkeypatch, fake_model
+):
+    def offline(texts, preset=None):
+        raise embeddings.EmbeddingUnavailable("offline")
+
+    run_id = create_run(client, "semantic_trope")
+    with respx.mock:
+        mock_universe(PLOTS)
+        assert log(client, run_id, 1).status_code == 201
+        monkeypatch.setattr(embeddings, "embed_texts", offline)
+        resp = log(client, run_id, 3)
+    assert resp.status_code == 201
+    assert "semantic_score" not in (resp.json()["transition_metadata"] or {})
+
+
+def test_semantic_seed_setup_is_actionable_and_does_not_create_a_run(
+    client, db_engine, monkeypatch
+):
+    from app.models.run import Run
+
     def offline(texts, preset=None):
         raise embeddings.EmbeddingUnavailable("offline")
 
     monkeypatch.setattr(embeddings, "embed_texts", offline)
+    with respx.mock:
+        mock_universe(PLOTS)
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "Cold seed",
+                "game_type": "semantic_trope",
+                "seed_movie_id": 1,
+            },
+        )
+    assert response.status_code == 422, response.text
+    assert "Download the embedding model in Settings > AI & Embeddings" in response.json()["detail"]
+    with Session(db_engine) as session:
+        from sqlmodel import select
+
+        assert session.exec(select(Run)).all() == []
+
+
+def test_semantic_first_film_requires_an_overview(client, fake_model):
     run_id = create_run(client, "semantic_trope")
     with respx.mock:
         mock_universe(PLOTS)
-        log(client, run_id, 1)
-        resp = log(client, run_id, 3)
-    assert resp.status_code == 201
-    assert "semantic_score" not in (resp.json()["transition_metadata"] or {})
+        response = log(client, run_id, 4)
+    assert response.status_code == 409
+    assert "no plot overview" in response.json()["detail"]["reason"]
+    assert fake_model == []
+
+
+def test_cold_semantic_pool_widens_via_discover_with_llm_off(client, fake_model):
+    from app.config import get_settings
+
+    assert get_settings().llm_provider == "off"
+    with respx.mock:
+        universe = {
+            1: {**PLOTS[1], "title": "The Fabelmans", "genre_ids": [18]},
+            2: {**PLOTS[2], "genre_ids": [18]},
+        }
+        mock_universe(universe)
+        for kind in ("recommendations", "similar"):
+            respx.get(f"{TMDB_BASE}/movie/1/{kind}").mock(
+                return_value=httpx.Response(200, json={"results": []})
+            )
+        respx.get(f"{TMDB_BASE}/movie/1/keywords").mock(
+            return_value=httpx.Response(200, json={"keywords": [{"id": 42, "name": "family"}]})
+        )
+        discover = respx.get(f"{TMDB_BASE}/discover/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "id": 2,
+                            "title": "Heist Two",
+                            "release_date": "2000-01-01",
+                            "genre_ids": [18],
+                            "popularity": 8,
+                        }
+                    ]
+                },
+            )
+        )
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "Cold Fabelmans",
+                "game_type": "semantic_trope",
+                "seed_movie_id": 1,
+                "rules_config": {"min_runtime": 0},
+            },
+        )
+        assert response.status_code == 201, response.text
+        run_id = response.json()["id"]
+        response = client.get(
+            f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1, "envelope": 1}
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert [candidate["movie_id"] for candidate in payload["candidates"]] == [2]
+        assert payload["diagnostics"] == {
+            "engine_pool": 1,
+            "after_modifiers": 1,
+            "after_filters": 1,
+            "widened": True,
+            "reason": None,
+        }
+        assert "with_genres=18" in str(discover.calls[0].request.url)
+        assert "with_keywords=42" in str(discover.calls[0].request.url)
+    assert fake_model == [["heist"], ["heist-ish"]]
+
+
+def test_discovery_envelope_distinguishes_filters_and_preserves_legacy_list(client, fake_model):
+    run_id = create_run(client, "semantic_trope", require_cast_link=True)
+    with respx.mock:
+        mock_universe(PLOTS)
+        assert log(client, run_id, 1).status_code == 201
+        base = {"frontier_movie_id": 1}
+        legacy = client.get(f"/api/runs/{run_id}/discover", params=base)
+        assert isinstance(legacy.json(), list)
+        shaped = client.get(
+            f"/api/runs/{run_id}/discover", params={**base, "envelope": 1, "chaser": 1}
+        ).json()
+    diagnostics = shaped["diagnostics"]
+    assert diagnostics["engine_pool"] >= diagnostics["after_modifiers"] == 2
+    assert diagnostics["after_filters"] == 0
+    assert "filters hid" in diagnostics["reason"]
+    assert shaped["candidates"] == []
+
+
+@pytest.mark.asyncio
+async def test_discovery_deadline_preserves_partial_pool_and_one_hydration_budget(
+    db_engine, monkeypatch
+):
+    import asyncio
+    import time
+
+    from app.engines import base
+    from app.engines.cinechain import CineChainEngine
+    from app.schemas.discovery import DiscoveryCandidate
+    from app.services.tmdb import TMDBClient
+
+    monkeypatch.setattr(base, "DISCOVERY_SECONDS", 0.04)
+    candidates = [DiscoveryCandidate(movie_id=2, title="Known")]
+    http = httpx.AsyncClient()
+    with Session(db_engine) as session:
+        engine = CineChainEngine(session, TMDBClient(http))
+
+        async def initial(*args, **kwargs):
+            return candidates
+
+        async def filtered(frontier, pool, rules, history):
+            return pool
+
+        async def widen(frontier, rules, history, rung):
+            assert engine._hydration_left == base.HYDRATE_BUDGET
+            await asyncio.sleep(1)
+            return []
+
+        monkeypatch.setattr(engine, "discover_candidates", initial)
+        monkeypatch.setattr(engine, "filter_by_modifiers", filtered)
+        monkeypatch.setattr(engine, "widen_pool", widen)
+        start = time.monotonic()
+        assert await engine.discover_with_modifiers(1) == candidates
+        assert time.monotonic() - start < 0.3
+        assert engine.discovery_diagnostics.after_filters == 1
+        assert "12-second limit" in engine.discovery_diagnostics.reason
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_widening_cannot_bypass_modifier_filters_and_stops_at_eight(db_engine, monkeypatch):
+    from app.engines.cinechain import CineChainEngine
+    from app.schemas.discovery import DiscoveryCandidate
+    from app.services.tmdb import TMDBClient
+
+    rungs = []
+    http = httpx.AsyncClient()
+    with Session(db_engine) as session:
+        engine = CineChainEngine(session, TMDBClient(http))
+
+        async def initial(*args, **kwargs):
+            return []
+
+        async def filtered(frontier, pool, rules, history):
+            return [candidate for candidate in pool if candidate.movie_id != 2]
+
+        async def widen(frontier, rules, history, rung):
+            rungs.append(rung)
+            return [DiscoveryCandidate(movie_id=i, title=str(i)) for i in range(2, 11)]
+
+        monkeypatch.setattr(engine, "discover_candidates", initial)
+        monkeypatch.setattr(engine, "filter_by_modifiers", filtered)
+        monkeypatch.setattr(engine, "widen_pool", widen)
+        pool = await engine.discover_with_modifiers(1)
+        assert len(pool) == 8
+        assert rungs == [1]
+        assert engine.discovery_diagnostics.engine_pool == 9
+        assert engine.discovery_diagnostics.after_modifiers == 8
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hydration_cap_is_shared_across_initial_pool_and_all_rungs(db_engine, monkeypatch):
+    from app.engines import base
+    from app.engines.cinechain import CineChainEngine
+    from app.schemas.discovery import DiscoveryCandidate
+    from app.services import cache_repo
+    from app.services.tmdb import TMDBClient
+
+    fetched = []
+    http = httpx.AsyncClient()
+    with Session(db_engine) as session:
+        for movie_id in range(1, 43):
+            session.add(CachedMovie(tmdb_id=movie_id, title=str(movie_id), genre_ids=[35]))
+        session.commit()
+        engine = CineChainEngine(session, TMDBClient(http))
+
+        async def initial(*args, **kwargs):
+            return [DiscoveryCandidate(movie_id=i, title=str(i)) for i in range(2, 12)]
+
+        async def widen(frontier, rules, history, rung):
+            return [
+                DiscoveryCandidate(movie_id=i, title=str(i))
+                for i in range(12 + (rung - 1) * 10, 22 + (rung - 1) * 10)
+            ]
+
+        async def get_movie(session, tmdb, movie_id, refresh=False):
+            fetched.append(movie_id)
+            row = session.get(CachedMovie, movie_id)
+            row.runtime = 95
+            return row
+
+        async def filtered(frontier, pool, rules, history):
+            await engine._hydrate_pool(pool, needs=frozenset({"runtime"}))
+            return pool
+
+        monkeypatch.setattr(engine, "discover_candidates", initial)
+        monkeypatch.setattr(engine, "widen_pool", widen)
+        monkeypatch.setattr(engine, "filter_by_modifiers", filtered)
+        monkeypatch.setattr(cache_repo, "get_movie", get_movie)
+        assert len(await engine.discover_with_modifiers(1, wider=True)) == 40
+        assert len(fetched) == base.HYDRATE_BUDGET == 30
+        assert len(set(fetched)) == 30
+        assert engine._hydration_left == 0
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_graph_widening_recovers_valid_links_without_relaxing_billing(db_engine):
+    from app.engines.cinechain import CineChainEngine
+    from app.services import cache_repo
+    from app.services.tmdb import TMDBClient
+
+    universe = {
+        1: {"title": "Frontier", "cast": list(range(100, 125))},
+        2: {"title": "Known link", "cast": [100]},
+        3: {"title": "Missing from an actor's feed", "cast": [100, 119]},
+        4: {"title": "Too deep in the frontier's billing", "cast": [119]},
+    }
+    with respx.mock:
+        mock_universe(universe)
+        respx.get(f"{TMDB_BASE}/person/100/movie_credits").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "cast": [
+                        {
+                            "id": 2,
+                            "title": "Known link",
+                            "release_date": "2000-01-01",
+                        }
+                    ],
+                    "crew": [],
+                },
+            )
+        )
+        async with httpx.AsyncClient() as http:
+            with Session(db_engine) as session:
+                tmdb = TMDBClient(http)
+                await cache_repo.get_movie(session, tmdb, 1)
+                engine = CineChainEngine(session, tmdb)
+                pool = await engine.discover_with_modifiers(
+                    1, cast_limit=15, rules={"min_runtime": 0}
+                )
+                assert {candidate.movie_id for candidate in pool} == {2, 3}
+                assert all(
+                    connection.actor_id < 115
+                    for candidate in pool
+                    for connection in candidate.connections
+                )
+                assert engine.discovery_diagnostics.widened
+                assert engine._hydration_left >= 0
+
+
+def test_semantic_seed_extracts_tropes_synchronously_for_only_the_seed(
+    client, fake_model, monkeypatch
+):
+    from app.services import movie_features
+
+    calls = []
+
+    async def extract(session, movies):
+        calls.append([movie.tmdb_id for movie in movies])
+        return {movie.tmdb_id: ["Family Saga"] for movie in movies}
+
+    monkeypatch.setattr(movie_features, "ensure_tropes", extract)
+    with respx.mock:
+        mock_universe(PLOTS)
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "Prepared seed",
+                "game_type": "semantic_trope",
+                "seed_movie_id": 1,
+            },
+        )
+    assert response.status_code == 201, response.text
+    assert [batch for batch in calls if batch] == [[1]]
+    assert fake_model == [["heist"]]
 
 
 # --- pluggable embedding providers (Phase 23b) ---

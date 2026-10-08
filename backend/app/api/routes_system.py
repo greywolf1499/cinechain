@@ -1,5 +1,5 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlmodel import Session, col, func, select
 
 from app.api.deps import get_current_admin, get_current_user
@@ -10,9 +10,42 @@ from app.facets.registry import FAMILY_VERSIONS
 from app.models.cache import CachedActor, CachedMovie, CachedMovieCast
 from app.models.system import SystemTask
 from app.models.user import User
-from app.services import cache_flush, task_runner
+from app.services import cache_flush, data_spa, task_runner
 
 router = APIRouter(tags=["system"])
+
+
+class SpaRequest(BaseModel):
+    batch_cap: int = Field(default=200, ge=1, le=2000)
+
+
+@router.get("/system/cache/health")
+def cache_health(
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
+) -> dict:
+    return data_spa.health(session)
+
+
+@router.post("/system/spa/{treatment}", response_model=TaskOut)
+def spa_treatment(
+    treatment: str,
+    background_tasks: BackgroundTasks,
+    payload: SpaRequest | None = None,
+    session: Session = Depends(get_session),
+    admin: User = Depends(get_current_admin),
+) -> TaskOut:
+    if treatment not in (*data_spa.TREATMENTS, "fix_all"):
+        raise HTTPException(status_code=404, detail="Unknown spa treatment")
+    return TaskOut.from_model(
+        data_spa.submit(
+            background_tasks,
+            session,
+            treatment,
+            admin.id,
+            batch_cap=payload.batch_cap if payload else 200,
+        )
+    )
 
 
 @router.post("/system/facets/backfill", response_model=TaskOut)

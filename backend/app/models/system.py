@@ -6,6 +6,14 @@ from sqlmodel import JSON, Column, Field, SQLModel
 from app.utils.ids import new_id, utcnow
 
 
+class ProviderBudget(SQLModel, table=True):
+    __tablename__ = "provider_budgets"
+
+    provider: str = Field(primary_key=True)
+    day: str = Field(primary_key=True)
+    used: int = 0
+
+
 class SystemSetting(SQLModel, table=True):
     """Admin-configured overrides (e.g. tmdb_api_key) that take precedence over .env."""
 

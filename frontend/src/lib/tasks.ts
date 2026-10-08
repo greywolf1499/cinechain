@@ -27,6 +27,8 @@ export interface SystemTask<R = Record<string, unknown>> {
 	progress_data: {
 		label?: string;
 		progress?: TaskProgress;
+		/** Set when a task stopped early on a provider budget (e.g. "omdb_budget"); rerunning resumes. */
+		paused?: string;
 		result?: R;
 		error?: TaskErrorInfo;
 	} | null;
@@ -52,6 +54,19 @@ export function describeProgress(task: SystemTask<unknown>, unit = "films"): str
 			: `${progress.current} ${unit}`;
 	}
 	return progress?.message ?? "Working...";
+}
+
+const PAUSE_REASONS: Record<string, string> = {
+	omdb_budget: "the OMDb daily request budget is used up",
+};
+
+/** Why a completed task stopped early, or null when it really finished. */
+export function taskPausedReason(task: SystemTask<unknown>): string | null {
+	if (task.status !== "completed") return null;
+	const result = task.progress_data?.result as { paused?: unknown } | undefined;
+	const paused = task.progress_data?.paused ?? (typeof result?.paused === "string" ? result.paused : undefined);
+	if (!paused) return null;
+	return PAUSE_REASONS[paused] ?? `a provider budget was reached (${paused})`;
 }
 
 export const TASKS_KEY = ["tasks"] as const;
@@ -86,13 +101,25 @@ export function TaskStreamProvider({ children }: { children: ReactNode }) {
 		const previous = seen.current.get(task.id);
 		if (isFinished(task) && (previous === "pending" || previous === "running" || started && !previous)) {
 			const title = task.progress_data?.label ?? TASK_TITLES[task.name] ?? task.name;
-			setToasts((queue) => [...queue, {
+			const paused = taskPausedReason(task);
+			setToasts((queue) => [...queue, paused ? {
+				type: "error",
+				message: `${title} paused: ${paused}. Run it again after the budget resets to resume where it stopped.`,
+				duration: 8000,
+			} : {
 				type: task.status === "completed" ? "success" : "error",
 				message: task.status === "completed" ? `${title} completed.` :
 					`${title}: ${task.progress_data?.error?.message ?? task.error ?? "Failed."}`,
 			}]);
 			void queryClient.invalidateQueries({ queryKey: ["curated"] });
 			void queryClient.invalidateQueries({ queryKey: ["passport"] });
+			if (task.name.startsWith("spa_") || task.name === "facets_backfill") {
+				// Repaired cache data changes coverage and can refill a dry Pick Next pool.
+				void queryClient.invalidateQueries({ queryKey: ["system", "cache-health"] });
+				void queryClient.invalidateQueries({
+					predicate: (query) => query.queryKey[0] === "runs" && query.queryKey[2] === "discover",
+				});
+			}
 		}
 		seen.current.set(task.id, task.status);
 		queryClient.setQueryData<SystemTask[]>(TASKS_KEY, (old) => mergeTask(old ?? [], task));
@@ -152,4 +179,10 @@ export const TASK_TITLES: Record<string, string> = {
 	passport_backfill_directors: "Director lookup",
 	facets_backfill: "Film facet indexing",
 	llm_model_download: "Local model download",
+	spa_details: "Data Spa: film details",
+	spa_people: "Data Spa: cast & crew",
+	spa_ratings: "Data Spa: ratings",
+	spa_embeddings: "Data Spa: plot embeddings",
+	spa_facets: "Data Spa: film facets",
+	spa_fix_all: "Data Spa: fix all",
 };

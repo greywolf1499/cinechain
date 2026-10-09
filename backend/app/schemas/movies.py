@@ -54,6 +54,21 @@ class TropeExtraction(BaseModel):
     enabled: bool = True
 
 
+class TropeEvidence(BaseModel):
+    slug: str
+    sources: list[str]
+    tvtropes_url: str | None = None
+
+
+class MovieTropeEvidence(BaseModel):
+    tmdb_id: int
+    evidence: list[TropeEvidence]
+
+
+class ManualTropeUpdate(BaseModel):
+    tropes: list[str] = Field(default_factory=list, max_length=20)
+
+
 class NarrativeEraUpdate(BaseModel):
     """Both fields omitted = re-resolve from TMDB keywords / plot / model; otherwise a manual edit
     (`narrative_year` negative = BCE; a blank label becomes a generic era name)."""

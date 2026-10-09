@@ -570,6 +570,20 @@ async def _generate_tropes(config: LlmConfig, overview: str) -> list[str]:
     return tropes
 
 
+async def judge_trope(overview: str, definition: str, config: LlmConfig) -> bool:
+    """Ask the configured model for a constrained yes/no trope check."""
+    output = await generate(
+        config,
+        "Answer only yes or no. Judge whether the plot contains the described story concept.",
+        f"Plot: {overview[:800]}\nConcept: {definition[:240]}\nDoes the plot contain this concept?",
+        max_tokens=4,
+    )
+    match = re.match(r"^\s*(yes|no)\b", output.strip(), flags=re.IGNORECASE)
+    if match is None:
+        raise LlmUnavailable("The trope judge returned neither yes nor no")
+    return match.group(1).lower() == "yes"
+
+
 COMMENTARY_SYSTEM = (
     "You are a witty cinephile ring announcer calling a boxing match between two films. In "
     "exactly one punchy 'Tale of the Tape' sentence of at most 35 words, preview the "

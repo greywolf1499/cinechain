@@ -22,8 +22,9 @@ class MovieFacet(SQLModel, table=True):
     value_text: str = Field(default="", primary_key=True)
     value_num: float = Field(default=0, primary_key=True)
     movie_id: int = Field(foreign_key="cached_movies.tmdb_id", primary_key=True)
-    source: str = "cache"
-    confidence: float = 1.0
+    source: str = Field(default="cache", primary_key=True)
+    confidence: float | None = Field(default=1.0, nullable=True)
+    source_url: str | None = None
 
 
 class MovieFacetStatus(SQLModel, table=True):

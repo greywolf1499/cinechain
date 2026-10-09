@@ -224,8 +224,78 @@ export default function EmbeddingsCard() {
         </div>
       </div>
       <LlmSection config={config} onToast={setToast} />
+      <TVTropesSection config={config} onToast={setToast} />
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </SettingsCard>
+  );
+}
+
+function TVTropesSection({
+  config,
+  onToast,
+}: {
+  config: IntegrationConfig | undefined;
+  onToast: (toast: ToastState) => void;
+}) {
+  const queryClient = useQueryClient();
+  const update = useMutation({
+    mutationFn: () =>
+      api.patch<IntegrationConfig>("/settings/integrations", {
+        tvtropes_enabled: !config?.tvtropes_enabled,
+      }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(CONFIG_KEY, updated);
+      onToast({
+        type: "success",
+        message: `TV Tropes ingestion ${updated.tvtropes_enabled ? "enabled" : "disabled"}.`,
+      });
+    },
+    onError: (error) =>
+      onToast({
+        type: "error",
+        message: error instanceof ApiError ? error.message : "Could not save TV Tropes setting.",
+      }),
+  });
+  return (
+    <div className="flex flex-col gap-3 border-t border-app-border px-5 py-4">
+      <div>
+        <h3 className="text-sm font-medium text-zinc-300">TV Tropes evidence</h3>
+        <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+          Optional trope identifiers only; CineChain does not store page prose or use it for model
+          training. The site&apos;s{" "}
+          <a
+            href="https://tvtropes.org/robots.txt"
+            target="_blank"
+            rel="noreferrer"
+            className="underline"
+          >
+            robots policy
+          </a>{" "}
+          currently disallows general crawling, so requests remain blocked until the policy allows
+          them. The reported content signals allow search and prohibit AI training; those signals
+            do not establish a content licence. Ingestion is unavailable until the site's licence
+            and terms are reviewed.
+        </p>
+      </div>
+      <button
+        type="button"
+        disabled={!config || update.isPending || !config.tvtropes_terms_approved}
+        onClick={() => update.mutate()}
+        className={`w-fit rounded-md border px-3 py-2 text-xs font-medium disabled:opacity-50 ${
+          config?.tvtropes_enabled
+            ? "border-amber-400/40 text-amber-200"
+            : "border-app-border text-zinc-300"
+        }`}
+      >
+        {update.isPending
+          ? "Saving..."
+          : !config?.tvtropes_terms_approved
+            ? "Unavailable pending terms review"
+          : config?.tvtropes_enabled
+            ? "Disable TV Tropes scraping"
+            : "Enable TV Tropes scraping"}
+      </button>
+    </div>
   );
 }
 

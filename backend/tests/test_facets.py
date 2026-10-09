@@ -379,7 +379,11 @@ def test_person_joins_invalidation_and_flush(db_engine):
             connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
             try:
                 connection.execute(
-                    text("INSERT INTO movie_facets VALUES ('runtime','',90,999,'cache',1)")
+                    text(
+                        "INSERT INTO movie_facets"
+                        "(facet_id,value_text,value_num,movie_id,source,confidence,source_url) "
+                        "VALUES ('runtime','',90,999,'cache',1,NULL)"
+                    )
                 )
                 connection.execute(
                     text(
@@ -630,7 +634,7 @@ def test_backfill_batch_resume_and_cancellation(db_engine, monkeypatch):
 def test_migration_roundtrip_preserves_raw_cache(config_dir, monkeypatch):
     monkeypatch.setenv("CONFIG_DIR", str(config_dir))
     config = Config("alembic.ini")
-    assert ScriptDirectory.from_config(config).get_heads() == ["e6f7a8b9c0d1"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["f7a8b9c0d1e2"]
     command.upgrade(config, "c4d5e6f7a8b9")
     from sqlalchemy import create_engine
 

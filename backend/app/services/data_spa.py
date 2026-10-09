@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 from datetime import UTC, timedelta
+from functools import partial
 from typing import Any
 
+import anyio
 import httpx
 import numpy as np
 from fastapi import BackgroundTasks
@@ -14,36 +17,50 @@ from sqlalchemy import case, exists, or_
 from sqlmodel import Session, col, func, select
 
 from app.facets import store
-from app.facets.models import MovieFacetStatus
+from app.facets import tropes as trope_facets
+from app.facets.models import MovieFacet, MovieFacetStatus
 from app.facets.registry import FAMILY_VERSIONS
 from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie, CachedMovieRating
 from app.models.curated import CanonMovieBadge, LetterboxdWatchlist
 from app.models.run import Run, RunStep
 from app.models.system import ProviderBudget, SystemTask
-from app.services import cache_repo, embeddings, provider_budgets, settings_repo, task_runner
+from app.services import (
+    cache_repo,
+    embeddings,
+    llm,
+    movie_features,
+    provider_budgets,
+    settings_repo,
+    task_runner,
+    tvtropes,
+)
 from app.services.tmdb import TMDBClient, TMDBNotFoundError
 from app.utils.ids import utcnow
 
-TREATMENTS = ("details", "people", "ratings", "embeddings", "facets")
+TREATMENTS = ("details", "people", "ratings", "embeddings", "tropes", "facets")
 # Literal task names so the frontend title guard can resolve every submitted name statically.
 TASK_NAMES = {
     "details": "spa_details",
     "people": "spa_people",
     "ratings": "spa_ratings",
     "embeddings": "spa_embeddings",
+    "tropes": "spa_tropes",
     "facets": "spa_facets",
     "fix_all": "spa_fix_all",
 }
 COOLDOWN = timedelta(days=30)
 EMBED_BATCH_SIZE = 32
 _submit_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _version(treatment: str, session: Session) -> int:
     if treatment == "embeddings":
         fingerprint = embeddings.load_config(session).fingerprint
         return int(hashlib.sha256(fingerprint.encode()).hexdigest()[:7], 16)
+    if treatment == "tropes":
+        return 1
     return 1
 
 
@@ -73,6 +90,9 @@ def _known(session: Session, movie: CachedMovie, treatment: str) -> bool:
             and embeddings.row_fingerprint(movie.overview_embedding_model)
             == embeddings.load_config(session).fingerprint
         )
+    if treatment == "tropes":
+        status = session.get(MovieFacetStatus, (movie.tmdb_id, "spa:tropes"))
+        return bool(status and status.version == 1 and status.status == "ok")
     return all(
         (status := session.get(MovieFacetStatus, (movie.tmdb_id, family))) is not None
         and status.version == version
@@ -166,6 +186,8 @@ def _submit(
         raise ValueError("Unknown spa treatment")
     if not 1 <= batch_cap <= 2000:
         raise ValueError("batch_cap must be between 1 and 2000")
+    if treatment == "tropes":
+        batch_cap = min(batch_cap, tvtropes.MAX_PAGES_PER_BATCH)
     scope = f"run:{run_id}:" if run_id else ""
     if movie_ids is not None and run_id is None:
         scope = (
@@ -253,6 +275,7 @@ async def _treat(
     tmdb: TMDBClient,
     omdb: OMDbClient,
     ctx: task_runner.TaskContext,
+    tvtropes_client: tvtropes.TVTropesClient,
 ) -> str:
     if treatment == "details":
         await cache_repo.get_movie(session, tmdb, movie.tmdb_id, refresh=True)
@@ -277,6 +300,45 @@ async def _treat(
         if lookup.transient:
             return "error"
         cache_repo.CacheRepo(session).upsert_ratings(movie.tmdb_id, lookup.ratings)
+    elif treatment == "tropes":
+        if tvtropes.enabled(session):
+            try:
+                scraped = await anyio.to_thread.run_sync(
+                    partial(
+                        tvtropes_client.sync_movie,
+                        movie,
+                        enabled=True,
+                    )
+                )
+                ctx.check_cancelled(force=True)
+                evidence = await movie_features.validate_tvtropes(
+                    session,
+                    movie,
+                    ((trope.slug, trope.mapped_slug) for trope in scraped.tropes),
+                    llm.load_config(session),
+                )
+                source_urls = {
+                    trope.mapped_slug or trope.slug: trope.url for trope in scraped.tropes
+                }
+                trope_facets.replace_source(
+                    session, movie.tmdb_id, "tvtropes", evidence, source_urls
+                )
+                movie.tvtropes_work_url = scraped.work_url
+                session.add(movie)
+            except tvtropes.RobotsDisallowed as exc:
+                logger.info("TVTropes scrape skipped by robots policy: %s", exc)
+            except tvtropes.CloudflareBlock:
+                raise
+        ctx.check_cancelled(force=True)
+        await movie_features.ensure_tropes(session, [movie])
+        known = session.exec(
+            select(MovieFacet).where(
+                MovieFacet.movie_id == movie.tmdb_id,
+                MovieFacet.facet_id == "trope",
+                col(MovieFacet.confidence).is_not(None),
+            )
+        ).first()
+        return "ok" if known is not None else "unavailable"
     elif treatment == "facets":
         store.refresh(session, [movie.tmdb_id], check_cancelled=ctx.check_cancelled)
     session.refresh(movie)
@@ -325,6 +387,9 @@ async def _run(ctx: task_runner.TaskContext) -> dict[str, Any]:
             overrides = settings_repo.get_overrides(session)
         tmdb.set_overrides(overrides)
         omdb.set_overrides(overrides)
+        trope_client = tvtropes.TVTropesClient(
+            check_cancelled=lambda: ctx.check_cancelled(force=True)
+        )
         worklist = ctx._data["worklist"]
         treatments = ctx._data["treatments"]
         while ctx._data["stage"] < len(treatments):
@@ -347,7 +412,7 @@ async def _run(ctx: task_runner.TaskContext) -> dict[str, Any]:
                             for movie in pending:
                                 try:
                                     status = await _treat(
-                                        session, movie, treatment, tmdb, omdb, ctx
+                                        session, movie, treatment, tmdb, omdb, ctx, trope_client
                                     )
                                 except TMDBNotFoundError:
                                     session.rollback()
@@ -355,6 +420,8 @@ async def _run(ctx: task_runner.TaskContext) -> dict[str, Any]:
                                 except (
                                     task_runner.TaskCancelled,
                                     provider_budgets.BudgetExhausted,
+                                    tvtropes.CloudflareBlock,
+                                    tvtropes.BatchPageLimit,
                                 ):
                                     raise
                                 except Exception as exc:  # noqa: BLE001 - persist retryable per-film failures
@@ -401,6 +468,14 @@ def _coverage_conditions(session: Session) -> dict[str, Any]:
             == fingerprint
         ),
     }
+    conditions["tropes"] = exists(
+        select(MovieFacetStatus.movie_id).where(
+            MovieFacetStatus.movie_id == CachedMovie.tmdb_id,
+            MovieFacetStatus.family == "spa:tropes",
+            MovieFacetStatus.version == 1,
+            MovieFacetStatus.status == "ok",
+        )
+    )
     # All current catalogue families must be covered, not merely a historical spa job.
     conditions["facets"] = select(func.count()).select_from(MovieFacetStatus).where(
         MovieFacetStatus.movie_id == CachedMovie.tmdb_id,

@@ -2,7 +2,7 @@
 
 - Aesthetic Gradient: consecutive posters must have similar dominant colours.
 - Semantic Trope Web: consecutive plot overviews must be semantically close, or the two films
-  must share a discrete LLM-extracted trope ("heist", "time-loop").
+  must share a trusted AI, TVTropes or player-confirmed trope ("heist", "time-loop").
 
 Both derive a per-film feature lazily (see `movie_features`), persist it on the
 movie cache and enforce the rule as a hard block, like the other mutators. A film
@@ -28,6 +28,8 @@ from app.engines.mutators import (
     today_iso,
 )
 from app.engines.rulebook import RuleSection
+from app.facets import tropes as trope_facets
+from app.facets.models import MovieFacet
 from app.models.cache import CachedMovie
 from app.models.run import RunStep
 from app.schemas.discovery import DiscoveryCandidate
@@ -43,7 +45,7 @@ COLOR_DISTANCE_THRESHOLD = 100.0
 SEMANTIC_SIMILARITY_THRESHOLD = 0.5
 # Pool films judged per request: bounds poster downloads / model work.
 POOL_FEATURE_BUDGET = 80
-# Pool films whose tropes are extracted per Pick Next request (each costs an LLM call).
+# Pool films whose missing trope evidence may be extracted per Pick Next request.
 POOL_TROPE_BUDGET = 8
 
 
@@ -381,7 +383,14 @@ class SemanticTropeEngine(FeatureEngine):
 
     async def prepare(self, movies: list[CachedMovie]) -> None:
         await movie_features.ensure_embeddings(self.session, movies)
-        await self.prepare_tropes([movie for movie in movies if movie.extracted_tropes is not None])
+        known = trope_facets.evidence_for(self.session, [movie.tmdb_id for movie in movies])
+        await self.prepare_tropes(
+            [
+                movie
+                for movie in movies
+                if movie.extracted_tropes is not None or known.get(movie.tmdb_id)
+            ]
+        )
 
     async def prepare_tropes(self, movies: Sequence[CachedMovie]) -> None:
         """Extract missing tropes (an LLM call each, so only for the films that matter)."""
@@ -389,15 +398,24 @@ class SemanticTropeEngine(FeatureEngine):
             self._verified_tropes: dict[int, list[str]] = {}
             self._trope_sources: dict[int, tuple] = {}
 
-        def source(movie: CachedMovie) -> tuple:
-            return movie.overview, tuple(movie.genre_ids or []), tuple(movie.extracted_tropes or [])
-
-        pending = [
-            movie for movie in movies if self._trope_sources.get(movie.tmdb_id) != source(movie)
-        ]
-        verified = await movie_features.ensure_tropes(self.session, pending)
-        self._verified_tropes.update(verified)
-        self._trope_sources.update({movie.tmdb_id: source(movie) for movie in pending})
+        await movie_features.ensure_tropes(self.session, movies)
+        evidence = trope_facets.evidence_for(self.session, [movie.tmdb_id for movie in movies])
+        self._verified_tropes.update(
+            {
+                movie.tmdb_id: list(evidence.get(movie.tmdb_id, {}))
+                for movie in movies
+            }
+        )
+        self._trope_sources.update(
+            {
+                movie.tmdb_id: (
+                    movie.overview,
+                    tuple(movie.genre_ids or []),
+                    tuple(sorted(evidence.get(movie.tmdb_id, {}).items())),
+                )
+                for movie in movies
+            }
+        )
 
     async def validate_candidate(self, movie_id: int, rules: dict) -> ValidationResult:
         movie = await self._load(movie_id, hydrate=True)
@@ -463,7 +481,7 @@ class SemanticTropeEngine(FeatureEngine):
         ]
         hydrated = await self._hydrate_pool(candidates)
         await self.prepare([*hydrated.values()][:POOL_FEATURE_BUDGET])
-        if row.extracted_tropes:
+        if getattr(self, "_verified_tropes", {}).get(row.tmdb_id):
             await self.prepare_tropes([*hydrated.values()][:POOL_TROPE_BUDGET])
         return self._scored_candidates(row, list(hydrated.values()), best_first="high")
 
@@ -495,6 +513,22 @@ class SemanticTropeEngine(FeatureEngine):
     ) -> None:
         candidate.semantic_score = None if metric is None else max(0.0, round(metric, 4))
         candidate.tropes = list(getattr(self, "_verified_tropes", {}).get(row.tmdb_id, []))
+        candidate.trope_sources = trope_facets.evidence_for(self.session, [row.tmdb_id]).get(
+            row.tmdb_id, {}
+        )
+        candidate.trope_urls = {
+            slug: facet.source_url
+            for facet in self.session.exec(
+                select(MovieFacet).where(
+                    MovieFacet.movie_id == row.tmdb_id,
+                    MovieFacet.facet_id == "trope",
+                    MovieFacet.source == "tvtropes",
+                    col(MovieFacet.confidence).is_not(None),
+                )
+            ).all()
+            if (slug := trope_facets.normalize_trope(facet.value_text))
+            and facet.source_url
+        }
 
     def with_metric(self, result: ValidationResult, metric: float | None) -> ValidationResult:
         result.similarity = None if metric is None else round(metric, 4)
@@ -544,7 +578,7 @@ class SemanticTropeEngine(FeatureEngine):
         await self.prepare_tropes([frontier])
         if (
             embeddings.decode_embedding(frontier.overview_embedding) is None
-            and not frontier.extracted_tropes
+            and not self._verified_tropes.get(frontier.tmdb_id)
         ):
             self.discovery_reason = "Download the embedding model in Settings > AI & Embeddings"
             return []
@@ -577,17 +611,30 @@ class SemanticTropeEngine(FeatureEngine):
         pool.update(rows)
 
         # Films sharing one of the frontier's tropes qualify even without a close plot match.
-        if frontier.extracted_tropes:
+        if self._verified_tropes.get(frontier.tmdb_id):
+            tagged_ids = select(MovieFacet.movie_id).where(
+                MovieFacet.facet_id == "trope",
+                col(MovieFacet.confidence).is_not(None),
+            )
             tagged = self.session.exec(
                 select(CachedMovie)
-                .where(col(CachedMovie.extracted_tropes).is_not(None))
+                .where(
+                    or_(
+                        col(CachedMovie.extracted_tropes).is_not(None),
+                        col(CachedMovie.tmdb_id).in_(tagged_ids),
+                    )
+                )
                 .order_by(col(CachedMovie.popularity).desc())
                 .limit(POOL_FEATURE_BUDGET)
             ).all()
             await self.prepare_tropes(tagged)
             pool.update({r.tmdb_id: r for r in tagged if self._shared_trope(frontier, r)})
             by_popularity = sorted(
-                (r for r in pool.values() if r.extracted_tropes is None and r.overview),
+                (
+                    r
+                    for r in pool.values()
+                    if not self._verified_tropes.get(r.tmdb_id) and r.overview
+                ),
                 key=lambda r: -(r.popularity or 0.0),
             )
             await self.prepare_tropes(by_popularity[:POOL_TROPE_BUDGET])

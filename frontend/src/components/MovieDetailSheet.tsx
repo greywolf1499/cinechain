@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
@@ -24,7 +24,13 @@ import {
   useMovieTropes, useRun, useUpdateStep,
 } from "../lib/queries";
 import { useMovieDetail, type MovieDetailOptions } from "../store/movieDetailStore";
-import type { GenreOut, RunDetail, RunStep, SplitCandidate } from "../types/api";
+import type {
+  GenreOut,
+  MovieTropeEvidence,
+  RunDetail,
+  RunStep,
+  SplitCandidate,
+} from "../types/api";
 
 export function MovieDetailBody({ movieId, step, actions, onActorClick, runId }: MovieDetailOptions & { movieId: number }) {
   const { movie, isHydrating, error, refetch } = useMovieData(movieId);
@@ -34,7 +40,29 @@ export function MovieDetailBody({ movieId, step, actions, onActorClick, runId }:
   });
   const { data: jellyfin } = useJellyfinLookup([movieId]);
   const { data: badges } = useCanonBadgesBulk([movieId]);
-  const { tropes, isExtracting } = useMovieTropes(movieId);
+  const { tropes, tropeEvidence, isExtracting } = useMovieTropes(movieId);
+  const queryClient = useQueryClient();
+  const [manualTrope, setManualTrope] = useState("");
+  const [tropeError, setTropeError] = useState<string | null>(null);
+  const addManualTrope = useMutation({
+    mutationFn: () => {
+      const tags = new Set([
+        ...tropeEvidence.filter((item) => item.sources.includes("manual")).map((item) => item.slug),
+        manualTrope.trim(),
+      ]);
+      return api.post<MovieTropeEvidence>(`/movies/${movieId}/tropes/manual`, {
+        tropes: [...tags].filter(Boolean),
+      });
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(["movies", movieId, "trope-evidence"], result);
+      setManualTrope("");
+      setTropeError(null);
+    },
+    onError: (error) => {
+      setTropeError(error instanceof Error ? error.message : "Could not add your trope.");
+    },
+  });
   const title = movie?.title ?? step?.movie_title ?? "Movie";
   const craft = step ? stepCraftLink(step) : null;
   const actorName = step?.transition_metadata?.actor_name;
@@ -68,8 +96,33 @@ export function MovieDetailBody({ movieId, step, actions, onActorClick, runId }:
             lines={6} className="mt-2 text-xs text-zinc-400" />
         </div>
       </div>
-      <TropeChips tropes={tropes} />
+      <TropeChips tropes={tropes} evidence={tropeEvidence} />
       {isExtracting && <p className="text-xs text-zinc-500">Finding themes...</p>}
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (manualTrope.trim()) addManualTrope.mutate();
+        }}
+      >
+        <label className="flex flex-1 flex-col gap-1 text-[10px] text-zinc-500">
+          Add a trope you confirm
+          <input
+            value={manualTrope}
+            onChange={(event) => setManualTrope(event.target.value)}
+            placeholder="e.g. TimeLoop"
+            className="rounded border border-app-border bg-app-bg px-2 py-1.5 text-xs text-zinc-200"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={!manualTrope.trim() || addManualTrope.isPending}
+          className="rounded border border-app-border px-2.5 py-1.5 text-xs text-zinc-300 disabled:opacity-50"
+        >
+          Add as mine
+        </button>
+      </form>
+      {tropeError && <p role="alert" className="text-xs text-amber-300">{tropeError}</p>}
       {step && <><TropeLinkBadge meta={step.transition_metadata} /><LinkBonusBadges meta={step.transition_metadata} /></>}
       {linkName && <section className="rounded border border-app-border p-3">
         <p className="text-xs text-zinc-500">Connected via</p>

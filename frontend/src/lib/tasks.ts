@@ -183,6 +183,7 @@ export const TASK_TITLES: Record<string, string> = {
 	spa_people: "Data Spa: cast & crew",
 	spa_ratings: "Data Spa: ratings",
 	spa_embeddings: "Data Spa: plot embeddings",
+	spa_tropes: "Data Spa: trope evidence",
 	spa_facets: "Data Spa: film facets",
 	spa_fix_all: "Data Spa: fix all",
 };

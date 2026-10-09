@@ -25,6 +25,7 @@ from sqlmodel import Session, col, select
 
 from app.config import get_settings
 from app.facets import store as facet_store
+from app.facets import tropes as trope_facets
 from app.integrations.omdb import OMDbClient, OMDbRatings
 from app.models.cache import (
     CachedActor,
@@ -90,6 +91,12 @@ class CacheRepo:
         row = self.session.get(CachedMovie, movie["id"])
         if row is None:
             row = CachedMovie(tmdb_id=movie["id"])
+        overview_changed = row.overview != (movie.get("overview") or "")
+        work_identity_changed = row.title != movie["title"] or row.release_date != movie.get(
+            "release_date"
+        )
+        genre_ids = movie.get("genre_ids") or []
+        genre_changed = (row.genre_ids or []) != genre_ids
         row.title = movie["title"]
         row.imdb_id = movie.get("imdb_id") or row.imdb_id
         if row.narrative_era_label == "Contemporary" and row.release_date != movie.get(
@@ -103,7 +110,7 @@ class CacheRepo:
         if row.poster_path != movie.get("poster_path"):
             row.dominant_color = None
         row.poster_path = movie.get("poster_path")
-        if row.overview != (movie.get("overview") or ""):
+        if overview_changed:
             row.overview_embedding = None
             row.overview_embedding_model = None
             row.extracted_tropes = None
@@ -112,7 +119,17 @@ class CacheRepo:
         row.origin_country = json.dumps(movie.get("origin_country") or [])
         row.original_language = movie.get("original_language")
         row.runtime = movie.get("runtime")
-        row.genre_ids = movie.get("genre_ids") or []
+        row.genre_ids = genre_ids
+        if overview_changed or work_identity_changed or genre_changed:
+            trope_facets.invalidate_movie_evidence(
+                self.session,
+                row.tmdb_id,
+                overview_changed=overview_changed,
+                work_identity_changed=work_identity_changed,
+                genre_ids=genre_ids if genre_changed else None,
+            )
+        if work_identity_changed:
+            row.tvtropes_work_url = None
         row.popularity = movie.get("popularity")
         row.vote_average = movie.get("vote_average")
         row.vote_count = movie.get("vote_count")

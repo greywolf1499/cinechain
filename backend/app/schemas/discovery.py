@@ -49,8 +49,10 @@ class DiscoveryCandidate(BaseModel):
     # semantic (plot) similarity to the frontier film, 0..1.
     dominant_color: str | None = None
     semantic_score: float | None = None
-    # Semantic Trope Web: the candidate's LLM-extracted tropes (empty = none extracted yet).
+    # Semantic Trope Web: validated AI, TVTropes and manually confirmed trope union.
     tropes: list[str] = []
+    trope_sources: dict[str, list[str]] = {}
+    trope_urls: dict[str, str] = {}
     # The Rabbit Hole: True = verified to satisfy the active tier's rule (None = couldn't be checked),
     # and the warning when a new tier is 1-2 hops away.
     tier_compliant: bool | None = None

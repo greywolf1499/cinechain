@@ -38,6 +38,7 @@ OVERRIDABLE_KEYS = (
     "llm_api_key",
     "llm_model",
     "llm_keep_alive_seconds",
+    "tvtropes_enabled",
 )
 
 

@@ -11,6 +11,8 @@ import respx
 from sqlmodel import Session
 
 from app.engines.algorithms import SemanticTropeEngine
+from app.facets import tropes as trope_facets
+from app.facets.models import MovieFacet
 from app.models.cache import CachedMovie
 from app.services import embeddings, llm, movie_features
 from app.services.tmdb import TMDBClient
@@ -56,9 +58,11 @@ def _concept_vectors(fake_model, monkeypatch):
     vectors = {
         **VECTORS,
         movie_features.TROPE_DESCRIPTIONS["heist"]: VECTORS["heist"],
-        "A story involving crime.": VECTORS["heist"],
-        "A story involving double cross.": VECTORS["heist-ish"],
-        "A story involving love story.": VECTORS["romance"],
+        trope_facets.DEFINITIONS["crime"]: VECTORS["heist"],
+        trope_facets.DEFINITIONS["double-cross"]: VECTORS["heist-ish"],
+        trope_facets.DEFINITIONS["love-story"]: VECTORS["romance"],
+        trope_facets.DEFINITIONS["romance"]: VECTORS["romance"],
+        trope_facets.DEFINITIONS["never-asked"]: VECTORS["heist"],
     }
 
     def embed(texts, preset=None):
@@ -231,6 +235,85 @@ def test_the_trope_is_recorded_alongside_a_plot_match(client, fake_model):
     assert meta["semantic_score"] == pytest.approx(0.8944, abs=1e-3)
 
 
+def test_trope_evidence_unions_ai_tvtropes_and_manual_sources(client, db_engine):
+    with respx.mock:
+        mock_universe(PLOTS)
+        assert client.get("/api/movies/1").status_code == 200
+        assert client.post(
+            "/api/movies/1/tropes/manual", json={"tropes": ["Heist"]}
+        ).status_code == 200
+        rejected = client.post("/api/movies/1/tropes/manual", json={"tropes": ["Cyberpunk"]})
+        assert rejected.status_code == 422
+    with Session(db_engine) as session:
+        session.add(
+            MovieFacet(
+                movie_id=1,
+                facet_id="trope",
+                value_text="unmapped-story-page",
+                source="tvtropes",
+                confidence=None,
+            )
+        )
+        session.add(
+            MovieFacet(
+                movie_id=1,
+                facet_id="trope",
+                value_text="heist",
+                source="tvtropes",
+                confidence=0.9,
+                source_url="https://tvtropes.org/pmwiki/pmwiki.php/Main/Heist",
+            )
+        )
+        session.add(
+            MovieFacet(
+                movie_id=1,
+                facet_id="trope",
+                value_text="heist",
+                source="llm",
+                confidence=0.9,
+            )
+        )
+        session.commit()
+
+    evidence = client.get("/api/movies/1/trope-evidence").json()
+    assert evidence == {
+        "tmdb_id": 1,
+        "evidence": [
+            {
+                "slug": "heist",
+                "sources": ["llm", "manual", "tvtropes"],
+                "tvtropes_url": "https://tvtropes.org/pmwiki/pmwiki.php/Main/Heist",
+            }
+        ],
+    }
+    assert trope_facets.normalize_trope("TimeLoop") == "time-loop"
+    assert not trope_facets.genre_allowed("cyberpunk", [35])
+    assert trope_facets.genre_allowed("cyberpunk", [878])
+
+
+@pytest.mark.anyio
+async def test_engine_reads_manual_trope_facets_without_embeddings(db_engine):
+    async with httpx.AsyncClient() as http_client:
+        with Session(db_engine) as session:
+            movies = [
+                CachedMovie(tmdb_id=11, title="First", genre_ids=[80], overview="First plot"),
+                CachedMovie(tmdb_id=12, title="Second", genre_ids=[80], overview="Second plot"),
+            ]
+            session.add_all(movies)
+            session.commit()
+            for film in movies:
+                trope_facets.replace_source(
+                    session, film.tmdb_id, "manual", {"heist": 1.0}
+                )
+            session.commit()
+            engine = SemanticTropeEngine(session, TMDBClient(http_client))
+
+            await engine.prepare_tropes(movies)
+
+            assert all(film.overview_embedding is None for film in movies)
+            assert engine._shared_trope(*movies) == "heist"
+
+
 def test_dissimilar_plots_without_a_shared_trope_stay_blocked(client, fake_model):
     run_id = create_run(client, "semantic_trope")
     replies = {**TROPES_BY_PLOT, "romance": ["love-story"]}
@@ -315,7 +398,7 @@ def test_pick_next_offers_trope_sharers_and_exposes_tropes(client, fake_model):
 
     # The hallucinated heist tag on an unrelated romance is not a discovery shortcut.
     assert set(pool) == {2}
-    assert pool[2]["tropes"] == ["double-cross", "crime"]
+    assert pool[2]["tropes"] == ["crime", "double-cross"]
 
 
 @pytest.mark.anyio
@@ -431,7 +514,9 @@ async def test_both_extraction_paths_use_identical_guards(db_engine, monkeypatch
 
     async def embed(config, texts):
         vectors = [
-            np.array([1.0, 0.0]) if "revenge" not in text else np.array([0.0, 1.0])
+            np.array([1.0, 0.0])
+            if movie_features.TROPE_DESCRIPTIONS["revenge"] not in text
+            else np.array([0.0, 1.0])
             for text in texts
         ]
         return embeddings.EmbeddingBatch(vectors, config.fingerprint)
@@ -502,6 +587,7 @@ async def test_verified_shared_trope_still_links_below_plot_threshold(db_engine,
             assert engine.measure(a, b) == pytest.approx(0.45)
             assert engine.violation(a, b, 0.45) is None
             a.overview = "changed plot"
+            trope_facets.invalidate_movie_evidence(session, a.tmdb_id, overview_changed=True)
 
             async def offline(*args):
                 raise embeddings.EmbeddingUnavailable("offline")

@@ -15,6 +15,7 @@ import anyio
 import numpy as np
 from sqlmodel import Session
 
+from app.facets import tropes as trope_facets
 from app.models.cache import CachedMovie
 from app.services import embeddings, llm
 from app.services.aesthetic import extract_dominant_color
@@ -29,29 +30,8 @@ TROPE_VERIFY_BATCH_SIZE = EMBED_BATCH_SIZE // 6
 TROPE_CONFIDENCE_THRESHOLD = 0.85  # Provider-normalized, not Arctic's high raw cosine baseline.
 # Only concepts with an inherent genre requirement belong here; themes such as revenge
 # and found-family are deliberately unrestricted.
-TROPE_GENRE_REQUIREMENTS: dict[str, frozenset[int]] = {
-    "cyberpunk": frozenset({878}),
-    "space-opera": frozenset({878}),
-    "alien-invasion": frozenset({878}),
-    "time-travel": frozenset({878, 14}),
-    "time-loop": frozenset({878, 14}),
-    "supernatural-horror": frozenset({27}),
-    "zombie-apocalypse": frozenset({27, 878}),
-}
-TROPE_DESCRIPTIONS = {
-    "cyberpunk": "High-tech dystopia with cybernetics, hackers and oppressive corporations.",
-    "space-opera": "Interstellar adventures, spaceships and conflict across alien worlds.",
-    "alien-invasion": "Extraterrestrial invaders threaten humanity.",
-    "time-travel": "Characters travel into the past or future.",
-    "time-loop": "Characters repeatedly relive the same period of time.",
-    "supernatural-horror": "Supernatural forces terrorize the characters.",
-    "zombie-apocalypse": "The undead overrun civilization and survivors fight to escape.",
-    "heist": "A team plans and executes a robbery.",
-    "romance": "People fall in love and overcome obstacles to their relationship.",
-    "enemies-to-lovers": "Adversaries develop a romantic relationship.",
-    "found-family": "Unrelated people form close bonds and become a chosen family.",
-    "revenge": "A wronged character seeks revenge.",
-}
+TROPE_GENRE_REQUIREMENTS = trope_facets.GENRE_REQUIREMENTS
+TROPE_DESCRIPTIONS = trope_facets.DEFINITIONS
 
 
 async def guard_tropes(
@@ -63,7 +43,16 @@ async def guard_tropes(
     Missing genres/overviews cannot verify a tag. Provider failure raises, so callers can
     keep historical cache rows without ever admitting them into game matching.
     """
-    verified: dict[int, list[str]] = {}
+    evidence = await guard_trope_evidence(session, proposals)
+    return {movie_id: list(values) for movie_id, values in evidence.items()}
+
+
+async def guard_trope_evidence(
+    session: Session,
+    proposals: list[tuple[CachedMovie, list[str]]],
+) -> dict[int, dict[str, float]]:
+    """Return normalized confidence for every Qwen proposal accepted by the shared guard."""
+    verified: dict[int, dict[str, float]] = {}
     for start in range(0, len(proposals), TROPE_VERIFY_BATCH_SIZE):
         verified.update(
             await _guard_trope_batch(session, proposals[start : start + TROPE_VERIFY_BATCH_SIZE])
@@ -71,11 +60,70 @@ async def guard_tropes(
     return verified
 
 
+async def validate_tvtropes(
+    session: Session,
+    movie: CachedMovie,
+    candidates: Iterable[tuple[str, str | None]],
+    judge_config: llm.LlmConfig,
+) -> dict[str, float | None]:
+    """Validate mapped TVTropes links; retain unmapped identifiers as untrusted evidence."""
+    result: dict[str, float | None] = {}
+    mapped: list[tuple[str, str]] = []
+    for source_slug, mapped_slug in candidates:
+        if mapped_slug is None:
+            result[source_slug] = None
+        elif trope_facets.genre_allowed(mapped_slug, movie.genre_ids):
+            mapped.append((source_slug, mapped_slug))
+    if not mapped or not movie.genre_ids or not (movie.overview or "").strip():
+        return result
+
+    for start in range(0, len(mapped), TROPE_VERIFY_BATCH_SIZE):
+        batch = mapped[start : start + TROPE_VERIFY_BATCH_SIZE]
+        texts = [(movie.overview or "").strip(), *[TROPE_DESCRIPTIONS[tag] for _, tag in batch]]
+        try:
+            config = embeddings.load_config(session)
+            embedded = await embeddings.embed_batch(config, texts)
+            if (
+                embedded.fingerprint not in {config.fingerprint, config.local_fingerprint}
+                or len(embedded.vectors) != len(texts)
+                or any(
+                    vector.ndim != 1
+                    or vector.size == 0
+                    or not np.all(np.isfinite(vector))
+                    or np.linalg.norm(vector) == 0
+                    for vector in embedded.vectors
+                )
+            ):
+                raise embeddings.EmbeddingUnavailable("Invalid TVTropes validation embeddings")
+        except embeddings.EmbeddingUnavailable:
+            if not judge_config.enabled:
+                raise
+            embedded = None
+        for index, (source_slug, mapped_slug) in enumerate(batch, start=1):
+            confidence = 0.0
+            if embedded is not None:
+                overview, concept = embedded.vectors[0], embedded.vectors[index]
+                if overview.shape != concept.shape:
+                    raise embeddings.EmbeddingUnavailable(
+                        "TVTropes validation vectors have incompatible dimensions"
+                    )
+                confidence = embeddings.normalize_similarity(
+                    embeddings.cosine_similarity(overview, concept), embedded.fingerprint
+                )
+            if confidence >= TROPE_CONFIDENCE_THRESHOLD:
+                result[mapped_slug] = confidence
+            elif judge_config.enabled and await llm.judge_trope(
+                movie.overview or "", TROPE_DESCRIPTIONS[mapped_slug], judge_config
+            ):
+                result[mapped_slug] = TROPE_CONFIDENCE_THRESHOLD
+    return result
+
+
 async def _guard_trope_batch(
     session: Session,
     proposals: list[tuple[CachedMovie, list[str]]],
-) -> dict[int, list[str]]:
-    accepted: dict[int, list[str]] = {movie.tmdb_id: [] for movie, _ in proposals}
+) -> dict[int, dict[str, float]]:
+    accepted: dict[int, dict[str, float]] = {movie.tmdb_id: {} for movie, _ in proposals}
     texts: list[str] = []
     checks: list[tuple[int, str, int, int]] = []
     for movie, tropes in proposals:
@@ -83,7 +131,8 @@ async def _guard_trope_batch(
             continue
         candidates = list(
             dict.fromkeys(
-                tag.strip().lower().replace("_", "-").replace(" ", "-")
+                trope_facets.normalize_trope(tag)
+                or tag.strip().lower().replace("_", "-").replace(" ", "-")
                 for tag in tropes
                 if tag.strip()
             )
@@ -91,8 +140,7 @@ async def _guard_trope_batch(
         candidates = [
             tag
             for tag in candidates
-            if tag not in TROPE_GENRE_REQUIREMENTS
-            or set(movie.genre_ids) & TROPE_GENRE_REQUIREMENTS[tag]
+            if trope_facets.genre_allowed(tag, movie.genre_ids)
         ]
         if not candidates:
             continue
@@ -129,7 +177,7 @@ async def _guard_trope_batch(
             embeddings.cosine_similarity(overview, concept), result.fingerprint
         )
         if confidence >= TROPE_CONFIDENCE_THRESHOLD:
-            accepted[movie_id].append(tag)
+            accepted[movie_id][tag] = confidence
     return accepted
 
 
@@ -220,16 +268,18 @@ async def extract_and_store_tropes(
     """Extract and persist `movie`'s tropes. [] when the model is off; raises `LlmUnavailable`
     when it fails, so a failure is never cached as "no tropes"."""
     proposals = await llm.extract_tropes(movie.overview or "", config)
-    tropes = (await guard_tropes(session, [(movie, proposals)]))[movie.tmdb_id]
+    evidence = (await guard_trope_evidence(session, [(movie, proposals)]))[movie.tmdb_id]
+    tropes = list(evidence)
     if config.enabled:
         movie.extracted_tropes = tropes
+        trope_facets.replace_source(session, movie.tmdb_id, "llm", evidence)
         session.add(movie)
         session.commit()
     return tropes
 
 
 async def ensure_tropes(session: Session, movies: Iterable[CachedMovie]) -> dict[int, list[str]]:
-    """Fill `extracted_tropes` for films that lack them, when the generative model is on.
+    """Verify cached trope proposals and fill missing ones when the generative model is on.
     A failing model is logged once and skips the rest: films stay NULL (never "no tropes")."""
     config = llm.load_config(session)
     pending = list({m.tmdb_id: m for m in movies}.values())
@@ -241,7 +291,7 @@ async def ensure_tropes(session: Session, movies: Iterable[CachedMovie]) -> dict
     async def extract(movie: CachedMovie) -> tuple[CachedMovie, list[str] | None]:
         nonlocal failed
         if movie.extracted_tropes is not None:
-            return movie, movie.extracted_tropes
+            return movie, list(movie.extracted_tropes)
         if not config.enabled or not (movie.overview or "").strip():
             return movie, None
         async with gate:
@@ -259,14 +309,15 @@ async def ensure_tropes(session: Session, movies: Iterable[CachedMovie]) -> dict
         for movie, tropes in await asyncio.gather(*(extract(m) for m in pending))
         if tropes is not None
     ]
-    verified = {movie.tmdb_id: [] for movie in pending}
+    verified = {movie.tmdb_id: {} for movie in pending}
     try:
-        verified.update(await guard_tropes(session, proposals))
+        verified.update(await guard_trope_evidence(session, proposals))
     except embeddings.EmbeddingUnavailable as exc:
         logger.warning("Trope verification unavailable: %s", exc)
-        return verified
+        return {movie_id: list(tags) for movie_id, tags in verified.items()}
     for movie, _ in proposals:
-        movie.extracted_tropes = verified[movie.tmdb_id]
+        movie.extracted_tropes = list(verified[movie.tmdb_id])
+        trope_facets.replace_source(session, movie.tmdb_id, "llm", verified[movie.tmdb_id])
         session.add(movie)
     session.commit()
-    return verified
+    return {movie_id: list(tags) for movie_id, tags in verified.items()}

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session, col, select
 
@@ -15,7 +15,7 @@ from app.integrations.seerr import DEFAULT_URL as SEERR_DEFAULT_URL
 from app.integrations.seerr import check_seerr_connectivity
 from app.models.system import SystemTask
 from app.models.user import User
-from app.services import embeddings, llm, settings_repo, task_runner
+from app.services import embeddings, llm, settings_repo, task_runner, tvtropes
 from app.services.tmdb import check_tmdb_connectivity
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -61,6 +61,8 @@ class IntegrationConfigOut(BaseModel):
     llm_model: str = ""
     llm_api_key_masked: str | None = None
     llm_keep_alive_seconds: int = 300
+    tvtropes_enabled: bool = False
+    tvtropes_terms_approved: bool = False
     # Is llama-cpp-python installed (the local GGUF provider needs it)?
     llm_local_available: bool = False
 
@@ -90,6 +92,7 @@ class IntegrationConfigUpdate(BaseModel):
     llm_api_key: str | None = None
     llm_model: str | None = None
     llm_keep_alive_seconds: int | None = Field(default=None, ge=0, le=llm.MAX_KEEP_ALIVE_SECONDS)
+    tvtropes_enabled: bool | None = None
 
 
 class ConnectivityTestResult(BaseModel):
@@ -221,6 +224,8 @@ def _build_config(session: Session) -> IntegrationConfigOut:
         llm_api_key_masked=_mask(generative.api_key),
         llm_keep_alive_seconds=generative.keep_alive_seconds,
         llm_local_available=llm.local_runtime_available(),
+        tvtropes_enabled=tvtropes.enabled(session),
+        tvtropes_terms_approved=tvtropes.TERMS_APPROVED,
     )
 
 
@@ -238,6 +243,11 @@ def update_integration_settings(
     session: Session = Depends(get_session),
     _admin: User = Depends(get_current_admin),
 ) -> IntegrationConfigOut:
+    if payload.tvtropes_enabled is True and not tvtropes.TERMS_APPROVED:
+        raise HTTPException(
+            status_code=409,
+            detail="TVTropes licence and terms must be reviewed before enabling ingestion.",
+        )
     settings_repo.set_overrides(
         session,
         {

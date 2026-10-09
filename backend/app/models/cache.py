@@ -47,6 +47,7 @@ class CachedMovie(SQLModel, table=True):
     extracted_tropes: list[str] | None = Field(
         default=None, sa_column=Column(JSON(none_as_null=True))
     )
+    tvtropes_work_url: str | None = None
     # Historical Time-Travel: the year the story is *set* in (negative = BCE) and a short era label
     # ("Ancient Rome", "World War II"); NULL = not resolved yet. A film with no period indicator
     # resolves to its release year / "Contemporary". A manual edit is stored the same way.

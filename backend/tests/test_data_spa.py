@@ -10,13 +10,14 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi import BackgroundTasks, FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from sqlmodel import Session, SQLModel, select
 
 from app.api.deps import get_current_user
 from app.api.routes_system import router
 from app.config import Settings
 from app.db import get_session
-from app.facets.models import MovieFacetStatus
+from app.facets.models import MovieFacet, MovieFacetStatus
 from app.facets.registry import FAMILY_VERSIONS
 from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie
@@ -310,7 +311,7 @@ async def test_fix_all_one_task_chained(spa_engine, monkeypatch):
     assert calls == list(data_spa.TREATMENTS)
     with Session(spa_engine) as session:
         assert len(session.exec(select(SystemTask)).all()) == 1
-        assert len(session.exec(select(MovieFacetStatus)).all()) == 5
+        assert len(session.exec(select(MovieFacetStatus)).all()) == len(data_spa.TREATMENTS)
 
 
 def test_health_and_endpoint_auth_contract(spa_engine):
@@ -439,12 +440,24 @@ def test_migration_single_head_and_preservation_roundtrip(config_dir):
     from app.db import engine
 
     config = Config("alembic.ini")
-    assert ScriptDirectory.from_config(config).get_heads() == ["e6f7a8b9c0d1"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["f7a8b9c0d1e2"]
     command.upgrade(config, "d5e6f7a8b9c0")
     with Session(engine) as session:
-        movie(session, 99, title="Preserved", overview="A saved plot")
+        session.exec(
+            text(
+                "INSERT INTO cached_movies (tmdb_id, title, overview, genre_ids) "
+                "VALUES (99, 'Preserved', 'A saved plot', '[]')"
+            )
+        )
         session.add(MovieFacetStatus(movie_id=99, family="lexical", version=1, status="ok"))
         session.add(SystemTask(id="preserved-task", name="fixture", progress_data={"cursor": 9}))
+        session.exec(
+            text(
+                "INSERT INTO movie_facets "
+                "(facet_id, value_text, value_num, movie_id, source, confidence) "
+                "VALUES ('trope', 'heist', 0, 99, 'llm', 0.9)"
+            )
+        )
         session.commit()
     command.upgrade(config, "head")
     assert provider_budgets.reserve(engine, "omdb")
@@ -452,6 +465,21 @@ def test_migration_single_head_and_preservation_roundtrip(config_dir):
         assert session.get(CachedMovie, 99).overview == "A saved plot"
         assert session.get(SystemTask, "preserved-task").progress_data["cursor"] == 9
         assert session.get(MovieFacetStatus, (99, "lexical")).status == "ok"
+        assert session.exec(
+            select(MovieFacet).where(MovieFacet.movie_id == 99)
+        ).one().source == "llm"
+        session.add(
+            MovieFacet(
+                movie_id=99,
+                facet_id="trope",
+                value_text="heist",
+                source="tvtropes",
+                confidence=0.9,
+                source_url="https://tvtropes.org/pmwiki/pmwiki.php/Main/Heist",
+            )
+        )
+        session.commit()
+        assert len(session.exec(select(MovieFacet).where(MovieFacet.movie_id == 99)).all()) == 2
     command.downgrade(config, "d5e6f7a8b9c0")
     command.upgrade(config, "head")
     with Session(engine) as session:

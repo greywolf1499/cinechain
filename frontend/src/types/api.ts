@@ -409,6 +409,17 @@ export interface TropeExtraction {
 	enabled: boolean;
 }
 
+export interface TropeEvidence {
+	slug: string;
+	sources: string[];
+	tvtropes_url: string | null;
+}
+
+export interface MovieTropeEvidence {
+	tmdb_id: number;
+	evidence: TropeEvidence[];
+}
+
 export interface MovieRatings {
 	imdb_rating: string | null;
 	rotten_tomatoes: string | null;
@@ -844,6 +855,8 @@ export interface DiscoveryCandidate {
 	semantic_score?: number | null;
 	/** Semantic Trope Web: the candidate's LLM-extracted tropes. */
 	tropes?: string[];
+	trope_sources?: Record<string, string[]>;
+	trope_urls?: Record<string, string>;
 	/** The Rabbit Hole: true = verified to satisfy the active tier's rule (null = couldn't be checked). */
 	tier_compliant?: boolean | null;
 	upcoming_tier_warning?: string | null;
@@ -983,6 +996,8 @@ export interface IntegrationConfig {
 	llm_api_key_masked: string | null;
 	llm_keep_alive_seconds: number;
 	llm_local_available: boolean;
+	tvtropes_enabled: boolean;
+	tvtropes_terms_approved: boolean;
 }
 
 export type EmbeddingProvider = "local_onnx" | "ollama" | "openai";

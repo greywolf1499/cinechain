@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { actingFields, notifyTableLog, syncTableRun } from "./tableMode";
@@ -28,6 +29,7 @@ import type {
 	MovieDetail,
 	NarrativeEra,
 	TropeExtraction,
+	MovieTropeEvidence,
 	DailyConvertResult,
 	DailyForfeitResult,
 	DailyHopResult,
@@ -372,22 +374,44 @@ export function useRefreshRatings() {
 	});
 }
 
-/** A film's extracted tropes. Reads the cached ones off the detail; when they are missing and the
- * LLM is on, asks the server to extract (and cache) them once. Empty = none / LLM off. */
+/** Reads trusted source-unioned tropes, revalidating legacy raw AI tags before displaying them. */
 export function useMovieTropes(movieId: number | undefined, enabled = true) {
 	const { data: llm } = useLlmStatus();
 	const { movie } = useMovieDetail(movieId, enabled);
 	const cached = movie?.extracted_tropes ?? null;
-	const extraction = useQuery({
-		queryKey: ["movies", movieId, "tropes"],
-		queryFn: () => api.post<TropeExtraction>(`/movies/${movieId}/tropes/extract`),
-		enabled: enabled && movieId !== undefined && !!movie && cached === null && !!llm?.enabled,
+	const queryClient = useQueryClient();
+	const evidence = useQuery({
+		queryKey: ["movies", movieId, "trope-evidence"],
+		queryFn: () => api.get<MovieTropeEvidence>(`/movies/${movieId}/trope-evidence`),
+		enabled: enabled && movieId !== undefined && !!movie,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
 	});
+	const extraction = useQuery({
+		queryKey: ["movies", movieId, "tropes"],
+		queryFn: () => api.post<TropeExtraction>(`/movies/${movieId}/tropes/extract`),
+		enabled:
+			enabled && movieId !== undefined && !!movie &&
+			(cached === null
+				? !!llm?.enabled
+				: cached.length > 0 && evidence.data?.evidence.length === 0),
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+	});
+	useEffect(() => {
+		if (extraction.data) {
+			void queryClient.invalidateQueries({
+				queryKey: ["movies", movieId, "trope-evidence"],
+			});
+		}
+	}, [extraction.data, movieId, queryClient]);
+	const tropeEvidence = evidence.data?.evidence ?? [];
 	return {
-		tropes: cached ?? extraction.data?.tropes ?? [],
-		isExtracting: extraction.isFetching,
+		tropes: evidence.data
+			? tropeEvidence.map((item) => item.slug)
+			: extraction.data?.tropes ?? [],
+		tropeEvidence,
+		isExtracting: extraction.isFetching || evidence.isFetching,
 	};
 }
 

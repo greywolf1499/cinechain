@@ -1291,7 +1291,16 @@ function CandidateCard({
             {candidate.tier_compliant ? tierLabel : "−1 ❤️ · Off-tier"}
           </span>
         )}
-        <TropeChips tropes={candidate.tropes} highlight={frontierTropes} max={4} />
+        <TropeChips
+          tropes={candidate.tropes}
+          evidence={candidate.tropes?.map((slug) => ({
+            slug,
+            sources: candidate.trope_sources?.[slug] ?? [],
+            tvtropes_url: candidate.trope_urls?.[slug] ?? null,
+          }))}
+          highlight={frontierTropes}
+          max={4}
+        />
         {!masked && (
           <PitchButton
             previousMovieId={frontierMovieId}

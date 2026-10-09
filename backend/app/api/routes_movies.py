@@ -3,11 +3,13 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client
 from app.db import get_session
 from app.engines.registry import get_engine
+from app.facets import tropes as trope_facets
+from app.facets.models import MovieFacet
 from app.integrations.omdb import OMDbClient
 from app.models.cache import CachedMovie
 from app.models.user import User
@@ -15,10 +17,12 @@ from app.schemas.engine import SuggestionFilters
 from app.schemas.movies import (
     CastMember,
     CrewMember,
+    ManualTropeUpdate,
     MovieDetail,
     MovieRatings,
     MovieSearchResponse,
     MovieSummary,
+    MovieTropeEvidence,
     NarrativeEra,
     NarrativeEraUpdate,
     PersonSummary,
@@ -321,19 +325,25 @@ async def extract_movie_tropes(
     tmdb: TMDBClient = Depends(get_tmdb_client),
     _current_user: User = Depends(get_current_user),
 ) -> TropeExtraction:
-    """JIT trope extraction: asks the configured LLM once and caches the result on the movie.
-    Already-extracted films are returned as-is; with the LLM off the answer is an empty,
-    uncached list (`enabled=false`) so enabling it later still extracts."""
+    """Return trusted cached trope tags, revalidating legacy raw output before returning it.
+    With no cached tags and the LLM off, the answer is empty and uncached."""
     movie = await cache_repo.get_movie(session, tmdb, tmdb_id)
     if movie.overview is None:
         movie = await cache_repo.get_movie(session, tmdb, tmdb_id, refresh=True)
     if movie.extracted_tropes is not None:
         try:
-            tropes = (
-                await movie_features.guard_tropes(session, [(movie, movie.extracted_tropes)])
+            evidence = (
+                await movie_features.guard_trope_evidence(
+                    session, [(movie, movie.extracted_tropes)]
+                )
             )[tmdb_id]
         except embeddings.EmbeddingUnavailable as exc:
             raise HTTPException(503, detail=str(exc)) from exc
+        tropes = list(evidence)
+        movie.extracted_tropes = tropes
+        session.add(movie)
+        trope_facets.replace_source(session, movie.tmdb_id, "llm", evidence)
+        session.commit()
         return TropeExtraction(tmdb_id=tmdb_id, tropes=tropes, cached=True)
     config = llm.load_config(session)
     if not config.enabled:
@@ -345,6 +355,67 @@ async def extract_movie_tropes(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
     return TropeExtraction(tmdb_id=tmdb_id, tropes=tropes, cached=False)
+
+
+@router.get("/movies/{tmdb_id}/trope-evidence", response_model=MovieTropeEvidence)
+def get_movie_trope_evidence(
+    tmdb_id: int,
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
+) -> MovieTropeEvidence:
+    if session.get(CachedMovie, tmdb_id) is None:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    rows = session.exec(
+        select(MovieFacet).where(
+            MovieFacet.movie_id == tmdb_id,
+            MovieFacet.facet_id == "trope",
+            col(MovieFacet.confidence).is_not(None),
+        )
+    ).all()
+    grouped: dict[str, dict[str, str | None]] = {}
+    for row in rows:
+        slug = trope_facets.normalize_trope(row.value_text)
+        if slug is not None and row.source in {"llm", "tvtropes", "manual"}:
+            grouped.setdefault(slug, {})[row.source] = row.source_url
+    return MovieTropeEvidence(
+        tmdb_id=tmdb_id,
+        evidence=[
+            {
+                "slug": slug,
+                "sources": sorted(sources),
+                "tvtropes_url": sources.get("tvtropes"),
+            }
+            for slug, sources in sorted(grouped.items())
+        ],
+    )
+
+
+@router.post("/movies/{tmdb_id}/tropes/manual", response_model=MovieTropeEvidence)
+def update_manual_tropes(
+    tmdb_id: int,
+    payload: ManualTropeUpdate,
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
+) -> MovieTropeEvidence:
+    movie = session.get(CachedMovie, tmdb_id)
+    if movie is None:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    normalized = []
+    for value in payload.tropes:
+        slug = trope_facets.normalize_trope(value)
+        if slug is None:
+            raise HTTPException(status_code=422, detail=f"Unknown trope: {value}")
+        if not trope_facets.genre_allowed(slug, movie.genre_ids):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{slug} is not supported by this film's cached genres",
+            )
+        normalized.append(slug)
+    trope_facets.replace_source(
+        session, movie.tmdb_id, "manual", {slug: 1.0 for slug in dict.fromkeys(normalized)}
+    )
+    session.commit()
+    return get_movie_trope_evidence(tmdb_id, session, _current_user)
 
 
 @router.post("/movies/{tmdb_id}/narrative-era", response_model=NarrativeEra)

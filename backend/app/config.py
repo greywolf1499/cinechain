@@ -66,6 +66,8 @@ class Settings(BaseSettings):
         default=300,
         validation_alias=AliasChoices("llm_keep_alive_seconds", "llm_idle_timeout_seconds"),
     )
+    # TVTropes ingestion is separately opt-in and still requires runtime robots permission.
+    tvtropes_enabled: bool = False
 
     # --- Bridge solver pacing (Phase 15.5) ---
     bridge_max_duration_seconds: int = 45

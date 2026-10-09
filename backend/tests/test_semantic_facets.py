@@ -21,9 +21,7 @@ def clear_centroids():
 
 
 @pytest.mark.anyio
-async def test_anchor_centroids_embed_once_per_fingerprint_and_write_cache(
-    tmp_path, monkeypatch
-):
+async def test_anchor_centroids_embed_once_per_fingerprint_and_write_cache(tmp_path, monkeypatch):
     calls = []
     fingerprint = "local_onnx:test-preset"
     config = SimpleNamespace(fingerprint=fingerprint)
@@ -39,7 +37,9 @@ async def test_anchor_centroids_embed_once_per_fingerprint_and_write_cache(
         await asyncio.sleep(0)
         return SimpleNamespace(
             fingerprint=fingerprint,
-            vectors=[np.array([1.0, float(index + 1)], dtype=np.float32) for index, _ in enumerate(texts)],
+            vectors=[
+                np.array([1.0, float(index + 1)], dtype=np.float32) for index, _ in enumerate(texts)
+            ],
         )
 
     monkeypatch.setattr(embeddings, "embed_batch", embed_batch)
@@ -102,7 +102,9 @@ def test_quadrant_thresholds(valence, arousal, expected):
 
 def test_mismatched_vector_is_unknown():
     centroids = {name: np.array([1.0, 0.0], dtype=np.float32) for name in semantic.ANCHORS}
-    assert semantic.project_vector(np.array([1.0], dtype=np.float32), centroids, "fingerprint") == {}
+    assert (
+        semantic.project_vector(np.array([1.0], dtype=np.float32), centroids, "fingerprint") == {}
+    )
 
 
 @pytest.mark.anyio

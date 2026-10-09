@@ -71,14 +71,16 @@ def test_admin_get_reflects_no_overrides_by_default(client):
     assert body["omdb_configured"] is False
     assert body["omdb_api_key_masked"] is None
     assert body["tvtropes_enabled"] is False
-    assert body["tvtropes_terms_approved"] is False
 
 
-def test_tvtropes_cannot_be_enabled_before_terms_review(client):
+def test_tvtropes_can_be_enabled_and_disabled_as_an_admin(client):
     _register_and_login(client)
-    response = client.patch("/api/settings/integrations", json={"tvtropes_enabled": True})
-    assert response.status_code == 409
-    assert "terms must be reviewed" in response.json()["detail"]
+    enabled = client.patch("/api/settings/integrations", json={"tvtropes_enabled": True})
+    assert enabled.status_code == 200
+    assert enabled.json()["tvtropes_enabled"] is True
+    disabled = client.patch("/api/settings/integrations", json={"tvtropes_enabled": False})
+    assert disabled.status_code == 200
+    assert disabled.json()["tvtropes_enabled"] is False
 
 
 def test_admin_patch_sets_and_masks_override(client):

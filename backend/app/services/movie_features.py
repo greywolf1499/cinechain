@@ -137,11 +137,7 @@ async def _guard_trope_batch(
                 if tag.strip()
             )
         )[:5]
-        candidates = [
-            tag
-            for tag in candidates
-            if trope_facets.genre_allowed(tag, movie.genre_ids)
-        ]
+        candidates = [tag for tag in candidates if trope_facets.genre_allowed(tag, movie.genre_ids)]
         if not candidates:
             continue
         overview_index = len(texts)

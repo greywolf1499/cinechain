@@ -1,9 +1,4 @@
-"""Polite, opt-in TVTropes link-list ingestion with fail-closed robots handling.
-
-Only canonical work URLs and trope identifiers are cached; response HTML is discarded.
-The current site's general robots policy disallows crawling, so normal requests are denied
-before a work page is fetched.
-"""
+"""Polite, opt-in TVTropes trope-link ingestion with fail-closed robots handling."""
 
 from __future__ import annotations
 
@@ -16,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 
 from bs4 import BeautifulSoup
@@ -36,8 +31,6 @@ CACHE_TTL = timedelta(days=90)
 ROBOTS_TTL = timedelta(hours=1)
 MIN_REQUEST_INTERVAL = 8.0
 MAX_PAGES_PER_BATCH = 150
-# Keep external ingestion unavailable until the site's licence and terms have been reviewed.
-TERMS_APPROVED = False
 _request_lock = threading.Lock()
 _last_request = 0.0
 _robots_cache: tuple[float, RobotFileParser] | None = None
@@ -65,6 +58,7 @@ class TropeLink:
     slug: str
     mapped_slug: str | None
     url: str
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -82,16 +76,44 @@ class Response:
 
 
 def enabled(session: Session) -> bool:
-    if not TERMS_APPROVED:
-        return False
     override = settings_repo.get_overrides(session).get("tvtropes_enabled")
     if override is not None:
         return override.lower() == "true"
     return get_settings().tvtropes_enabled
 
 
-def _title_slug(title: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]", "", title)
+def normalize_url(user_input: str, *, year: int | None = None) -> str:
+    """Normalize a title or accept only an HTTPS TVTropes Film URL."""
+    raw = user_input.strip()
+    if raw.startswith(("http://", "https://")):
+        parsed = urlparse(raw)
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc.lower() != urlparse(BASE_URL).netloc
+            or not parsed.path.startswith("/pmwiki/pmwiki.php/Film/")
+        ):
+            raise ValueError("Only HTTPS TVTropes Film pages are accepted")
+        return urlunparse(("https", parsed.netloc.lower(), parsed.path, "", "", ""))
+    raw = raw.removeprefix("Film/")
+    cleaned = re.sub(r"[^\w\s\-]", "", raw)
+    parts = [part for part in re.split(r"[\s\-_]+", cleaned) if part]
+    if not parts:
+        raise ValueError("Invalid movie name provided")
+    if len(parts) == 1 and not parts[0].islower():
+        slug = parts[0]
+    else:
+        slug = "".join(part.capitalize() for part in parts)
+    if year is not None:
+        slug += str(year)
+    return f"{BASE_URL}/pmwiki/pmwiki.php/Film/{quote(slug)}"
+
+
+def _site_url(base_url: str, href: str) -> str | None:
+    absolute = urljoin(base_url, href)
+    parsed = urlparse(absolute)
+    if parsed.scheme != "https" or parsed.netloc.lower() != urlparse(BASE_URL).netloc:
+        return None
+    return urlunparse(("https", parsed.netloc.lower(), parsed.path, "", "", ""))
 
 
 def camel_case_slug(value: str) -> str:
@@ -110,29 +132,71 @@ def _year_matches(html: str, expected_year: int) -> bool:
     return any(abs(year - expected_year) <= 1 for year in years)
 
 
-def extract_trope_links(html: str) -> tuple[TropeLink, ...]:
-    soup = BeautifulSoup(html, "html.parser")
-    root = soup.select_one("#main-article") or soup
-    found: dict[str, TropeLink] = {}
-    for anchor in root.select("a[href]"):
-        href = str(anchor.get("href", ""))
-        match = re.search(r"/Main/([^/?#]+)", href)
-        if match is None:
+def find_subpages(soup: BeautifulSoup, base_url: str) -> list[str]:
+    article = soup.find("div", id="main-article") or soup.find("div", class_="article-content")
+    if not article:
+        return []
+    text_pattern = re.compile(r"Tropes\s+[A-Za-z0-9]+\s+to\s+[A-Za-z0-9]+", re.IGNORECASE)
+    href_pattern = re.compile(r"Tropes[A-Za-z0-9]+To[A-Za-z0-9]+", re.IGNORECASE)
+    found: list[str] = []
+    seen = {base_url}
+    for anchor in article.find_all("a", href=True):
+        href = str(anchor["href"])
+        if not (text_pattern.search(anchor.get_text(" ", strip=True)) or href_pattern.search(href)):
             continue
-        absolute = urljoin(BASE_URL, href)
-        if urlparse(absolute).netloc != urlparse(BASE_URL).netloc:
+        url = _site_url(base_url, href)
+        if url is not None and url not in seen:
+            found.append(url)
+            seen.add(url)
+    return found
+
+
+def extract_trope_links(html: str, base_url: str = BASE_URL) -> tuple[TropeLink, ...]:
+    soup = BeautifulSoup(html, "html.parser")
+    root = (
+        soup.find("div", id="main-article")
+        or soup.find("div", class_="article-content")
+        or soup.body
+        or soup
+    )
+    if not root:
+        return ()
+    found: dict[tuple[str, str], TropeLink] = {}
+    for item in root.find_all("li"):
+        link = item.find(
+            "a",
+            href=lambda href: href and ("/pmwiki/pmwiki.php/Main/" in href or "/Main/" in href),
+        )
+        if link is None:
+            continue
+        href = str(link.get("href", ""))
+        match = re.search(r"/Main/([^/?#]+)", href)
+        url = _site_url(base_url, href)
+        if match is None or url is None:
             continue
         name = match.group(1)
         slug = camel_case_slug(name)
         if not slug:
             continue
+        li_clone = BeautifulSoup(str(item), "html.parser").find("li")
+        if li_clone is None:
+            continue
+        for sub_list in li_clone.find_all(["ul", "ol"]):
+            sub_list.decompose()
+        full_text = re.sub(r"\s+", " ", li_clone.get_text(separator=" ", strip=True))
+        label = re.sub(r"\s+", " ", link.get_text(" ", strip=True))
+        description = full_text
+        if label and description.lower().startswith(label.lower()):
+            description = description[len(label) :].lstrip(" :-\u2013\u2014").strip()
+        key = (slug, description[:60])
         found.setdefault(
-            slug,
+            key,
             TropeLink(
                 name=name,
                 slug=slug,
                 mapped_slug=normalize_trope(name),
-                url=absolute,
+                url=url,
+                description=description,
             ),
         )
     return tuple(found.values())
@@ -158,8 +222,7 @@ def _cached_result(data: dict, *, cached: bool) -> ScrapeResult:
         tropes=tuple(
             TropeLink(**item)
             for item in data["tropes"]
-            if isinstance(item, dict)
-            and {"name", "slug", "mapped_slug", "url"} <= item.keys()
+            if isinstance(item, dict) and {"name", "slug", "mapped_slug", "url"} <= item.keys()
         ),
         cached=cached,
     )
@@ -180,6 +243,7 @@ class TVTropesClient:
     ) -> None:
         self.cache_dir = cache_dir or (get_settings().config_dir / "tvtropes")
         self.request = request or self._request
+        self._session = None
         self.min_interval = min_interval
         self.now = now
         self.sleep = sleep
@@ -188,15 +252,10 @@ class TVTropesClient:
         self._robots: RobotFileParser | None = None
         self._robots_loaded = 0.0
 
-    @staticmethod
-    def _request(url: str, headers: dict[str, str]) -> Response:
-        response = curl_requests.get(
-            url,
-            headers=headers,
-            timeout=20,
-            allow_redirects=False,
-            impersonate="chrome124",
-        )
+    def _request(self, url: str, headers: dict[str, str]) -> Response:
+        if self._session is None:
+            self._session = curl_requests.Session(impersonate="chrome")
+        response = self._session.get(url, headers=headers, timeout=15, allow_redirects=False)
         return Response(
             status_code=response.status_code,
             headers=dict(response.headers),
@@ -205,7 +264,8 @@ class TVTropesClient:
 
     def _send(self, url: str, headers: dict[str, str] | None = None) -> Response:
         global _last_request
-        if urlparse(url).netloc != urlparse(BASE_URL).netloc:
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.netloc.lower() != urlparse(BASE_URL).netloc:
             raise ValueError("TVTropes client refuses non-TV Tropes URLs")
         if self.pages_fetched >= MAX_PAGES_PER_BATCH:
             raise BatchPageLimit("TVTropes batch page cap reached")
@@ -215,7 +275,15 @@ class TVTropesClient:
             wait = self.min_interval - (self.now() - _last_request)
             if wait > 0:
                 self.sleep(wait)
-            response = self.request(url, {"User-Agent": USER_AGENT, **(headers or {})})
+            response = self.request(
+                url,
+                {
+                    "User-Agent": USER_AGENT,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    **(headers or {}),
+                },
+            )
             _last_request = self.now()
         self.pages_fetched += 1
         return response
@@ -256,19 +324,26 @@ class TVTropesClient:
         return self._fetch(url, headers)
 
     def _work_candidates(self, movie: CachedMovie) -> list[str]:
-        title = _title_slug(movie.title)
-        if not title:
+        if not movie.title.strip():
             return []
-        year = int(movie.release_date[:4]) if movie.release_date and movie.release_date[:4].isdigit() else None
-        candidates = [f"{BASE_URL}/pmwiki/pmwiki.php/Film/{quote(title)}"]
-        if year:
-            candidates.insert(0, f"{BASE_URL}/pmwiki/pmwiki.php/Film/{quote(title + str(year))}")
+        year = (
+            int(movie.release_date[:4])
+            if movie.release_date and movie.release_date[:4].isdigit()
+            else None
+        )
+        candidates = [normalize_url(movie.title)]
+        if year is not None:
+            candidates.insert(0, normalize_url(movie.title, year=year))
         search = f"{BASE_URL}/pmwiki/search_result.php?q={quote(movie.title)}"
         candidates.append(search)
         return candidates
 
     def _resolve_work_url(self, movie: CachedMovie) -> str | None:
-        year = int(movie.release_date[:4]) if movie.release_date and movie.release_date[:4].isdigit() else None
+        year = (
+            int(movie.release_date[:4])
+            if movie.release_date and movie.release_date[:4].isdigit()
+            else None
+        )
         if year is None:
             return None
         for url in self._work_candidates(movie):
@@ -293,10 +368,8 @@ class TVTropesClient:
         return None
 
     def sync_movie(self, movie: CachedMovie, *, enabled: bool) -> ScrapeResult:
-        if not enabled or not TERMS_APPROVED:
-            raise TVTropesDisabled(
-                "TVTropes ingestion requires an explicit opt-in and approved site terms"
-            )
+        if not enabled:
+            raise TVTropesDisabled("TVTropes ingestion requires explicit opt-in")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         path = _json_path(self.cache_dir, movie.tmdb_id)
         data = _read_cache(path)
@@ -320,32 +393,62 @@ class TVTropesClient:
             }
             self._save(path, data)
             return ScrapeResult(None, ())
+        old_pages = {
+            page["url"]: page for page in (data or {}).get("pages", []) if isinstance(page, dict)
+        }
+        if data is not None and not old_pages and data.get("work_url") == work_url:
+            old_pages[work_url] = {
+                "url": work_url,
+                "etag": data.get("etag"),
+                "last_modified": data.get("last_modified"),
+                "tropes": data.get("tropes", []),
+            }
+        main_page, main_html = self._fetch_page(work_url, old_pages.get(work_url))
+        if main_html is None:
+            subpage_urls = [url for url in old_pages if url != work_url]
+        else:
+            subpage_urls = find_subpages(BeautifulSoup(main_html, "html.parser"), work_url)
+        pages = [main_page]
+        for subpage_url in subpage_urls:
+            page, _ = self._fetch_page(subpage_url, old_pages.get(subpage_url))
+            pages.append(page)
+        links = _flatten_page_tropes(pages)
+        data = {
+            "fetched_at": now.isoformat(),
+            "work_url": work_url,
+            "etag": main_page.get("etag"),
+            "last_modified": main_page.get("last_modified"),
+            "pages": pages,
+            "tropes": [link.__dict__ for link in links],
+        }
+        self._save(path, data)
+        movie.tvtropes_work_url = data.get("work_url")
+        return _cached_result(data, cached=False)
+
+    def _fetch_page(self, url: str, previous: dict | None) -> tuple[dict, str | None]:
         headers = {}
-        if data and data.get("work_url") == work_url:
-            if data.get("etag"):
-                headers["If-None-Match"] = data["etag"]
-            if data.get("last_modified"):
-                headers["If-Modified-Since"] = data["last_modified"]
-        response = self._allowed_fetch(work_url, headers)
-        if response.status_code == 304 and data is not None:
-            data["fetched_at"] = now.isoformat()
-        elif response.status_code == 200:
-            links = extract_trope_links(response.text)
-            data = {
-                "fetched_at": now.isoformat(),
-                "work_url": work_url,
+        if previous and previous.get("etag"):
+            headers["If-None-Match"] = previous["etag"]
+        if previous and previous.get("last_modified"):
+            headers["If-Modified-Since"] = previous["last_modified"]
+        response = self._allowed_fetch(url, headers)
+        if response.status_code == 304 and previous is not None:
+            return previous, None
+        if response.status_code == 404:
+            return {"url": url, "tropes": []}, ""
+        if response.status_code != 200:
+            raise RuntimeError(f"TVTropes returned HTTP {response.status_code}")
+        links = extract_trope_links(response.text, url)
+        return (
+            {
+                "url": url,
                 "etag": response.headers.get("ETag") or response.headers.get("etag"),
                 "last_modified": response.headers.get("Last-Modified")
                 or response.headers.get("last-modified"),
                 "tropes": [link.__dict__ for link in links],
-            }
-        elif response.status_code == 404:
-            data = {"fetched_at": now.isoformat(), "work_url": None, "tropes": []}
-        else:
-            raise RuntimeError(f"TVTropes returned HTTP {response.status_code}")
-        self._save(path, data)
-        movie.tvtropes_work_url = data.get("work_url")
-        return _cached_result(data, cached=False)
+            },
+            response.text,
+        )
 
     @staticmethod
     def _save(path: Path, data: dict) -> None:
@@ -358,8 +461,28 @@ def _is_challenge(html: str) -> bool:
     lowered = html.lower()
     return any(
         phrase in lowered
-        for phrase in ("just a moment...", "cf-challenge", "cloudflare ray id", "attention required")
+        for phrase in (
+            "just a moment...",
+            "cf-challenge",
+            "cf-browser-verification",
+            "cloudflare ray id",
+            "attention required",
+        )
     )
+
+
+def _flatten_page_tropes(pages: list[dict]) -> tuple[TropeLink, ...]:
+    found: dict[tuple[str, str], TropeLink] = {}
+    for page in pages:
+        for item in page.get("tropes", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                link = TropeLink(**item)
+            except TypeError:
+                continue
+            found.setdefault((link.slug, link.description[:60]), link)
+    return tuple(found.values())
 
 
 def fetch_movie_tropes(

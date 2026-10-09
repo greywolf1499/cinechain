@@ -997,7 +997,6 @@ export interface IntegrationConfig {
 	llm_keep_alive_seconds: number;
 	llm_local_available: boolean;
 	tvtropes_enabled: boolean;
-	tvtropes_terms_approved: boolean;
 }
 
 export type EmbeddingProvider = "local_onnx" | "ollama" | "openai";

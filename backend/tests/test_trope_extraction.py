@@ -239,9 +239,10 @@ def test_trope_evidence_unions_ai_tvtropes_and_manual_sources(client, db_engine)
     with respx.mock:
         mock_universe(PLOTS)
         assert client.get("/api/movies/1").status_code == 200
-        assert client.post(
-            "/api/movies/1/tropes/manual", json={"tropes": ["Heist"]}
-        ).status_code == 200
+        assert (
+            client.post("/api/movies/1/tropes/manual", json={"tropes": ["Heist"]}).status_code
+            == 200
+        )
         rejected = client.post("/api/movies/1/tropes/manual", json={"tropes": ["Cyberpunk"]})
         assert rejected.status_code == 422
     with Session(db_engine) as session:
@@ -302,9 +303,7 @@ async def test_engine_reads_manual_trope_facets_without_embeddings(db_engine):
             session.add_all(movies)
             session.commit()
             for film in movies:
-                trope_facets.replace_source(
-                    session, film.tmdb_id, "manual", {"heist": 1.0}
-                )
+                trope_facets.replace_source(session, film.tmdb_id, "manual", {"heist": 1.0})
             session.commit()
             engine = SemanticTropeEngine(session, TMDBClient(http_client))
 

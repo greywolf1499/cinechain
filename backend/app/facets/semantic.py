@@ -65,9 +65,10 @@ async def _load_or_embed_centroids(
     if path.is_file():
         try:
             with np.load(path, allow_pickle=False) as archive:
-                if str(archive["fingerprint"].item()) == fingerprint and int(
-                    archive["version"].item()
-                ) == ANCHOR_VERSION:
+                if (
+                    str(archive["fingerprint"].item()) == fingerprint
+                    and int(archive["version"].item()) == ANCHOR_VERSION
+                ):
                     loaded = {name: archive[name].astype(np.float32) for name in ANCHORS}
                     if all(
                         value.ndim == 1
@@ -144,9 +145,7 @@ def project_vector(
 ) -> dict[str, Any]:
     if any(vector.shape != centroid.shape for centroid in centroids.values()):
         return {}
-    valence = _projection(
-        vector, centroids, "valence_positive", "valence_negative", fingerprint
-    )
+    valence = _projection(vector, centroids, "valence_positive", "valence_negative", fingerprint)
     arousal = _projection(vector, centroids, "arousal_high", "arousal_low", fingerprint)
     heaviness = _projection(vector, centroids, "heaviness", "spectacle", fingerprint)
     return {

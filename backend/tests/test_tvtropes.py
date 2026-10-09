@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from bs4 import BeautifulSoup
 
 from app.models.cache import CachedMovie
 from app.services import embeddings, llm, movie_features, tvtropes
@@ -14,7 +15,6 @@ from app.services import embeddings, llm, movie_features, tvtropes
 def reset_tvtropes_process_state(monkeypatch):
     monkeypatch.setattr(tvtropes, "_robots_cache", None)
     monkeypatch.setattr(tvtropes, "_last_request", 0.0)
-    monkeypatch.setattr(tvtropes, "TERMS_APPROVED", True)
 
 
 def response(status_code: int, text: str = "", headers: dict[str, str] | None = None):
@@ -43,12 +43,56 @@ def test_disabled_client_does_not_make_requests(tmp_path):
     assert requests == []
 
 
-def test_unreviewed_terms_gate_rejects_even_an_enabled_setting(tmp_path, monkeypatch):
-    monkeypatch.setattr(tvtropes, "TERMS_APPROVED", False)
-    client = tvtropes.TVTropesClient(tmp_path, lambda *_args: pytest.fail("unexpected request"))
+@pytest.mark.parametrize(
+    ("value", "year", "expected"),
+    [
+        ("The Matrix", None, f"{tvtropes.BASE_URL}/pmwiki/pmwiki.php/Film/TheMatrix"),
+        ("Film/Spider-Man", None, f"{tvtropes.BASE_URL}/pmwiki/pmwiki.php/Film/SpiderMan"),
+        ("Don't Look Up", None, f"{tvtropes.BASE_URL}/pmwiki/pmwiki.php/Film/DontLookUp"),
+        ("The Matrix", 2000, f"{tvtropes.BASE_URL}/pmwiki/pmwiki.php/Film/TheMatrix2000"),
+    ],
+)
+def test_normalize_url(value, year, expected):
+    assert tvtropes.normalize_url(value, year=year) == expected
 
-    with pytest.raises(tvtropes.TVTropesDisabled, match="approved site terms"):
-        client.sync_movie(movie(), enabled=True)
+
+@pytest.mark.parametrize(
+    "url", ["http://tvtropes.org/pmwiki/pmwiki.php/Film/Alien", "https://evil.example/Film/Alien"]
+)
+def test_normalize_url_rejects_unsafe_urls(url):
+    with pytest.raises(ValueError):
+        tvtropes.normalize_url(url)
+
+
+def test_poc_parser_extracts_descriptions_without_nested_list_text():
+    html = """
+    <div id="main-article"><ul><li>
+      <a href="/pmwiki/pmwiki.php/Main/TimeLoop">Time Loop</a> - The hero relives a day.
+      <ul><li><a href="/pmwiki/pmwiki.php/Main/Heist">Heist</a> - A separate plan.</li></ul>
+    </li></ul></div>
+    """
+    links = tvtropes.extract_trope_links(html, tvtropes.BASE_URL)
+    parent = next(item for item in links if item.mapped_slug == "time-loop")
+    assert parent.description == "The hero relives a day."
+    child = next(item for item in links if item.mapped_slug == "heist")
+    assert child.description == "A separate plan."
+
+
+def test_find_subpages_limits_results_to_same_secure_host():
+    soup = BeautifulSoup(
+        """
+        <div id="main-article">
+          <a href="/pmwiki/pmwiki.php/Film/AlienTropesAtoD">Tropes A to D</a>
+          <a href="https://evil.example/Film/AlienTropesEtoM">Tropes E to M</a>
+          <a href="/pmwiki/pmwiki.php/Film/AlienTropesNtoZ">Other link</a>
+        </div>
+        """,
+        "html.parser",
+    )
+    assert tvtropes.find_subpages(soup, f"{tvtropes.BASE_URL}/pmwiki/pmwiki.php/Film/Alien") == [
+        f"{tvtropes.BASE_URL}/pmwiki/pmwiki.php/Film/AlienTropesAtoD",
+        f"{tvtropes.BASE_URL}/pmwiki/pmwiki.php/Film/AlienTropesNtoZ",
+    ]
 
 
 def test_robots_disallow_is_honored_before_any_work_page_request(tmp_path):
@@ -85,10 +129,11 @@ def test_challenge_stops_the_batch_immediately(tmp_path):
 def test_work_resolution_extracts_only_local_links_and_maps_camel_case(tmp_path):
     requests = []
     work_page = """
-    <html><h1>Heist One (2000)</h1><div id="main-article">
-      <a href="/pmwiki/pmwiki.php/Main/TimeLoop">time loop</a>
-      <a href="https://evil.example/pmwiki/pmwiki.php/Main/Heist">external</a>
-      <a href="/pmwiki/pmwiki.php/Main/AlienInvasion">alien invasion</a>
+    <html><h1>Heist One (2000)</h1><div id="main-article"><ul>
+      <li><a href="/pmwiki/pmwiki.php/Main/TimeLoop">time loop</a> - Repeats a day.</li>
+      <li><a href="https://evil.example/pmwiki/pmwiki.php/Main/Heist">external</a></li>
+      <li><a href="/pmwiki/pmwiki.php/Main/AlienInvasion">alien invasion</a></li>
+    </ul>
     </div></html>
     """
 
@@ -116,10 +161,50 @@ def test_work_resolution_extracts_only_local_links_and_maps_camel_case(tmp_path)
     assert client.pages_fetched == 4
 
 
+def test_sync_crawls_split_trope_subpages_and_caches_descriptions(tmp_path):
+    requests = []
+    work_url = f"{tvtropes.BASE_URL}/pmwiki/pmwiki.php/Film/HeistOne"
+    main_page = """
+    <h1>Heist One (2000)</h1><div id="main-article">
+      <a href="/pmwiki/pmwiki.php/Film/HeistOneTropesAtoD">Tropes A to D</a>
+      <ul><li><a href="/pmwiki/pmwiki.php/Main/Heist">Heist</a> - A crew plans a robbery.</li></ul>
+    </div>
+    """
+    subpage = """
+    <div class="article-content"><ul>
+      <li><a href="/pmwiki/pmwiki.php/Main/DoubleCross">Double Cross</a> - An ally betrays the crew.</li>
+    </ul></div>
+    """
+
+    def get(url, headers):
+        requests.append(url)
+        if url.endswith("/robots.txt"):
+            return response(200, "User-agent: *\nAllow: /\n")
+        if url.endswith("/Film/HeistOne2000"):
+            return response(404)
+        if url == work_url and requests.count(url) == 1:
+            return response(200, "<h1>Heist One (2000)</h1>")
+        if url == work_url:
+            return response(200, main_page)
+        if url.endswith("/Film/HeistOneTropesAtoD"):
+            return response(200, subpage)
+        raise AssertionError(f"Unexpected fixture request: {url}")
+
+    client = tvtropes.TVTropesClient(tmp_path, get, min_interval=0)
+    result = client.sync_movie(movie(), enabled=True)
+    assert {link.mapped_slug for link in result.tropes} == {"heist", "double-cross"}
+    assert next(link for link in result.tropes if link.mapped_slug == "heist").description == (
+        "A crew plans a robbery."
+    )
+    assert requests[-1].endswith("/Film/HeistOneTropesAtoD")
+    cached = tvtropes._read_cache(tmp_path / "42.json")
+    assert len(cached["pages"]) == 2
+
+
 def test_expired_cache_revalidates_with_etag_without_storing_html(tmp_path):
     now = [1_000_000.0]
     requests: list[tuple[str, dict[str, str]]] = []
-    page = '<h1>Heist One (2000)</h1><a href="/pmwiki/pmwiki.php/Main/Heist">Heist</a>'
+    page = '<h1>Heist One (2000)</h1><ul><li><a href="/pmwiki/pmwiki.php/Main/Heist">Heist</a> - A robbery plan.</li></ul>'
 
     def get(url, headers):
         requests.append((url, headers))
@@ -132,7 +217,9 @@ def test_expired_cache_revalidates_with_etag_without_storing_html(tmp_path):
     client = tvtropes.TVTropesClient(
         tmp_path, get, min_interval=0, now=lambda: now[0], sleep=lambda _: None
     )
-    first = client.sync_movie(movie(tvtropes_work_url=f"{tvtropes.BASE_URL}/Film/HeistOne"), enabled=True)
+    first = client.sync_movie(
+        movie(tvtropes_work_url=f"{tvtropes.BASE_URL}/Film/HeistOne"), enabled=True
+    )
     now[0] += tvtropes.CACHE_TTL.total_seconds() + 1
     second_client = tvtropes.TVTropesClient(
         tmp_path, get, min_interval=0, now=lambda: now[0], sleep=lambda _: None
@@ -147,7 +234,10 @@ def test_expired_cache_revalidates_with_etag_without_storing_html(tmp_path):
     cache_text = (tmp_path / "42.json").read_text(encoding="utf-8")
     assert "Main/Heist" in cache_text
     assert "<h1>" not in cache_text
-    assert datetime.fromisoformat(tvtropes._read_cache(tmp_path / "42.json")["fetched_at"]).tzinfo == UTC
+    assert (
+        datetime.fromisoformat(tvtropes._read_cache(tmp_path / "42.json")["fetched_at"]).tzinfo
+        == UTC
+    )
 
 
 @pytest.mark.anyio

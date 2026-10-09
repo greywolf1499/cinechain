@@ -261,8 +261,10 @@ function TVTropesSection({
       <div>
         <h3 className="text-sm font-medium text-zinc-300">TV Tropes evidence</h3>
         <p className="mt-1 text-xs leading-relaxed text-zinc-500">
-          Optional trope identifiers only; CineChain does not store page prose or use it for model
-          training. The site&apos;s{" "}
+          Optional trope links and their short list descriptions are cached locally for 90 days;
+          raw page HTML is discarded and nothing is used for model training. Requests use an
+          identifying CineChain user agent, are spaced by at least eight seconds, and only visit
+          pages permitted by the site&apos;s{" "}
           <a
             href="https://tvtropes.org/robots.txt"
             target="_blank"
@@ -271,15 +273,13 @@ function TVTropesSection({
           >
             robots policy
           </a>{" "}
-          currently disallows general crawling, so requests remain blocked until the policy allows
-          them. The reported content signals allow search and prohibit AI training; those signals
-            do not establish a content licence. Ingestion is unavailable until the site's licence
-            and terms are reviewed.
+          . Cloudflare challenges and rate limits stop the current batch. This is an opt-in
+          personal, non-commercial cache.
         </p>
       </div>
       <button
         type="button"
-        disabled={!config || update.isPending || !config.tvtropes_terms_approved}
+        disabled={!config || update.isPending}
         onClick={() => update.mutate()}
         className={`w-fit rounded-md border px-3 py-2 text-xs font-medium disabled:opacity-50 ${
           config?.tvtropes_enabled
@@ -289,8 +289,6 @@ function TVTropesSection({
       >
         {update.isPending
           ? "Saving..."
-          : !config?.tvtropes_terms_approved
-            ? "Unavailable pending terms review"
           : config?.tvtropes_enabled
             ? "Disable TV Tropes scraping"
             : "Enable TV Tropes scraping"}

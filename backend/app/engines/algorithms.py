@@ -401,10 +401,7 @@ class SemanticTropeEngine(FeatureEngine):
         await movie_features.ensure_tropes(self.session, movies)
         evidence = trope_facets.evidence_for(self.session, [movie.tmdb_id for movie in movies])
         self._verified_tropes.update(
-            {
-                movie.tmdb_id: list(evidence.get(movie.tmdb_id, {}))
-                for movie in movies
-            }
+            {movie.tmdb_id: list(evidence.get(movie.tmdb_id, {})) for movie in movies}
         )
         self._trope_sources.update(
             {
@@ -526,8 +523,7 @@ class SemanticTropeEngine(FeatureEngine):
                     col(MovieFacet.confidence).is_not(None),
                 )
             ).all()
-            if (slug := trope_facets.normalize_trope(facet.value_text))
-            and facet.source_url
+            if (slug := trope_facets.normalize_trope(facet.value_text)) and facet.source_url
         }
 
     def with_metric(self, result: ValidationResult, metric: float | None) -> ValidationResult:
@@ -576,10 +572,9 @@ class SemanticTropeEngine(FeatureEngine):
     ) -> list[DiscoveryCandidate]:
         await self.prepare([frontier])
         await self.prepare_tropes([frontier])
-        if (
-            embeddings.decode_embedding(frontier.overview_embedding) is None
-            and not self._verified_tropes.get(frontier.tmdb_id)
-        ):
+        if embeddings.decode_embedding(
+            frontier.overview_embedding
+        ) is None and not self._verified_tropes.get(frontier.tmdb_id):
             self.discovery_reason = "Download the embedding model in Settings > AI & Embeddings"
             return []
         pool: dict[int, CachedMovie] = {}

@@ -25,7 +25,15 @@ from app.models.curated import CanonMovieBadge, CuratedList, LetterboxdWatchlist
 from app.models.run import Run, RunParticipant, RunStep
 from app.models.system import ProviderBudget, SystemTask
 from app.models.user import User
-from app.services import cache_repo, data_spa, embeddings, provider_budgets, task_runner
+from app.services import (
+    cache_repo,
+    data_spa,
+    embeddings,
+    movie_features,
+    provider_budgets,
+    task_runner,
+    tvtropes,
+)
 from app.services.tmdb import (
     TMDBClient,
     TMDBError,
@@ -80,6 +88,59 @@ async def execute(engine, task_id):
     await task_runner._execute_async(engine, task_id, data_spa._run, None)
     with Session(engine) as session:
         return session.get(SystemTask, task_id)
+
+
+@pytest.mark.anyio
+async def test_trope_spa_scrapes_when_enabled_and_checkpoints_facets(spa_engine, monkeypatch):
+    with Session(spa_engine) as session:
+        movie(
+            session, 42, overview="A crew plans a heist.", genre_ids=[80], release_date="2000-01-01"
+        )
+
+    calls = []
+
+    class FixtureScraper:
+        def __init__(self, check_cancelled=None):
+            pass
+
+        def sync_movie(self, film, *, enabled):
+            calls.append((film.tmdb_id, enabled))
+            return tvtropes.ScrapeResult(
+                work_url="https://tvtropes.org/pmwiki/pmwiki.php/Film/HeistOne",
+                tropes=(
+                    tvtropes.TropeLink(
+                        "Heist", "heist", "heist", "https://tvtropes.org/Main/Heist"
+                    ),
+                ),
+            )
+
+    async def validate(_session, _movie, _candidates, _config):
+        return {"heist": 0.91}
+
+    async def ensure_tropes(_session, _movies):
+        return None
+
+    monkeypatch.setattr(tvtropes, "enabled", lambda _session: True)
+    monkeypatch.setattr(tvtropes, "TVTropesClient", FixtureScraper)
+    monkeypatch.setattr(movie_features, "validate_tvtropes", validate)
+    monkeypatch.setattr(movie_features, "ensure_tropes", ensure_tropes)
+    task_id, _ = submit(spa_engine, "tropes", movie_ids=[42])
+
+    task = await execute(spa_engine, task_id)
+
+    assert task.status == "completed"
+    assert calls == [(42, True)]
+    with Session(spa_engine) as session:
+        assert session.get(MovieFacetStatus, (42, "spa:tropes")).status == "ok"
+        evidence = session.exec(
+            select(MovieFacet).where(
+                MovieFacet.movie_id == 42,
+                MovieFacet.facet_id == "trope",
+                MovieFacet.source == "tvtropes",
+            )
+        ).one()
+        assert evidence.value_text == "heist"
+        assert evidence.confidence == 0.91
 
 
 def test_atomic_budget_and_day(spa_engine):
@@ -465,9 +526,9 @@ def test_migration_single_head_and_preservation_roundtrip(config_dir):
         assert session.get(CachedMovie, 99).overview == "A saved plot"
         assert session.get(SystemTask, "preserved-task").progress_data["cursor"] == 9
         assert session.get(MovieFacetStatus, (99, "lexical")).status == "ok"
-        assert session.exec(
-            select(MovieFacet).where(MovieFacet.movie_id == 99)
-        ).one().source == "llm"
+        assert (
+            session.exec(select(MovieFacet).where(MovieFacet.movie_id == 99)).one().source == "llm"
+        )
         session.add(
             MovieFacet(
                 movie_id=99,

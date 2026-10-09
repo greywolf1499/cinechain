@@ -20,23 +20,78 @@ class Trope:
 
 
 TAXONOMY = (
-    Trope("alien-invasion", ("AlienInvasion",), "Extraterrestrial invaders threaten humanity.", frozenset({878})),
-    Trope("cyberpunk", ("Cyberpunk",), "A high-tech dystopia shaped by cybernetics, hackers and oppressive corporations.", frozenset({878})),
+    Trope(
+        "alien-invasion",
+        ("AlienInvasion",),
+        "Extraterrestrial invaders threaten humanity.",
+        frozenset({878}),
+    ),
+    Trope(
+        "cyberpunk",
+        ("Cyberpunk",),
+        "A high-tech dystopia shaped by cybernetics, hackers and oppressive corporations.",
+        frozenset({878}),
+    ),
     Trope("crime", ("Crime",), "Characters plan, commit or investigate criminal acts."),
-    Trope("double-cross", ("DoubleCross",), "An ally betrays a plan or agreement for personal gain."),
-    Trope("enemies-to-lovers", ("EnemiesToLovers",), "Adversaries gradually develop a romantic relationship."),
-    Trope("found-family", ("FoundFamily",), "Unrelated people form close bonds and become a chosen family."),
+    Trope(
+        "double-cross", ("DoubleCross",), "An ally betrays a plan or agreement for personal gain."
+    ),
+    Trope(
+        "enemies-to-lovers",
+        ("EnemiesToLovers",),
+        "Adversaries gradually develop a romantic relationship.",
+    ),
+    Trope(
+        "found-family",
+        ("FoundFamily",),
+        "Unrelated people form close bonds and become a chosen family.",
+    ),
     Trope("heist", ("Heist",), "A team plans and carries out a robbery."),
-    Trope("love-story", ("LoveStory",), "People fall in love and face obstacles to their relationship."),
+    Trope(
+        "love-story",
+        ("LoveStory",),
+        "People fall in love and face obstacles to their relationship.",
+    ),
     Trope("revenge", ("Revenge",), "A wronged character seeks revenge for a past harm."),
     Trope("romance", ("Romance",), "A romantic relationship is central to the story."),
-    Trope("space-opera", ("SpaceOpera",), "Interstellar adventures and conflict span alien worlds.", frozenset({878})),
-    Trope("supernatural-horror", ("SupernaturalHorror",), "Supernatural forces threaten or terrorize the characters.", frozenset({27})),
-    Trope("time-loop", ("TimeLoop",), "Characters repeatedly relive the same period of time.", frozenset({878, 14})),
-    Trope("time-travel", ("TimeTravel",), "Characters travel between different points in time.", frozenset({878, 14})),
-    Trope("unreliable-narrator", ("UnreliableNarrator",), "The story is told by a narrator whose account cannot be fully trusted."),
-    Trope("never-asked", ("NeverAsked",), "A character is given an unwanted responsibility or role."),
-    Trope("zombie-apocalypse", ("ZombieApocalypse",), "Survivors struggle as the undead overrun society.", frozenset({27, 878})),
+    Trope(
+        "space-opera",
+        ("SpaceOpera",),
+        "Interstellar adventures and conflict span alien worlds.",
+        frozenset({878}),
+    ),
+    Trope(
+        "supernatural-horror",
+        ("SupernaturalHorror",),
+        "Supernatural forces threaten or terrorize the characters.",
+        frozenset({27}),
+    ),
+    Trope(
+        "time-loop",
+        ("TimeLoop",),
+        "Characters repeatedly relive the same period of time.",
+        frozenset({878, 14}),
+    ),
+    Trope(
+        "time-travel",
+        ("TimeTravel",),
+        "Characters travel between different points in time.",
+        frozenset({878, 14}),
+    ),
+    Trope(
+        "unreliable-narrator",
+        ("UnreliableNarrator",),
+        "The story is told by a narrator whose account cannot be fully trusted.",
+    ),
+    Trope(
+        "never-asked", ("NeverAsked",), "A character is given an unwanted responsibility or role."
+    ),
+    Trope(
+        "zombie-apocalypse",
+        ("ZombieApocalypse",),
+        "Survivors struggle as the undead overrun society.",
+        frozenset({27, 878}),
+    ),
 )
 
 
@@ -45,13 +100,11 @@ def _key(value: str) -> str:
 
 
 BY_SLUG = {trope.slug: trope for trope in TAXONOMY}
-ALIASES = {
-    _key(alias): trope.slug
-    for trope in TAXONOMY
-    for alias in (trope.slug, *trope.aliases)
-}
+ALIASES = {_key(alias): trope.slug for trope in TAXONOMY for alias in (trope.slug, *trope.aliases)}
 DEFINITIONS = {trope.slug: trope.definition for trope in TAXONOMY}
-GENRE_REQUIREMENTS = {trope.slug: trope.required_genres for trope in TAXONOMY if trope.required_genres}
+GENRE_REQUIREMENTS = {
+    trope.slug: trope.required_genres for trope in TAXONOMY if trope.required_genres
+}
 
 
 def normalize_trope(value: str) -> str | None:
@@ -89,8 +142,7 @@ def evidence_for(session: Session, movie_ids: Iterable[int]) -> dict[int, dict[s
 
 def trusted_tropes(session: Session, movie_ids: Iterable[int]) -> dict[int, list[str]]:
     return {
-        movie_id: sorted(by_slug)
-        for movie_id, by_slug in evidence_for(session, movie_ids).items()
+        movie_id: sorted(by_slug) for movie_id, by_slug in evidence_for(session, movie_ids).items()
     }
 
 

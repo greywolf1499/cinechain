@@ -70,13 +70,23 @@ RETRO_CUTOFF_YEAR = 2000
 MICRO_CLOCK_MINUTES = 100
 B_MOVIE_RATING = 6.0
 WARNING_WINDOW = 2  # a tier boundary 1 or 2 hops ahead is announced
+FOG_MODES = ("off", "fog", "abyss")
+TIER_EMOJIS = ("🕳️", "📼", "🌍", "⏱️", "🎬", "🧩")
 TIER_OVERRIDE_KEY = "tier_override"
 ESCAPE_DEPTH_KEY = "escape_depth"
 MIN_ESCAPE_DEPTH = 25
 MAX_ESCAPE_DEPTH = 60
 RH_VERSION_KEY = "rh_rules_version"
 RH_SEED_KEY = "rh_seed"
-RESOURCE_KEYS = (LIVES_KEY, "relics", "reroll_tokens", TIER_OVERRIDE_KEY, "curse_skip")
+RESOURCE_KEYS = (
+    LIVES_KEY,
+    "relics",
+    "reroll_tokens",
+    TIER_OVERRIDE_KEY,
+    "curse_skip",
+    "periscope_charges",
+    "revealed_depths",
+)
 
 
 @dataclass(frozen=True)
@@ -219,6 +229,57 @@ def tier_tests(tier: Tier) -> TierPredicates:
     )
 
 
+def _public_tier(entry: dict, *, revealed: bool) -> dict:
+    number = entry.get("number", 0)
+    emoji = entry.get("emoji") or TIER_EMOJIS[min(max(number - 1, 0), len(TIER_EMOJIS) - 1)]
+    difficulty = entry.get("difficulty", 1)
+    if not revealed:
+        return {
+            "number": number,
+            "start_depth": entry.get("start_depth", 0),
+            "hidden": True,
+            "emoji": emoji,
+            "difficulty": difficulty,
+        }
+    public = {
+        key: entry[key]
+        for key in ("number", "name", "rule", "start_depth", "difficulty", "curses")
+        if key in entry
+    } | {"hidden": False, "emoji": emoji}
+    if "curses" in public:
+        public["curses"] = [_public_predicate(item) for item in public["curses"]]
+    return public
+
+
+def _public_predicate(item: dict) -> dict:
+    return {key: value for key, value in item.items() if key not in ("params", "query")}
+
+
+def _public_state(
+    state: dict, fog: str, depth: int, revealed: set[int], deck: list[dict]
+) -> dict:
+    current = dict(state)
+    current["fog"] = fog
+    current["periscope_charges"] = state.get("periscope_charges", 0)
+    current["revealed_depths"] = sorted(revealed)
+    current["curses"] = [_public_predicate(item) for item in state.get("curses", [])]
+    next_entry = next(
+        (entry for entry in deck if entry.get("number") == state.get("next_tier")), None
+    )
+    visible_next = (
+        state.get("next_tier") is not None
+        and (
+            state.get("steps_until_next", 0) <= 1
+            or next_entry is not None and not next_entry.get("hidden", True)
+        )
+    )
+    if not visible_next:
+        current["next_tier_name"] = "Unrevealed"
+        current["next_tier_rule"] = "Unknown rule"
+    current["upcoming_tier_warning"] = None
+    return current
+
+
 def draw_deck(
     session: Session,
     seed: int,
@@ -279,6 +340,19 @@ def draw_deck(
             }
         )
     return deck
+
+
+def tier_metadata() -> list[dict[str, int | str]]:
+    return [
+        {
+            "number": tier.number,
+            "name": tier.name,
+            "rule": tier.rule,
+            "start_depth": tier.start_depth,
+            "emoji": TIER_EMOJIS[min(tier.number - 1, len(TIER_EMOJIS) - 1)],
+        }
+        for tier in TIERS
+    ]
 
 
 TIER_PASS_BANDS = ((0.20, 0.45), (0.10, 0.30), (0.05, 0.18), (0.025, 0.10))
@@ -563,6 +637,9 @@ def tier_state(depth: int, rules: dict | None) -> RabbitHoleState:
         curse_skipped=(rules or {}).get("curse_skip") == depth,
         reroll_tokens=(rules or {}).get("reroll_tokens", 0),
         relics=(rules or {}).get("relics", {}),
+        fog=(rules or {}).get("fog", "off"),
+        periscope_charges=(rules or {}).get("periscope_charges", 0),
+        revealed_depths=(rules or {}).get("revealed_depths", []),
         daily=(rules or {}).get("daily", False),
     )
     if upcoming is not None:
@@ -609,6 +686,39 @@ def violation_reason(session, tier: Tier, row: CachedMovie) -> str:
 class RabbitHoleEngine(CineChainEngine):
     bounty_reward = "life"
 
+    @classmethod
+    def public_rules(
+        cls, rules: dict | None, run: Run, *, depth: int | None = None
+    ) -> dict:
+        public = dict(rules or {})
+        fog = public.get("fog", "off")
+        if fog == "off" or run.status != "active":
+            return public
+        current_depth = depth if depth is not None else getattr(run, "_public_depth", 0)
+        revealed = set(public.get("revealed_depths") or [])
+        deck = public.get("tier_deck")
+        if isinstance(deck, list):
+            public["tier_deck"] = [
+                _public_tier(
+                    entry,
+                    revealed=entry.get("start_depth") in revealed
+                    or entry.get("start_depth", 0) <= current_depth + 1,
+                )
+                for entry in deck
+                if isinstance(entry, dict)
+            ]
+        state = public.get("rabbit_hole")
+        if isinstance(state, dict):
+            public["rabbit_hole"] = _public_state(
+                state, fog, current_depth, revealed, public.get("tier_deck", [])
+            )
+        override = public.get(TIER_OVERRIDE_KEY)
+        if isinstance(override, dict) and isinstance(override.get("predicate"), dict):
+            override = dict(override)
+            override["predicate"] = _public_predicate(override["predicate"])
+            public[TIER_OVERRIDE_KEY] = override
+        return public
+
     def bounty_bounds(self, rules: dict, history: Sequence[RunStep]) -> dict:
         from app.services.feasibility import ranges_of
 
@@ -648,6 +758,14 @@ class RabbitHoleEngine(CineChainEngine):
             label="Daily Dive",
             default=False,
             help="Use today's shared UTC seed; feasible tiers still depend on your movie cache.",
+        ),
+        RuleField(
+            key="fog",
+            kind="enum",
+            label="Fog of war",
+            options=list(FOG_MODES),
+            default="off",
+            help="Hide future tier rules. Fog grants a Periscope charge; Abyss does not.",
         ),
     ]
     presets: ClassVar[list[Preset]] = [
@@ -717,6 +835,13 @@ class RabbitHoleEngine(CineChainEngine):
             if escape
             else "no escape depth is configured.",
             "tier_schedule": ("This run's tier rules: ")
+            + "; ".join(
+                f"depth {entry.get('start_depth')}: "
+                f"{entry.get('rule', 'undisclosed tier')}"
+                for entry in (rules or {}).get("tier_deck", [])
+            )
+            if procedural(rules)
+            else ("This run's tier rules: ")
             + "; ".join(f"depth {tier.start_depth}: {tier.rule}" for tier in tiers_of(rules)),
             "procedural_rules": (
                 "Tiers change every five films. Hard-mode curses last while they can be met. "
@@ -730,6 +855,8 @@ class RabbitHoleEngine(CineChainEngine):
 
     def coach_line(self, run: Run, steps: Sequence[RunStep]) -> str | None:
         state = tier_state(len(steps), run.rules_config)
+        if (run.rules_config or {}).get("fog", "off") != "off":
+            return f"Next film: {state.tier_rule}"
         if state.next_tier_rule and state.steps_until_next == 1:
             return f"Tier {state.next_tier} starts next hop: {state.next_tier_rule}"
         return f"Next film: {state.tier_rule}"
@@ -774,7 +901,12 @@ class RabbitHoleEngine(CineChainEngine):
     def prepare_rules_config(self, rules: dict) -> dict:
         _, max_lives = lives_of(rules)
         # A new run always starts on full lives, whatever the client sent.
-        return {**rules, MAX_LIVES_KEY: max_lives, LIVES_KEY: max_lives}
+        return {
+            **rules,
+            "fog": rules.get("fog", "off"),
+            MAX_LIVES_KEY: max_lives,
+            LIVES_KEY: max_lives,
+        }
 
     async def prepare_run(self, rules: dict, user_id: str) -> dict:
         seed = daily_seed(utcnow().date()) if rules.get("daily") else secrets.randbits(48)
@@ -822,6 +954,8 @@ class RabbitHoleEngine(CineChainEngine):
             "tier_deck": draw_facet_deck(self.session, seed, eligible, rules.get("curses", False)),
             "relics": {"skip_curse": 0},
             "reroll_tokens": 0,
+            "periscope_charges": 1 if rules.get("fog") == "fog" else 0,
+            "revealed_depths": [],
         }
 
     def award_bounty(
@@ -861,6 +995,8 @@ class RabbitHoleEngine(CineChainEngine):
                         rewards.append("reroll")
                     if rules.get("curses"):
                         rewards.append("skip_curse")
+                    if rules.get("fog") == "fog":
+                        rewards.append("periscope")
                     kind = random.Random(f"{rules[RH_SEED_KEY]}:relic:{len(steps)}").choice(rewards)
                     lives, maximum = lives_of(rules)
                     amount = 1
@@ -869,6 +1005,8 @@ class RabbitHoleEngine(CineChainEngine):
                         rules[LIVES_KEY] = min(maximum, lives + 1)
                     elif kind == "reroll":
                         rules["reroll_tokens"] = rules.get("reroll_tokens", 0) + 1
+                    elif kind == "periscope":
+                        rules["periscope_charges"] = rules.get("periscope_charges", 0) + 1
                     else:
                         rules["relics"] = {
                             **rules["relics"],
@@ -991,12 +1129,13 @@ class RabbitHoleEngine(CineChainEngine):
             if state.tier == 1
             else f"{state.tier_rule}, and a shared credited actor or director."
         )
-        if state.upcoming_tier_warning:
+        if state.upcoming_tier_warning and (rules or {}).get("fog", "off") == "off":
             detail = f"{detail} {state.upcoming_tier_warning}"
         return ConstraintInfo(
             kind="tier",
             title=f"Tier {state.tier}: {state.tier_name}",
             detail=detail,
+            rule_query=tier_tests(tier_for_depth(self._depth, rules)).query,
             rabbit_hole=state,
         )
 
@@ -1092,7 +1231,24 @@ class RabbitHoleEngine(CineChainEngine):
         candidates = super().annotate_candidates(candidates, rules, history)
         depth = len(history) if history is not None else self._depth
         tier = tier_for_depth(depth, rules)
+        query = tier_tests(tier).query
+
+        def facet_ids(node: FacetQuery) -> set[str]:
+            if node.facet is not None:
+                return {node.facet}
+            return set().union(*(facet_ids(child) for child in node.children()))
+
+        from app.facets.query import values_for
+
+        facet_values = values_for(
+            self.session,
+            [candidate.movie_id for candidate in candidates],
+            facet_ids(query),
+        )
         for candidate in candidates:
+            candidate.facet_values.update(facet_values.get(candidate.movie_id, {}))
+            if (rules or {}).get("fog", "off") != "off":
+                candidate.upcoming_tier_warning = None
             if tier.number == 1:
                 candidate.tier_compliant = True
                 continue

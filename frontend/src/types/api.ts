@@ -60,6 +60,9 @@ export interface RulesConfig {
 	rh_rules_version?: number;
 	rh_seed?: number;
 	tier_deck?: RabbitDeckTier[];
+	fog?: "off" | "fog" | "abyss";
+	periscope_charges?: number;
+	revealed_depths?: number[];
 	daily?: boolean;
 	curses?: boolean;
 	relics?: { skip_curse: number };
@@ -460,6 +463,8 @@ export interface EngineMeta {
 	presets: Preset[];
 	default_preset: string;
 	bounty_reward: "wildcard" | "life" | "hint" | "star";
+	rabbit_tiers?: { number: number; name: string; rule: string; start_depth: number; emoji: string }[] | null;
+	warning_window?: number | null;
 }
 
 export type ModifierParamValue = string | number | boolean | string[];
@@ -590,6 +595,7 @@ export interface ConstraintInfo {
 	kind: "director" | "actor" | "free" | "year" | "country" | "color" | "semantic" | (string & {});
 	title: string;
 	detail: string | null;
+	rule_query?: FacetQuery | null;
 	/** ISO codes locked out by `country_cooldown`, most recently visited first. */
 	cooldown_countries?: string[];
 	/** One-line notes for other active modifiers (chrono direction, runtime staircase). */
@@ -617,6 +623,9 @@ export interface RabbitHoleState {
 	relics: { skip_curse?: number };
 	reroll_tokens: number;
 	daily: boolean;
+	fog: "off" | "fog" | "abyss";
+	periscope_charges: number;
+	revealed_depths: number[];
 }
 
 export interface RabbitPredicate {
@@ -629,13 +638,24 @@ export interface RabbitPredicate {
 
 export interface RabbitDeckTier {
 	number: number;
-	name: string;
-	rule: string;
+	name?: string;
+	rule?: string;
 	start_depth: number;
+	hidden?: boolean;
+	emoji?: string;
 	predicate_id?: string;
 	params?: Record<string, number>;
 	difficulty?: number;
-	curses: RabbitPredicate[];
+	curses?: RabbitPredicate[];
+}
+
+export interface FacetQuery {
+	all?: FacetQuery[] | null;
+	any?: FacetQuery[] | null;
+	not?: FacetQuery | null;
+	facet?: string | null;
+	op?: "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "contains" | "has_any" | "has_all" | null;
+	value?: string | number | boolean | string[] | number[] | null;
 }
 
 export interface ValidationResult {
@@ -754,6 +774,8 @@ export interface BridgeNode {
 	poster_path: string | null;
 	release_year: number | null;
 	popularity: number | null;
+	original_language?: string | null;
+	rating?: number | null;
 	runtime: number | null; // null = detail not fetched yet
 	origin_countries: string[];
 }
@@ -842,6 +864,8 @@ export interface DiscoveryCandidate {
 	origin_countries?: string[];
 	genre_ids: number[];
 	popularity: number | null;
+	original_language?: string | null;
+	rating?: number | null;
 	/** Minutes, when the film's detail is cached. */
 	runtime?: number | null;
 	connections: DiscoveryConnection[];

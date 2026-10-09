@@ -2,6 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, computed_field, model_validator
 
+from app.facets.query import FacetQuery
 from app.schemas.discovery import DiscoveryCandidate
 from app.utils.countries import parse_countries
 
@@ -186,6 +187,9 @@ class RabbitHoleState(BaseModel):
     curse_skipped: bool = False
     reroll_tokens: int = 0
     relics: dict[str, int] = {}
+    fog: str = "off"
+    periscope_charges: int = 0
+    revealed_depths: list[int] = []
     daily: bool = False
 
 
@@ -195,6 +199,7 @@ class ConstraintInfo(BaseModel):
     kind: str  # director | actor | free | year | country | color | semantic
     title: str
     detail: str | None = None
+    rule_query: FacetQuery | None = None
     # Engine V3 modifiers: ISO codes currently locked out by `country_cooldown`
     # (most recently visited first) and one-line notes for other active modifiers.
     cooldown_countries: list[str] = []

@@ -6,7 +6,8 @@ from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client, run_participant_guard
@@ -106,7 +107,7 @@ from app.schemas.runs import (
 )
 from app.services import blind_fork, bounties, cache_repo, feasibility, pool_options
 from app.services.bridge_paths import parse_countries
-from app.services.movie_filters import is_reality_eligible
+from app.services.movie_filters import is_reality_eligible, rating_of
 from app.services.tmdb import TMDBClient
 from app.services.veto import consume_veto_token, refresh_veto_tokens
 from app.utils.dates import parse_release_year
@@ -116,6 +117,33 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 TUG_LOOKAHEAD_SECONDS = 1.5
 logger = logging.getLogger(__name__)
+
+
+class RabbitHolePeriscopeRequest(BaseModel):
+    depth: int = Field(ge=1, strict=True)
+
+
+class VerifyCandidatesRequest(BaseModel):
+    movie_ids: list[int] = Field(max_length=24)
+
+
+def _public_rules(run: Run, *, depth: int | None = None) -> dict:
+    engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if engine_class is None:
+        return _run_rules(run)
+    if run.game_type == rabbit_hole.RABBIT_HOLE:
+        return engine_class.public_rules(_run_rules(run), run, depth=depth)
+    return engine_class.public_rules(_run_rules(run), run)
+
+
+def _public_summary(session: Session, run: Run) -> RunSummary:
+    depth = None
+    if run.game_type == rabbit_hole.RABBIT_HOLE:
+        depth = session.exec(
+            select(func.count()).select_from(RunStep).where(RunStep.run_id == run.id)
+        ).one()
+    summary = RunSummary.model_validate(run)
+    return summary.model_copy(update={"rules_config": _public_rules(run, depth=depth)})
 
 
 def _cached_tug_lookahead(
@@ -723,7 +751,7 @@ def _to_run_detail(session: Session, run: Run) -> RunDetail:
         .order_by(RunParticipant.joined_at)
     ).all()
     return RunDetail(
-        **RunSummary.model_validate(run).model_dump(),
+        **_public_summary(session, run).model_dump(),
         steps=[_step_public(s, info) for s in steps],
         participants=[ParticipantPublic.model_validate(p) for p in participants],
     )
@@ -743,7 +771,7 @@ def list_runs(
     if status_filter is not None:
         statement = statement.where(Run.status == status_filter)
     statement = statement.order_by(Run.created_at.desc())
-    return list(session.exec(statement).all())
+    return [_public_summary(session, run) for run in session.exec(statement).all()]
 
 
 @router.post("", response_model=RunDetail, status_code=status.HTTP_201_CREATED)
@@ -765,9 +793,12 @@ async def create_run(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found"
             )
 
-    rules_config = blind_fork.strip_server_rules(
+    submitted_rules = (
         payload.rules_config if payload.rules_config is not None else dict(DEFAULT_RULES_CONFIG)
     )
+    rules_config = blind_fork.strip_server_rules(submitted_rules)
+    if payload.game_type == rabbit_hole.RABBIT_HOLE and "fog" in submitted_rules:
+        rules_config["fog"] = submitted_rules["fog"]
     if "table_mode" in rules_config and not isinstance(rules_config["table_mode"], bool):
         raise HTTPException(422, detail="table_mode must be a boolean")
     engine_class = ENGINE_REGISTRY.get(payload.game_type)
@@ -1018,6 +1049,8 @@ def update_run_rules(
     # Merge instead of replace so V2 keys the form doesn't know about
     # (win_condition, fail_condition, raw JSON overrides) survive an edit.
     update = payload.model_dump(exclude_none=True, exclude_unset=True)
+    if "fog" in payload.model_fields_set:
+        raise HTTPException(422, detail="Fog of War can only be chosen when creating a run")
     if bounty_run:
         update.pop("wildcards_budget", None)
     # Modifiers can be switched off again: an explicit null is stored (and means "unset").
@@ -2163,6 +2196,19 @@ async def get_run_constraint(
                 )
             }
         )
+    if (
+        isinstance(engine, RabbitHoleEngine)
+        and constraint is not None
+        and constraint.rabbit_hole is not None
+    ):
+        public = engine.public_rules(
+            {**rules, "rabbit_hole": constraint.rabbit_hole.model_dump()},
+            run,
+            depth=len(history),
+        )
+        constraint = constraint.model_copy(
+            update={"rabbit_hole": rabbit_hole.RabbitHoleState.model_validate(public["rabbit_hole"])}
+        )
     return constraint
 
 
@@ -2278,6 +2324,45 @@ async def reroll_rabbit_hole_tier(
         raise HTTPException(409, detail="No fair reachable alternative tier; no life was spent")
     rules[TIER_OVERRIDE_KEY] = {"depth": depth, "tier": random.choice(choices)}
     rules[LIVES_KEY] = lives - 1
+    run.rules_config = rules
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return _to_run_detail(session, run)
+
+
+@router.post("/{run_id}/rabbit-hole/periscope", response_model=RunDetail)
+def reveal_rabbit_hole_tier(
+    payload: RabbitHolePeriscopeRequest,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+) -> RunDetail:
+    if run.game_type != rabbit_hole.RABBIT_HOLE:
+        raise HTTPException(400, detail="The Periscope is only available in Rabbit Hole runs")
+    _ensure_run_open(run)
+    _ensure_no_pending_fork(run)
+    rules = dict(_run_rules(run))
+    if rules.get("fog") != "fog" or not rabbit_hole.procedural(rules):
+        raise HTTPException(409, detail="This run has no Periscope")
+    depth = len(_run_history(session, run.id))
+    boundary = next(
+        (
+            entry
+            for entry in rules.get("tier_deck", [])
+            if entry.get("start_depth") == payload.depth
+        ),
+        None,
+    )
+    if boundary is None or payload.depth <= depth + 1:
+        raise HTTPException(409, detail="Choose a future unrevealed tier boundary")
+    revealed = set(rules.get("revealed_depths") or [])
+    if payload.depth in revealed:
+        raise HTTPException(409, detail="That tier has already been revealed")
+    charges = rules.get("periscope_charges", 0)
+    if charges < 1:
+        raise HTTPException(409, detail="No Periscope charges remaining")
+    rules["periscope_charges"] = charges - 1
+    rules["revealed_depths"] = sorted([*revealed, payload.depth])
     run.rules_config = rules
     session.add(run)
     session.commit()
@@ -2872,6 +2957,8 @@ async def discover_next_movies(
         candidate.existing_step_number = step_number_by_movie_id.get(candidate.movie_id)
         row = session.get(CachedMovie, candidate.movie_id)
         candidate.runtime = row.runtime if row is not None else None
+        candidate.original_language = row.original_language if row is not None else None
+        candidate.rating = rating_of(session, row) if row is not None else None
     candidates = engine.annotate_candidates(candidates, rules, _play_history(session, run.id))
     engine.discovery_diagnostics.after_filters = len(candidates)
     if not candidates and engine.discovery_diagnostics.after_modifiers:
@@ -2930,3 +3017,40 @@ async def prepare_run_pool(
         batch_cap=200,
     )
     return TaskOut.from_model(task)
+
+
+@router.post("/{run_id}/verify-candidates", response_model=list[DiscoveryCandidate])
+async def verify_candidates(
+    payload: VerifyCandidatesRequest,
+    session: Session = Depends(get_session),
+    run: Run = Depends(run_participant_guard),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+) -> list[DiscoveryCandidate]:
+    if run.game_type != rabbit_hole.RABBIT_HOLE:
+        raise HTTPException(422, detail="Candidate verification is only available in Rabbit Hole.")
+    _ensure_no_pending_fork(run)
+    frontier = _last_step(session, run.id)
+    if frontier is None:
+        raise HTTPException(422, detail="Log or queue a frontier film before verifying candidates.")
+    engine = get_engine(run.game_type, session, tmdb)
+    rules = _run_rules(run)
+    try:
+        pool = await engine.discover_with_modifiers(
+            frontier.movie_id,
+            cast_limit=rules.get("max_cast_order"),
+            rules=rules,
+            previous_transition=frontier.transition_metadata,
+            history=_play_history(session, run.id),
+        )
+    except NotImplementedError:
+        raise HTTPException(422, detail="This mode has no candidate pool to verify.") from None
+    requested = set(payload.movie_ids)
+    visible = [candidate for candidate in pool if candidate.movie_id in requested]
+    rows = await engine._hydrate_pool(visible, rules)
+    for candidate in visible:
+        row = rows.get(candidate.movie_id)
+        if row is not None:
+            candidate.runtime = row.runtime
+            candidate.original_language = row.original_language
+            candidate.rating = rating_of(session, row)
+    return engine.annotate_candidates(visible, rules, _play_history(session, run.id))

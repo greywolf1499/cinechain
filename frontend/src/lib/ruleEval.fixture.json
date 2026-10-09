@@ -1,0 +1,42 @@
+[
+  {
+    "name": "release year above cutoff",
+    "query": { "facet": "release_year", "op": "gt", "value": 1999 },
+    "facts": { "release_year": 2001 },
+    "expected": true
+  },
+  {
+    "name": "unknown language remains unknown",
+    "query": { "facet": "original_language", "op": "ne", "value": "en" },
+    "facts": { "original_language": null },
+    "expected": null
+  },
+  {
+    "name": "rating under cutoff fails",
+    "query": { "facet": "rating", "op": "lt", "value": 6 },
+    "facts": { "rating": 7.2 },
+    "expected": false
+  },
+  {
+    "name": "and short circuits false",
+    "query": {
+      "all": [
+        { "facet": "release_year", "op": "lt", "value": 2000 },
+        { "facet": "runtime", "op": "lt", "value": 100 }
+      ]
+    },
+    "facts": { "release_year": 1990, "runtime": null },
+    "expected": null
+  },
+  {
+    "name": "or short circuits true",
+    "query": {
+      "any": [
+        { "facet": "release_year", "op": "lt", "value": 2000 },
+        { "facet": "runtime", "op": "lt", "value": 100 }
+      ]
+    },
+    "facts": { "release_year": 1990, "runtime": null },
+    "expected": true
+  }
+]

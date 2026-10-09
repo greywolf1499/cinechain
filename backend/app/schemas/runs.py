@@ -60,6 +60,7 @@ class RunRulesUpdate(BaseModel):
     allow_reroll: bool | None = None
     daily: bool | None = None
     curses: bool | None = None
+    fog: Literal["off", "fog", "abyss"] | None = None
     target_lead: int | None = None
     sudden_death_enabled: bool | None = None
     steal_enabled: bool | None = None

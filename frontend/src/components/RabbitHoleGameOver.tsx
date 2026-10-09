@@ -1,6 +1,7 @@
 import { Skull } from "lucide-react";
 import { rabbitSummary, rabbitTiers } from "../lib/rabbitHole";
 import { Lives, RabbitInventory } from "./RabbitHoleHud";
+import { useEngines } from "../lib/queries";
 import type { RulesConfig, RunStep } from "../types/api";
 
 /** "Run Terminated": the Rabbit Hole's game over screen. */
@@ -13,10 +14,13 @@ export default function RabbitHoleGameOver({
   rules: RulesConfig;
   reason: string | null;
 }) {
-  const summary = rabbitSummary(steps, rules);
+  const { data: engines } = useEngines();
+  const engine = engines?.find((entry) => entry.game_type === "rabbit_hole");
+  const tiers = rabbitTiers(rules, engine);
+  const summary = rabbitSummary(steps, rules, engine);
   const stats = [
     { label: "Max Depth Reached", value: summary.maxDepth },
-    { label: "Tiers Conquered", value: `${summary.tiersConquered} / ${rabbitTiers(rules).length}` },
+    { label: "Tiers Conquered", value: `${summary.tiersConquered} / ${tiers.length}` },
     { label: "Total Movies Watched", value: summary.moviesWatched },
   ];
   return (
@@ -39,9 +43,20 @@ export default function RabbitHoleGameOver({
         ))}
       </dl>
       <p className="mt-5 text-xs text-zinc-500">
-        Deepest tier: {summary.tierReached.number} - {summary.tierReached.name}
+        Deepest tier: {summary.tierReached.number} - {summary.tierReached.name ?? "Unknown"}
       </p>
       <div className="mt-4 text-left"><RabbitInventory rules={rules} depth={steps.length} /></div>
+      <details className="mt-5 rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 text-left">
+        <summary className="cursor-pointer text-sm font-semibold text-zinc-200">What lay below</summary>
+        <ol className="mt-3 space-y-2 text-xs text-zinc-400">
+          {tiers.map((tier) => (
+            <li key={tier.number}>
+              <span className="mr-2">{tier.emoji ?? "●"}</span>
+              Depth {tier.startDepth} · Tier {tier.number}: {tier.name ?? "Unknown tier"} — {tier.rule ?? "Unknown rule"}
+            </li>
+          ))}
+        </ol>
+      </details>
     </section>
   );
 }

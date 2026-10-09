@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
@@ -53,6 +53,7 @@ import { pendulumState } from "../lib/pendulum";
 import { isoToFlagEmoji } from "../lib/countries";
 import { effectiveCooldown } from "../lib/modifiers";
 import { useLogFilm } from "../lib/useLogFilm";
+import { evaluateRule } from "../lib/ruleEval";
 import { useTrackedTask } from "../lib/useTrackedTask";
 import { describeProgress, taskPausedReason } from "../lib/tasks";
 import TaskProgressBar from "./TaskProgressBar";
@@ -69,6 +70,7 @@ import {
   useMovieTropes,
   useRunConstraint,
   useRunRulebook,
+  useVerifyCandidates,
   useUpdateRun,
 } from "../lib/queries";
 import type {
@@ -82,6 +84,7 @@ import type {
   GenreOut,
   MovieRatings,
   MovieSummary,
+  MovieDetail,
   RulesConfig,
   RunStep,
   SpaTreatment,
@@ -334,6 +337,12 @@ function DiscoveryGrid({
   // Tagline Roulette masks every poster and title behind its tagline; only a page is shown at a time.
   const [roulette, setRoulette] = useState(false);
   const [visibleCount, setVisibleCount] = useState(DISCOVERY_PAGE_SIZE);
+  const queryClient = useQueryClient();
+  const verifyCandidates = useVerifyCandidates(runId, frontierStep.movie_id);
+  const verificationAttempts = useRef(new Set<string>());
+  const [verifiedCandidates, setVerifiedCandidates] = useState<Record<number, DiscoveryCandidate>>({});
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [verificationRetry, setVerificationRetry] = useState(0);
   const { data: engines, isError: enginesError, refetch: retryEngines } = useEngines();
   const engine = engines?.find((entry) => entry.game_type === gameType);
   const specs = useMemo(() => (engine?.discovery_filters ?? []).filter((spec) =>
@@ -548,6 +557,57 @@ function DiscoveryGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pool, specs, modeValues, visited, targetGenreId, selectedActorIds, mode, genreId, decadeKey, tropeFilter, search, sortBy, sortDir, ratingsMap, underdog]);
 
+  useEffect(() => {
+    verificationAttempts.current.clear();
+    setVerifiedCandidates({});
+    setVerificationError(null);
+  }, [runId, frontierStep.movie_id]);
+
+  useEffect(() => {
+    if (!open || gameType !== RABBIT_HOLE || !constraint?.rule_query) return;
+    const ids = filtered
+      .slice(0, visibleCount)
+      .filter((candidate) => candidate.tier_compliant == null)
+      .map((candidate) => candidate.movie_id)
+      .filter((movieId) => !verificationAttempts.current.has(`${frontierStep.movie_id}:${movieId}`));
+    if (!ids.length) return;
+    void (async () => {
+      for (let start = 0; start < ids.length; start += 24) {
+        const batch = ids.slice(start, start + 24);
+        for (const movieId of batch) verificationAttempts.current.add(`${frontierStep.movie_id}:${movieId}`);
+        try {
+          const verified = await verifyCandidates.mutateAsync(batch);
+          setVerifiedCandidates((current) => ({
+            ...current,
+            ...Object.fromEntries(verified.map((candidate) => [candidate.movie_id, candidate])),
+          }));
+        } catch (error: unknown) {
+          for (const movieId of batch) verificationAttempts.current.delete(`${frontierStep.movie_id}:${movieId}`);
+          setVerificationError(error instanceof Error ? error.message : "Candidate verification failed.");
+          return;
+        }
+      }
+      setVerificationError(null);
+    })();
+  }, [open, gameType, constraint?.rule_query, filtered, visibleCount, frontierStep.movie_id, verificationRetry]);
+
+  function resolveCandidate(candidate: DiscoveryCandidate): DiscoveryCandidate {
+    const serverCandidate = verifiedCandidates[candidate.movie_id] ?? candidate;
+    if (gameType !== RABBIT_HOLE || !constraint?.rule_query) return serverCandidate;
+    const cached = queryClient.getQueryData<MovieDetail>(["movies", candidate.movie_id]);
+    const cachedRating = Number.parseFloat(cached?.ratings?.imdb_rating ?? "");
+    const facts = {
+      ...serverCandidate.facet_values,
+      release_year: serverCandidate.facet_values?.release_year ?? serverCandidate.release_year ?? cached?.release_year ?? null,
+      runtime: serverCandidate.facet_values?.runtime ?? serverCandidate.runtime ?? cached?.runtime ?? null,
+      rating: serverCandidate.facet_values?.rating ?? serverCandidate.rating ?? (Number.isFinite(cachedRating) ? cachedRating : null),
+      original_language: serverCandidate.facet_values?.original_language ?? serverCandidate.original_language ?? cached?.original_language ?? null,
+      genre_ids: serverCandidate.facet_values?.genre_ids ?? serverCandidate.genre_ids ?? cached?.genre_ids ?? null,
+    };
+    const verdict = evaluateRule(constraint.rule_query, facts);
+    return verdict === null ? serverCandidate : { ...serverCandidate, tier_compliant: verdict, constraint_unverified: false };
+  }
+
   function toggleActor(actorId: number) {
     setSelectedActorIds((prev) => {
       const next = new Set(prev);
@@ -622,11 +682,12 @@ function DiscoveryGrid({
   }
 
   function renderCandidate(candidate: DiscoveryCandidate) {
+    const resolved = resolveCandidate(candidate);
     return <CandidateCard
       glossary={rulebook?.glossary ?? {}}
-      key={candidate.movie_id}
+      key={resolved.movie_id}
       roulette={roulette}
-      candidate={candidate}
+      candidate={resolved}
       genres={genres}
       ratings={ratingsMap?.[String(candidate.movie_id)]}
       badges={badgesMap?.[String(candidate.movie_id)]}
@@ -639,22 +700,31 @@ function DiscoveryGrid({
       frontierMovieId={frontierStep.movie_id}
       allowRepeats={allowRepeats}
       onServer={jellyfinStatus?.[String(candidate.movie_id)]?.on_server}
-      pending={pendingMovieId === candidate.movie_id && createStep.isPending}
-      unknownFilterData={specs.some((spec) => filterDataUnknown(candidate, spec)) || genreId !== null && candidate.genre_ids.length === 0 || decadeKey !== "all" && candidate.release_year == null}
+      pending={pendingMovieId === resolved.movie_id && createStep.isPending}
+      unknownFilterData={specs.some((spec) => filterDataUnknown(resolved, spec)) || genreId !== null && resolved.genre_ids.length === 0 || decadeKey !== "all" && resolved.release_year == null}
       fork={forkMode ? {
-        selected: offered.some((film) => film.movie_id === candidate.movie_id),
+        selected: offered.some((film) => film.movie_id === resolved.movie_id),
         full: offered.length >= FORK_OFFER_SIZE,
-        onToggle: () => toggleOffered(candidate),
+        onToggle: () => toggleOffered(resolved),
       } : undefined}
-      onQueue={() => handleAdd(candidate, false)}
-      onLogWatched={() => handleAdd(candidate, true)}
-      onOpenDetails={() => openCandidate(candidate)}
+      onQueue={() => handleAdd(resolved, false)}
+      onLogWatched={() => handleAdd(resolved, true)}
+      onOpenDetails={() => openCandidate(resolved)}
     />;
   }
 
   return (
     <div className="flex flex-col gap-4">
       <ModifierChips constraint={constraint} />
+      {verificationError && (
+        <div role="status" className="flex items-center justify-between gap-3 rounded border border-amber-700/50 bg-amber-500/5 p-2 text-xs text-amber-200">
+          <span>Some visible Rabbit Hole rules could not be verified: {verificationError}</span>
+          <button type="button" onClick={() => {
+            setVerificationError(null);
+            setVerificationRetry((attempt) => attempt + 1);
+          }} className="shrink-0 underline">Retry</button>
+        </div>
+      )}
       {constraint?.overlay_progress?.filter((overlay) => overlay.can_skip).map((overlay) => (
         <p key={overlay.key} role="status" className="rounded border border-amber-800/50 p-3 text-xs text-amber-300">
           No {overlay.next} films within reach: spend a wildcard to skip {overlay.next}.

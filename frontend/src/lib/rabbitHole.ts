@@ -4,39 +4,51 @@ export const RABBIT_HOLE = "rabbit_hole";
 
 export interface RabbitTier {
   number: number;
-  name: string;
+  name?: string;
   /** Short rule label for badges and warnings. */
-  rule: string;
+  rule?: string;
   startDepth: number;
   curses?: RabbitPredicate[];
+  hidden?: boolean;
+  emoji?: string;
+  difficulty?: number;
 }
 
-/** Mirrors backend `engines/rabbit_hole.py`: the tier follows the number of films already logged. */
-export const RABBIT_TIERS: RabbitTier[] = [
-  { number: 1, name: "Freefall", rule: "No extra constraints", startDepth: 0 },
-  { number: 2, name: "The Retro Lock", rule: "Released before 2000", startDepth: 5 },
-  { number: 3, name: "Tower of Babel", rule: "Non-English", startDepth: 10 },
-  { number: 4, name: "The Micro-Clock", rule: "Under 100 mins", startDepth: 15 },
-  { number: 5, name: "The B-Movie Abyss", rule: "Rated under 6.0", startDepth: 20 },
-];
-
 const DEFAULT_LIVES = 3;
-const WARNING_WINDOW = 2;
 
-export function rabbitTiers(rules?: RulesConfig): RabbitTier[] {
-  if (rules?.rh_rules_version !== 2 && rules?.rh_rules_version !== 3) return RABBIT_TIERS;
-  return (rules.tier_deck ?? []).map((tier) => ({
-    number: tier.number, name: tier.name, rule: tier.rule,
-    startDepth: tier.start_depth, curses: tier.curses,
+export function rabbitTiers(
+  rules?: RulesConfig,
+  metadata?: { rabbit_tiers?: { number: number; name: string; rule: string; start_depth: number; emoji: string }[] | null },
+): RabbitTier[] {
+  if (rules?.tier_deck) {
+    return rules.tier_deck.map((tier) => ({
+      number: tier.number,
+      name: tier.name,
+      rule: tier.rule,
+      startDepth: tier.start_depth,
+      curses: tier.curses,
+      hidden: tier.hidden,
+      emoji: tier.emoji,
+      difficulty: tier.difficulty,
+    }));
+  }
+  return (metadata?.rabbit_tiers ?? []).map((tier) => ({
+    number: tier.number,
+    name: tier.name,
+    rule: tier.rule,
+    startDepth: tier.start_depth,
+    emoji: tier.emoji,
   }));
 }
 
 export function tierForDepth(
   depth: number,
   rules?: RulesConfig,
+  metadata?: Parameters<typeof rabbitTiers>[1],
 ): RabbitTier {
-  const tiers = rabbitTiers(rules);
-  const scheduled = [...tiers].reverse().find((tier) => depth >= tier.startDepth) ?? tiers[0];
+  const tiers = rabbitTiers(rules, metadata);
+  const scheduled = [...tiers].reverse().find((tier) => depth >= tier.startDepth) ??
+    tiers[0] ?? { number: 1, name: "Tier 1", rule: "", startDepth: 0 };
   const override = rules?.tier_override;
   if (rules?.rh_rules_version === 2 || rules?.rh_rules_version === 3) {
     const current = override?.depth === depth && override.predicate
@@ -50,9 +62,9 @@ export function tierForDepth(
     override.tier !== undefined &&
     Number.isInteger(override.tier) &&
     override.tier >= 2 &&
-    override.tier <= RABBIT_TIERS.length
+    override.tier <= tiers.length
   ) {
-    return RABBIT_TIERS[override.tier - 1];
+    return tiers[override.tier - 1] ?? scheduled;
   }
   return scheduled;
 }
@@ -72,20 +84,28 @@ export interface RabbitHud {
 export function rabbitHud(
   rules: RulesConfig,
   depth: number,
+  metadata?: Parameters<typeof rabbitTiers>[1],
+  warningWindow?: number | null,
 ): RabbitHud {
-  const tier = tierForDepth(depth, rules);
-  const tiers = rabbitTiers(rules);
-  const scheduledTier = tierForDepth(depth, { ...rules, tier_override: undefined, curse_skip: undefined });
+  const tier = tierForDepth(depth, rules, metadata);
+  const tiers = rabbitTiers(rules, metadata);
+  const scheduledTier = tierForDepth(
+    depth,
+    { ...rules, tier_override: undefined, curse_skip: undefined },
+    metadata,
+  );
   const next = tiers[scheduledTier.number] ?? null;
   const hopsUntilNext = next ? next.startDepth - depth : null;
   const maxLives = rules.max_lives ?? DEFAULT_LIVES;
   const lives = Math.max(0, Math.min(rules.lives_remaining ?? maxLives, maxLives));
   const warning =
-    next && hopsUntilNext !== null && hopsUntilNext <= WARNING_WINDOW
-      ? `⚠️ Warning: Tier ${next.number} (${next.rule}) begins ${
-          hopsUntilNext === 1 ? "on the next hop" : `in ${hopsUntilNext} hops`
-        }!`
-      : null;
+    rules.fog !== "off" || warningWindow == null || !next || hopsUntilNext === null || hopsUntilNext > warningWindow
+        ? null
+        : next
+          ? `⚠️ Warning: Tier ${next.number} (${next.rule}) begins ${
+              hopsUntilNext === 1 ? "on the next hop" : `in ${hopsUntilNext} hops`
+            }!`
+          : null;
   return {
     depth,
     tier,
@@ -106,9 +126,17 @@ export interface RabbitSummary {
 }
 
 /** The Game Over tally: a tier counts as conquered once every film of its depth range is logged. */
-export function rabbitSummary(steps: RunStep[], rules?: RulesConfig): RabbitSummary {
+export function rabbitSummary(
+  steps: RunStep[],
+  rules?: RulesConfig,
+  metadata?: Parameters<typeof rabbitTiers>[1],
+): RabbitSummary {
   const maxDepth = steps.length;
-  const tierReached = tierForDepth(maxDepth, rules ? { ...rules, tier_override: undefined } : undefined);
+  const tierReached = tierForDepth(
+    maxDepth,
+    rules ? { ...rules, tier_override: undefined } : undefined,
+    metadata,
+  );
   return {
     maxDepth,
     tiersConquered: tierReached.number - 1,

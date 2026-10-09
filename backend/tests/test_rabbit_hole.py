@@ -1,9 +1,11 @@
 """Phase 26b: The Rabbit Hole - escalating tiers, a 3-life survival budget and tier-filtered Pick Next."""
 
 import asyncio
+import json
 import random
 from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -13,7 +15,8 @@ from sqlmodel import Session, select
 
 from app.engines import rabbit_hole
 from app.engines.predicates import predicate
-from app.engines.rabbit_hole import RabbitHoleEngine, tier_for_depth, tier_state
+from app.engines.rabbit_hole import RabbitHoleEngine, compliance, tier_for_depth, tier_state
+from app.facets.query import FacetQuery
 from app.models.cache import CachedActor, CachedMovie, CachedMovieCast, CachedMovieRating
 from app.models.run import Run, RunStep
 from app.services import feasibility
@@ -844,6 +847,215 @@ def test_procedural_deck_respects_mode_runtime_bounds(client, procedural_world):
             assert not feasibility.contradicts(
                 rabbit_hole.tier_tests(tier), {"runtime": (150, None)}
             )
+
+
+@pytest.mark.parametrize("fog", ["off", "fog", "abyss"])
+def test_fog_redacts_future_tiers_and_terminal_runs_reveal_the_deck(
+    client, procedural_world, db_engine, fog
+):
+    run_id = procedural_run(client, fog=fog)
+    rules = run_detail(client, run_id)["rules_config"]
+    assert rules["fog"] == fog
+    if fog == "off":
+        assert all(entry.get("hidden") is not True for entry in rules["tier_deck"])
+        assert rules["tier_deck"][1]["rule"]
+    else:
+        assert rules["tier_deck"][0]["hidden"] is False
+        hidden = next(entry for entry in rules["tier_deck"] if entry["start_depth"] > 1)
+        assert hidden["hidden"] is True
+        assert set(hidden) == {"number", "start_depth", "hidden", "emoji", "difficulty"}
+        state = client.get(f"/api/runs/{run_id}/constraint").json()["rabbit_hole"]
+        assert state["next_tier_name"] == "Unrevealed"
+        assert state["next_tier_rule"] == "Unknown rule"
+    assert all("upcoming_tier_warning" not in entry for entry in rules["tier_deck"])
+
+    with Session(db_engine) as session:
+        run = session.get(Run, run_id)
+        private_deck = run.rules_config["tier_deck"]
+        future_start = next(entry["start_depth"] for entry in private_deck if entry["start_depth"] > 1)
+        private_tier = next(entry for entry in private_deck if entry["start_depth"] == future_start)
+        assert private_tier.get("predicate_id") or private_tier.get("query")
+        run.status = "failed"
+        session.add(run)
+        session.commit()
+    terminal_rules = run_detail(client, run_id)["rules_config"]
+    assert all(entry.get("hidden") is not True for entry in terminal_rules["tier_deck"])
+    assert terminal_rules["tier_deck"][1]["rule"]
+    if fog == "fog":
+        assert rules["periscope_charges"] == 1
+    elif fog == "abyss":
+        assert rules["periscope_charges"] == 0
+
+
+def test_fog_redaction_does_not_change_server_legality(client, procedural_world, db_engine):
+    run_id = procedural_run(client, fog="abyss")
+    with Session(db_engine) as session:
+        run = session.get(Run, run_id)
+        private_rules = run.rules_config
+        hidden_entry = next(
+            entry for entry in private_rules["tier_deck"] if entry["start_depth"] > 1
+        )
+        hidden_tier = tier_for_depth(hidden_entry["start_depth"], private_rules)
+        assert hidden_tier.predicate is not None
+        public_rules = RabbitHoleEngine.public_rules(private_rules, run, depth=0)
+        public_entry = next(
+            entry
+            for entry in public_rules["tier_deck"]
+            if entry["number"] == hidden_entry["number"]
+        )
+        assert public_entry["hidden"] is True
+        movies = feasibility.movies(session)
+        violating = next(
+            row for row in movies.values() if compliance(session, hidden_tier, row) is False
+        )
+        assert violating.tmdb_id in movies
+        assert run.rules_config["tier_deck"] == private_rules["tier_deck"]
+
+
+def test_fog_constraint_and_coach_do_not_leak_upcoming_warning(client, procedural_world):
+    run_id = procedural_run(client, fog="fog")
+    put_at_depth(procedural_world, run_id, 4)
+    constraint = client.get(f"/api/runs/{run_id}/constraint").json()
+    assert constraint["rabbit_hole"]["steps_until_next"] == 1
+    assert constraint["rabbit_hole"]["upcoming_tier_warning"] is None
+    assert "Warning:" not in (constraint["detail"] or "")
+    coach = client.get(f"/api/runs/{run_id}/coach").json()["line"]
+    assert "Warning:" not in (coach or "")
+    assert "starts next hop" not in (coach or "")
+
+
+def test_fog_creation_owns_generated_state_and_periscope_checks_before_spending(
+    client, procedural_world
+):
+    run_id = procedural_run(
+        client,
+        fog="fog",
+        periscope_charges=99,
+        revealed_depths=[10],
+        tier_deck=[{"number": 99}],
+    )
+    rules = run_detail(client, run_id)["rules_config"]
+    assert rules["periscope_charges"] == 1
+    assert rules["revealed_depths"] == []
+    assert rules["tier_deck"][0]["number"] == 1
+
+    invalid = client.post(f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": 0})
+    assert invalid.status_code == 422
+    too_early = client.post(f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": 1})
+    assert too_early.status_code == 409
+    assert run_detail(client, run_id)["rules_config"]["periscope_charges"] == 1
+
+    boundary = next(
+        entry["start_depth"]
+        for entry in rules["tier_deck"]
+        if entry["start_depth"] > 1
+    )
+    revealed = client.post(
+        f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": boundary}
+    )
+    assert revealed.status_code == 200, revealed.text
+    after = revealed.json()["rules_config"]
+    assert after["periscope_charges"] == 0
+    assert boundary in after["revealed_depths"]
+    disclosed = next(entry for entry in after["tier_deck"] if entry["start_depth"] == boundary)
+    assert disclosed["hidden"] is False
+    assert "params" not in disclosed and "query" not in disclosed
+    repeated = client.post(
+        f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": boundary}
+    )
+    assert repeated.status_code == 409
+    next_boundary = next(
+        entry["start_depth"]
+        for entry in rules["tier_deck"]
+        if entry["start_depth"] > boundary
+    )
+    no_charge = client.post(
+        f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": next_boundary}
+    )
+    assert no_charge.status_code == 409
+    assert "No Periscope charges" in no_charge.json()["detail"]
+    assert run_detail(client, run_id)["rules_config"]["periscope_charges"] == 0
+
+
+def test_periscope_relic_is_deterministic_and_undo_restores_resources(
+    client, procedural_world, monkeypatch
+):
+    run_id = procedural_run(client, fog="fog", allow_reroll=False)
+
+    class PeriscopeRandom:
+        def choice(self, choices):
+            return "periscope" if "periscope" in choices else choices[0]
+
+    monkeypatch.setattr(rabbit_hole.random, "Random", lambda _seed: PeriscopeRandom())
+    response = None
+    for movie_id in range(1000, 1005):
+        response = log(client, run_id, movie_id)
+        assert response.status_code == 201, response.text
+    assert response is not None
+    step = response.json()
+    assert step["transition_metadata"]["relic_awarded"]["kind"] == "periscope"
+    rules = run_detail(client, run_id)["rules_config"]
+    assert rules["periscope_charges"] == 2
+
+    removed = client.delete(f"/api/runs/{run_id}/steps/{step['id']}")
+    assert removed.status_code == 204
+    restored = run_detail(client, run_id)["rules_config"]
+    assert restored["periscope_charges"] == 1
+    assert restored["revealed_depths"] == []
+
+
+def test_fog_is_frozen_after_creation_and_relic_resource_snapshot_includes_it(
+    client, procedural_world
+):
+    run_id = procedural_run(client, fog="abyss")
+    changed = client.patch(f"/api/runs/{run_id}/rules", json={"fog": "off"})
+    assert changed.status_code == 422
+    with Session(procedural_world) as session:
+        run = session.get(Run, run_id)
+        assert set(rabbit_hole.RESOURCE_KEYS) >= {
+            "periscope_charges",
+            "revealed_depths",
+        }
+        assert run.rules_config["fog"] == "abyss"
+
+
+def test_candidate_verification_rejects_more_than_24_ids(client, procedural_world):
+    run_id = procedural_run(client)
+    response = client.post(
+        f"/api/runs/{run_id}/verify-candidates",
+        json={"movie_ids": list(range(1, 26))},
+    )
+    assert response.status_code == 422
+
+
+def test_candidate_verification_returns_only_requested_visible_candidates(client, procedural_world):
+    run_id = procedural_run(client)
+    logged = log(client, run_id, 1000)
+    assert logged.status_code == 201, logged.text
+    response = client.post(
+        f"/api/runs/{run_id}/verify-candidates",
+        json={"movie_ids": [1001, 999999]},
+    )
+    assert response.status_code == 200, response.text
+    verified = response.json()
+    assert [candidate["movie_id"] for candidate in verified] == [1001]
+    assert verified[0]["tier_compliant"] is True
+
+
+def test_preview_is_cache_only_and_rejects_fog(client, procedural_world):
+    preview = client.post("/api/engine/rabbit-hole/preview", json={"rules": {"fog": "off"}})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["tier_deck"][0]["name"] == "Freefall"
+    blocked = client.post("/api/engine/rabbit-hole/preview", json={"rules": {"fog": "fog"}})
+    assert blocked.status_code == 409
+
+
+def test_rule_evaluator_matches_shared_frontend_fixture():
+    fixture_path = Path(__file__).parents[2] / "frontend/src/lib/ruleEval.fixture.json"
+    cases = json.loads(fixture_path.read_text())
+    for case in cases:
+        query = FacetQuery.model_validate(case["query"])
+        assert query.evaluate(case["facts"]) == case["expected"], case["name"]
 
 
 def test_exact_three_percent_draw_and_one_percent_curse_thresholds(db_engine, monkeypatch):

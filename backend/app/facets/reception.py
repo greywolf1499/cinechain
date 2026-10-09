@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 
 from app.facets.registry import FacetValue
 from app.models.cache import CachedMovie, CachedMovieRating
-from app.services.movie_filters import verified_tmdb_rating
 from app.utils.dates import parse_release_year
 
 
@@ -23,6 +22,8 @@ def parsed(raw: str | None, maximum: float) -> float | None:
 def evaluate(
     movie: CachedMovie, rated: CachedMovieRating | None, *, current_year: int | None = None
 ) -> dict[str, FacetValue]:
+    from app.services.movie_filters import verified_tmdb_rating
+
     raw_imdb = _number(rated.imdb_rating) if rated else None
     imdb = raw_imdb if raw_imdb is not None and 0 <= raw_imdb <= 10 else None
     rt = parsed(rated.rotten_tomatoes, 100) if rated else None

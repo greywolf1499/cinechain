@@ -108,6 +108,19 @@ export function useEngines() {
 	});
 }
 
+export function useRabbitHolePreview(rules: RulesConfig, enabled: boolean) {
+	return useQuery({
+		queryKey: ["engine", "rabbit-hole-preview", rules.curses ?? false],
+		queryFn: () => api.post<{ tier_deck: NonNullable<RulesConfig["tier_deck"]> }>(
+			"/engine/rabbit-hole/preview",
+			{ rules: { curses: rules.curses, fog: "off" } },
+		),
+		enabled,
+		staleTime: 60_000,
+		retry: false,
+	});
+}
+
 export function useRunRulebook(runId: string | undefined) {
 	return useQuery({
 		queryKey: ["runs", runId ?? "", "rulebook"],
@@ -746,6 +759,36 @@ export function useRabbitHoleSkipCurse(runId: string) {
 		onSuccess: (run) => {
 			queryClient.setQueryData(queryKeys.run(runId), run);
 			queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+		},
+	});
+}
+
+export function useRabbitHolePeriscope(runId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (depth: number) =>
+			api.post<RunDetail>(`/runs/${runId}/rabbit-hole/periscope`, { depth }),
+		onSuccess: (run) => {
+			queryClient.setQueryData(queryKeys.run(runId), run);
+			void queryClient.invalidateQueries({ queryKey: [...queryKeys.run(runId), "constraint"] });
+		},
+	});
+}
+
+export function useVerifyCandidates(runId: string, frontierMovieId: number) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (movie_ids: number[]) =>
+			api.post<DiscoveryCandidate[]>(`/runs/${runId}/verify-candidates`, { movie_ids }),
+		onSuccess: (verified) => {
+			const byId = new Map(verified.map((candidate) => [candidate.movie_id, candidate]));
+			queryClient.setQueriesData<DiscoverResult>(
+				{ queryKey: ["runs", runId, "discover", frontierMovieId] },
+				(result) => result && {
+					...result,
+					candidates: result.candidates.map((candidate) => byId.get(candidate.movie_id) ?? candidate),
+				},
+			);
 		},
 	});
 }

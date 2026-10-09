@@ -156,6 +156,11 @@ class BaseChallengeEngine(ABC):
             "cast_depth": config.get("max_cast_order") or "all credited actors",
         }
 
+    @classmethod
+    def public_rules(cls, rules: dict | None, run: Run) -> dict[str, Any]:
+        """Return the rules safe to expose to participants."""
+        return dict(rules or {})
+
     def coach_line(self, run: Run, steps: Sequence[RunStep]) -> str | None:
         return None
 

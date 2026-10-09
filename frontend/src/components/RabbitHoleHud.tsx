@@ -1,7 +1,7 @@
 import { cn } from "../lib/cn";
 import { ApiError } from "../lib/api";
 import { rabbitHud, rabbitTiers } from "../lib/rabbitHole";
-import { useRabbitHoleReroll, useRabbitHoleSkipCurse, useRunConstraint, useUpdateRun } from "../lib/queries";
+import { useEngines, useRabbitHolePeriscope, useRabbitHoleReroll, useRabbitHoleSkipCurse, useRunConstraint, useUpdateRun } from "../lib/queries";
 import type { RulesConfig } from "../types/api";
 
 const TIER_STYLES = [
@@ -13,23 +13,29 @@ const TIER_STYLES = [
 ];
 
 export function RabbitInventory({ rules, depth }: { rules: RulesConfig; depth: number }) {
+  const { data: engines } = useEngines();
+  const engine = engines?.find((entry) => entry.game_type === "rabbit_hole");
   if (rules.rh_rules_version !== 2 && rules.rh_rules_version !== 3) return null;
-  const hud = rabbitHud(rules, depth);
+  const hud = rabbitHud(rules, depth, engine, engine?.warning_window);
+  const tiers = rabbitTiers(rules, engine);
   return (
     <div className="space-y-2 text-xs">
       <div className="flex flex-wrap gap-2">
         {rules.daily && <span className="rounded bg-sky-500/15 px-2 py-1 text-sky-200">📅 Daily Dive · shared UTC seed</span>}
         <span className="rounded bg-amber-500/10 px-2 py-1 text-amber-200">🎲 {rules.reroll_tokens ?? 0} free re-rolls</span>
         <span className="rounded bg-violet-500/10 px-2 py-1 text-violet-200">🛡️ {rules.relics?.skip_curse ?? 0} skip-curse relics</span>
+        {rules.fog === "fog" && <span className="rounded bg-cyan-500/10 px-2 py-1 text-cyan-200">🔭 {rules.periscope_charges ?? 0} Periscope charges</span>}
         {rules.curse_skip === depth && <span className="text-violet-200">Newest curse skipped for this hop</span>}
         {hud.tier.curses?.map((curse, index) =>
           <span key={`${curse.predicate_id}:${index}`} className="rounded border border-red-500/30 px-2 py-1 text-red-200">☠️ Curse: {curse.rule}</span>)}
       </div>
       <details className="rounded-md border border-app-border p-2 text-zinc-400">
-        <summary className="cursor-pointer">Procedural deck · {rabbitTiers(rules).length} tiers</summary>
+        <summary className="cursor-pointer">Descent · {tiers.length} tiers</summary>
         <ol className="mt-2 space-y-1">
-          {rabbitTiers(rules).map((tier) =>
-            <li key={tier.number}>Depth {tier.startDepth} · {tier.name}: {tier.rule}
+          {tiers.map((tier) =>
+            <li key={tier.number}>
+              Depth {tier.startDepth} · {tier.emoji ?? "●"} Tier {tier.number}: {tier.hidden ? "???" : `${tier.name ?? "Unknown tier"} · ${tier.rule ?? "Unknown rule"}`}
+              {tier.difficulty != null && <span className="ml-2 text-amber-300" aria-label={`Difficulty ${tier.difficulty}`}>{"●".repeat(Math.min(6, tier.difficulty))}{"○".repeat(Math.max(0, 6 - tier.difficulty))}</span>}
               {tier.curses?.map((curse, index) => <span key={index} className="ml-2 text-red-300">+ {curse.rule}</span>)}
             </li>)}
         </ol>
@@ -76,12 +82,18 @@ export default function RabbitHoleHud({
   finished: boolean;
   onSearchManually: () => void;
 }) {
-  const hud = rabbitHud(rules, depth);
+  const { data: engines } = useEngines();
+  const engine = engines?.find((entry) => entry.game_type === "rabbit_hole");
+  const hud = rabbitHud(rules, depth, engine, engine?.warning_window);
   const style = TIER_STYLES[Math.min(hud.tier.number - 1, TIER_STYLES.length - 1)];
   const { data: constraint } = useRunConstraint(runId);
   const reroll = useRabbitHoleReroll(runId);
   const skipCurse = useRabbitHoleSkipCurse(runId);
+  const periscope = useRabbitHolePeriscope(runId);
   const forfeit = useUpdateRun(runId);
+  const nextHidden = rabbitTiers(rules, engine).find(
+    (tier) => tier.hidden && tier.startDepth > depth + 1,
+  );
   const deadEnd = constraint?.rabbit_hole?.dead_end === true;
   return (
     <div className="mb-5 flex flex-col gap-2" aria-label="Rabbit Hole status">
@@ -93,13 +105,28 @@ export default function RabbitHoleHud({
           title={`Tier ${hud.tier.number}: ${hud.tier.name}`}
           className={cn("rounded-md border px-2.5 py-1 text-xs font-semibold", style)}
         >
-          [ Tier {hud.tier.number}: {hud.tier.name}
-          {hud.tier.number > 1 && ` (${hud.tier.rule})`} ]
+          [ Tier {hud.tier.number}: {hud.tier.name ?? "Unknown"}
+          {hud.tier.number > 1 && hud.tier.rule && ` (${hud.tier.rule})`} ]
           {hud.tierOverride && <span className="ml-1 text-fuchsia-200">Re-rolled</span>}
         </span>
         <Lives lives={hud.lives} maxLives={hud.maxLives} className="ml-auto" />
       </div>
       <RabbitInventory rules={rules} depth={depth} />
+      {!finished && rules.fog === "fog" && (rules.periscope_charges ?? 0) > 0 && nextHidden && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={periscope.isPending}
+            onClick={() => periscope.mutate(nextHidden.startDepth)}
+            className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 font-mono text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-60"
+          >
+            {periscope.isPending ? "Revealing…" : `🔭 Reveal Tier ${nextHidden.number}`}
+          </button>
+          {periscope.isError && <p role="alert" className="text-xs text-amber-300">
+            {periscope.error instanceof ApiError ? periscope.error.message : "Could not reveal that tier. Try again."}
+          </p>}
+        </div>
+      )}
       {!finished && (rules.relics?.skip_curse ?? 0) > 0 && (hud.tier.curses?.length ?? 0) > 0 && rules.curse_skip !== depth && (
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" disabled={skipCurse.isPending || reroll.isPending}

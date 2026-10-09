@@ -1,4 +1,5 @@
 import json
+import secrets
 import time
 from dataclasses import replace
 from typing import Any, Literal
@@ -6,13 +7,15 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.api.deps import get_current_user, get_tmdb_client, run_participant_guard
 from app.config import get_settings
 from app.db import get_session
-from app.engines import chaos
+from app.engines import chaos, rabbit_hole
+from app.engines.base import RunSetupError
 from app.engines.modifier_registry import ModifierSpec
 from app.engines.registry import ENGINE_REGISTRY, get_engine
 from app.engines.rulebook import RuleSection, glossary, render
@@ -41,10 +44,12 @@ from app.services import (
     bridge_paths,
     cache_repo,
     daily_puzzle,
+    feasibility,
     llm,
     settings_repo,
     veto,
 )
+from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient, TMDBError
 from app.services.tmdb_backoff import DeadlineReached
 from app.utils.dates import parse_release_year
@@ -82,6 +87,12 @@ class EngineMeta(BaseModel):
     default_preset: str
     bounty_reward: Literal["wildcard", "life", "hint", "star"]
     modifiers: list[dict[str, Any]]
+    rabbit_tiers: list[dict[str, Any]] | None = None
+    warning_window: int | None = None
+
+
+class RabbitHolePreviewRequest(BaseModel):
+    rules: dict[str, Any] = Field(default_factory=dict)
 
 
 class RulebookOverlay(BaseModel):
@@ -157,6 +168,12 @@ def list_engines(
                 }
                 for spec in registry().values()
             ],
+            rabbit_tiers=(
+                rabbit_hole.tier_metadata() if cls.game_type == rabbit_hole.RABBIT_HOLE else None
+            ),
+            warning_window=(
+                rabbit_hole.WARNING_WINDOW if cls.game_type == rabbit_hole.RABBIT_HOLE else None
+            ),
             tagline=cls.tagline,
             tags=cls.tags,
             rulebook=render(
@@ -193,6 +210,31 @@ def list_engines(
     ]
 
 
+@router.post("/engine/rabbit-hole/preview")
+def preview_rabbit_hole(
+    payload: RabbitHolePreviewRequest,
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    if payload.rules.get("fog", "off") != "off":
+        raise HTTPException(status_code=409, detail="Deck preview is unavailable with Fog of War.")
+    try:
+        eligible_ids = [
+            movie_id
+            for movie_id, row in feasibility.movies(session).items()
+            if is_reality_eligible(row)
+        ]
+        deck = rabbit_hole.draw_facet_deck(
+            session,
+            secrets.randbits(48),
+            eligible_ids,
+            curses=payload.rules.get("curses", False),
+        )
+    except RunSetupError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return {"tier_deck": deck}
+
+
 @router.get("/runs/{run_id}/rulebook", response_model=RunRulebook)
 def run_rulebook(
     run: Run = Depends(run_participant_guard),
@@ -201,7 +243,14 @@ def run_rulebook(
 ) -> RunRulebook:
     engine = get_engine(run.game_type, session, tmdb)
     rules = run.rules_config or {}
-    render_rules = rules
+    depth = (
+        session.exec(
+            select(func.count()).select_from(RunStep).where(RunStep.run_id == run.id)
+        ).one()
+        if run.game_type == rabbit_hole.RABBIT_HOLE
+        else None
+    )
+    render_rules = engine.public_rules(rules, run, depth=depth) if depth is not None else engine.public_rules(rules, run)
     if run.game_type == "tug_of_war" and rules.get("tug_rules_version") not in (2, 3):
         render_rules = {**rules, "tug_rules_version": 1}
     values = engine.rulebook_values(render_rules)
@@ -300,7 +349,14 @@ def run_rulebook(
         "regional_deep_dive": ("slice_name",),
         "method_actor": ("person_name", "max_skip", "track_length", "order"),
         "auteur_marathon": ("person_name", "max_skip", "track_length", "order"),
-        "rabbit_hole": ("max_lives", "lives_remaining", "escape_depth", "allow_reroll"),
+        "rabbit_hole": (
+            "max_lives",
+            "lives_remaining",
+            "escape_depth",
+            "allow_reroll",
+            "fog",
+            "periscope_charges",
+        ),
         "meet_in_the_middle": ("hints_remaining",),
         "genre_pendulum": ("genre_cycle", "swing_frequency"),
         "historical_time_travel": ("setting_direction",),

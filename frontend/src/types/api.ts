@@ -89,8 +89,20 @@ export interface RulesConfig {
 	blind_fork?: boolean;
 	/** Server-owned: the offer waiting for the partner's answer. */
 	pending_fork?: PendingFork | null;
-	/** Tug of War: which metadata scores (era or geography) and the lead that wins. */
-	dimension?: TugDimension;
+	/** Tug of War plane/traversal selected for new version-4 runs. */
+	tug_plane?: { id: string; params: Record<string, unknown> };
+	tug_traversal?: string;
+	tug_plane_snapshot?: {
+		id?: string;
+		label?: string;
+		blurb?: string;
+		traversal?: string;
+		poles?: Record<string, { label?: string }>;
+	};
+	tug_deal?: { movie_id: number; territory: "team_a" | "team_b" | "neutral" }[];
+	tug_portals?: { remaining: number };
+	/** Legacy Tug dimension for saved version-1–3 runs. */
+	dimension?: "era" | "geography";
 	target_lead?: number;
 	tug_rules_version?: number;
 	steal_enabled?: boolean;
@@ -313,7 +325,42 @@ export interface PersonSummary {
 	known_for: string[];
 }
 
-export type TugDimension = "era" | "geography";
+export interface TugTraversalMeta {
+	id: string;
+	label: string;
+	graph: boolean;
+}
+
+export interface TugPlaneMeta {
+	id: string;
+	label: string;
+	blurb: string;
+	params_schema: { [key: string]: { type: string; default?: unknown; minimum?: number; maximum?: number; enum?: string[] } };
+	defaults: Record<string, unknown>;
+	poles: Record<string, { label: string; query: Record<string, unknown> }>;
+	allowed_traversals: TugTraversalMeta[];
+	default_traversal: string;
+	frozen: boolean;
+}
+
+export interface TugBalance {
+	eligible: number;
+	known: number;
+	unknown: number;
+	team_a: number;
+	team_b: number;
+	neutral: number;
+	team_a_rate: number;
+	team_b_rate: number;
+	neutral_rate: number;
+	pole_ratio: number | null;
+	balanced: boolean;
+	issues: string[];
+	traversal: string;
+	traversal_valid: boolean;
+	bridge_density?: number | null;
+	explanation?: string | null;
+}
 
 export interface PendingFork {
 	offered_by_id: string;
@@ -465,6 +512,7 @@ export interface EngineMeta {
 	bounty_reward: "wildcard" | "life" | "hint" | "star";
 	rabbit_tiers?: { number: number; name: string; rule: string; start_depth: number; emoji: string }[] | null;
 	warning_window?: number | null;
+	tug_planes?: TugPlaneMeta[] | null;
 }
 
 export type ModifierParamValue = string | number | boolean | string[];
@@ -894,6 +942,9 @@ export interface DiscoveryCandidate {
 	tug_effect?: "home" | "invasion" | "neutral" | "sudden_neutral" | null;
 	tug_breaks_streak?: boolean;
 	tug_points?: number | null;
+	tug_territory?: "team_a" | "team_b" | "neutral" | null;
+	tug_territory_evidence?: Record<string, boolean | null>;
+	tug_link?: Record<string, unknown> | null;
 }
 
 /** POST /movies/{id}/narrative-era: a film's setting year. */

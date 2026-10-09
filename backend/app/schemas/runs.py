@@ -82,6 +82,7 @@ class RunStepCreate(BaseModel):
     transition_metadata: dict[str, Any] | None = None
     # Tug of War: team whose turn is being logged (shared-device support).
     tug_team: Literal["team_a", "team_b"] | None = None
+    use_tug_portal: bool = False
     user_notes: str | None = None
     force: bool = False
     status: str = "watched"  # watched | planned

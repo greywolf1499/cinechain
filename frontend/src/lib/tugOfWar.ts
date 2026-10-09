@@ -1,30 +1,9 @@
-import type { DiscoveryCandidate, EngineMeta, RulesConfig, TugDimension } from "../types/api";
+import type { DiscoveryCandidate, EngineMeta, RulesConfig } from "../types/api";
 
 export const TUG_OF_WAR = "tug_of_war";
 /** Only a stand-in until `/engines` loads: the real default is the backend `target_lead`
  * `RuleField`, which `tugTargetDefault` reads. */
 export const TUG_TARGET_LEAD_FALLBACK = 7;
-export const DEFAULT_ERA_A_BEFORE = 1975;
-export const DEFAULT_ERA_B_AFTER = 2005;
-
-export const TUG_DIMENSIONS: Record<
-  TugDimension,
-  { label: string; detail: string; teamA: (rules: RulesConfig) => string; teamB: (rules: RulesConfig) => string }
-> = {
-  era: {
-    label: "Era",
-    detail: "Old cinema against new: films in between set a neutral anchor.",
-    teamA: (rules) => `Pre-${rules.era_a_before ?? DEFAULT_ERA_A_BEFORE}`,
-    teamB: (rules) => `Post-${rules.era_b_after ?? DEFAULT_ERA_B_AFTER}`,
-  },
-  geography: {
-    label: "Geography",
-    detail: "The West against the rest of the world, by the film's first production country.",
-    teamA: () => "Western (US & Europe)",
-    teamB: () => "Rest of World",
-  },
-};
-
 /** The winning target the backend would apply to a run that never stored one. */
 export function tugTargetDefault(engines: EngineMeta[] | undefined): number {
   const field = engines
@@ -39,7 +18,7 @@ export function tugTarget(rules: RulesConfig, fallback = TUG_TARGET_LEAD_FALLBAC
 
 /** Momentum on the number line: positive pulls towards Team A, negative towards Team B. */
 export function tugMomentum(rules: RulesConfig): number {
-  if (rules.tug_rules_version === 3 && rules.tug_momentum?.rope != null) return rules.tug_momentum.rope;
+  if ((rules.tug_rules_version === 3 || rules.tug_rules_version === 4) && rules.tug_momentum?.rope != null) return rules.tug_momentum.rope;
   const scores = rules.tug_scores;
   return scores ? scores.team_a - scores.team_b : 0;
 }
@@ -50,7 +29,7 @@ export function tugNextTeam(rules: RulesConfig): "team_a" | "team_b" {
 
 export function tugBankMultiplier(rules: RulesConfig): number {
   const team = tugNextTeam(rules);
-  return (rules.tug_rules_version === 3 ? rules.tug_momentum?.banks?.[team] : rules.tug_momentum?.anchor === team) ? 2 : 1;
+  return ((rules.tug_rules_version === 3 || rules.tug_rules_version === 4) ? rules.tug_momentum?.banks?.[team] : rules.tug_momentum?.anchor === team) ? 2 : 1;
 }
 
 export function tugEffectLabel(

@@ -1,5 +1,5 @@
 import { cn } from "../lib/cn";
-import { TUG_DIMENSIONS, tugEffectLabel, tugMomentum, tugTarget } from "../lib/tugOfWar";
+import { tugEffectLabel, tugMomentum, tugTarget } from "../lib/tugOfWar";
 import { GlossaryChip } from "./HowToPlay";
 import type { RulesConfig, RunParticipant, UserSummary } from "../types/api";
 import PlayerAvatar from "./PlayerAvatar";
@@ -20,7 +20,9 @@ export default function TugOfWarMeter({
   glossary: Record<string, string>;
 }) {
   const target = tugTarget(rules);
-  const dimension = TUG_DIMENSIONS[rules.dimension ?? "era"];
+  const snapshot = rules.tug_plane_snapshot;
+  const labelA = snapshot?.poles?.team_a?.label ?? "Team A territory";
+  const labelB = snapshot?.poles?.team_b?.label ?? "Team B territory";
   const scores = rules.tug_scores ?? { team_a: 0, team_b: 0 };
   const momentum = tugMomentum(rules);
   const clamped = Math.max(-target, Math.min(target, momentum));
@@ -38,11 +40,11 @@ export default function TugOfWarMeter({
   const nameA = nameOf(players.team_a, "Team A");
   const nameB = nameOf(players.team_b, "Team B");
   const tugState = rules.tug_momentum;
-  const v3 = rules.tug_rules_version === 3;
+  const v3 = rules.tug_rules_version === 3 || rules.tug_rules_version === 4;
   const nextTeam = tugState?.next_team ?? "team_a";
   const nextName = nextTeam === "team_a" ? nameA : nameB;
   const nextLabel =
-    nextTeam === "team_a" ? dimension.teamA(rules) : dimension.teamB(rules);
+    nextTeam === "team_a" ? labelA : labelB;
   const ticks = Array.from({ length: 2 * target + 1 }, (_, i) => i - target);
   const leader = momentum === 0 ? null : momentum > 0 ? "a" : "b";
 
@@ -54,7 +56,7 @@ export default function TugOfWarMeter({
       <div className="flex items-center gap-3">
         <TeamEnd
           name={nameB}
-          label={dimension.teamB(rules)}
+          label={labelB}
           score={scores.team_b}
           tone="b"
           leading={leader === "b"}
@@ -118,7 +120,7 @@ export default function TugOfWarMeter({
 
         <TeamEnd
           name={nameA}
-          label={dimension.teamA(rules)}
+          label={labelA}
           score={scores.team_a}
           tone="a"
           leading={leader === "a"}
@@ -177,9 +179,9 @@ export default function TugOfWarMeter({
         </div>
       ) : null}
       <p className="mt-1.5 text-center text-[11px] text-zinc-500">
-        {v3 ? "Build grows your streak; Raid breaks theirs. Each team can Bank its next pull ×2." : rules.dimension === "era"
-          ? `Films from ${rules.era_a_before ?? 1975}–${rules.era_b_after ?? 2005} are neutral anchors; invasions steal ground.`
-          : "Films without a country on record are neutral anchors; invasions steal ground."}
+        {v3
+          ? "Build grows your streak; Raid breaks theirs. Each team can Bank its next pull ×2."
+          : snapshot?.blurb ?? "The selected film's territory determines how it pulls the rope."}
       </p>
     </section>
   );

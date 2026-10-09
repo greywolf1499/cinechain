@@ -13,7 +13,7 @@ import { RABBIT_HOLE } from "../../lib/rabbitHole";
 import { engineDefaultRules } from "../RulesetFields";
 import { parseRawRules, RAW_RULES_EXAMPLE } from "../RawRulesEditor";
 import { useCuratedSlices, useSeedOptions } from "../../lib/queries";
-import type { CuratedListSummary, EngineMeta, MovieSummary, PersonSummary, RawRulesConfig, RulesConfig, TugDimension } from "../../types/api";
+import type { CuratedListSummary, EngineMeta, MovieSummary, PersonSummary, RawRulesConfig, RulesConfig } from "../../types/api";
 
 export interface RunDraft {
   name: string;
@@ -25,7 +25,9 @@ export interface RunDraft {
   rules: RulesConfig;
   canonListId: string;
   targetDecade: number;
-  tugDimension: TugDimension;
+  tugPlaneId: string;
+  tugTraversal: string;
+  tugParams: Record<string, unknown>;
   genreCycle: string[];
   swingFrequency: number;
   bracketFilms: MovieSummary[];
@@ -55,7 +57,9 @@ export function initialDraft(): RunDraft {
       max_cast_order: 15, min_runtime: 0, wildcards_budget: 0 },
     canonListId: "",
     targetDecade: 1970,
-    tugDimension: "era",
+    tugPlaneId: "genre_clusters",
+    tugTraversal: "shared_cast",
+    tugParams: {},
     genreCycle: [...DEFAULT_GENRE_CYCLE],
     swingFrequency: DEFAULT_SWING_FREQUENCY,
     bracketFilms: [],
@@ -149,7 +153,10 @@ export function useRunDraft(
     ...(needsCanonList ? { allowed_curated_list_id: draft.canonListId } : {}),
     ...(needsDecade ? { target_decade: draft.targetDecade } : {}),
     ...(draft.gameType === TUG_OF_WAR
-      ? { dimension: draft.tugDimension }
+      ? {
+          tug_plane: { id: draft.tugPlaneId, params: draft.tugParams },
+          tug_traversal: draft.tugTraversal,
+        }
       : {}),
     ...(draft.gameType === GENRE_PENDULUM
       ? {

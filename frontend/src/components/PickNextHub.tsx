@@ -642,7 +642,7 @@ function DiscoveryGrid({
     onClose();
   }
 
-  async function handleAdd(candidate: DiscoveryCandidate, watched: boolean) {
+  async function handleAdd(candidate: DiscoveryCandidate, watched: boolean, useTugPortal = false) {
     if (Object.values(candidate.overlay_ok ?? {}).some((ok) => ok === false)) {
       openCandidate(candidate);
       return;
@@ -657,6 +657,7 @@ function DiscoveryGrid({
         tunnel_side: tunnelSide,
         status: watched ? "watched" : "planned",
         watched_at: watched ? new Date().toISOString() : null,
+        ...(useTugPortal ? { use_tug_portal: true } : {}),
         transition_metadata: connection
           ? connectionMetadata(connection, {
               from: connection.character_in_frontier,
@@ -692,7 +693,7 @@ function DiscoveryGrid({
       ratings={ratingsMap?.[String(candidate.movie_id)]}
       badges={badgesMap?.[String(candidate.movie_id)]}
       gameType={gameType}
-      tugMultiplier={rulesConfig.tug_rules_version === 3 ? undefined : tugBankMultiplier(rulesConfig)}
+      tugMultiplier={rulesConfig.tug_rules_version === 3 || rulesConfig.tug_rules_version === 4 ? undefined : tugBankMultiplier(rulesConfig)}
       castLinked={castLinked}
       tierLabel={gameType === RABBIT_HOLE && constraint?.rabbit_hole
         ? `Tier ${constraint.rabbit_hole.tier}: ${constraint.rabbit_hole.tier_rule}` : undefined}
@@ -1072,9 +1073,11 @@ function DiscoveryGrid({
         <>
           <DirectorsPicks candidates={filtered} matchOrder={pool.map((candidate) => candidate.movie_id)}
             visited={visited} specs={specs} allowRepeats={allowRepeats} renderCard={renderCandidate} onPick={openCandidate}
-            slot={gameType === "tug_of_war" && rulesConfig.tug_rules_version === 3
+            slot={gameType === "tug_of_war" && (rulesConfig.tug_rules_version === 3 || rulesConfig.tug_rules_version === 4)
               ? <TugDecisionTriad candidates={filtered} runId={runId} rules={rulesConfig}
-                  allowRepeats={allowRepeats} renderCard={renderCandidate} /> : undefined} />
+                  frontierMovieId={frontierStep?.movie_id ?? null}
+                  allowRepeats={allowRepeats} renderCard={renderCandidate}
+                  onUsePortal={(candidate) => handleAdd(candidate, true, true)} /> : undefined} />
           <p className="text-xs text-zinc-500" role="status">
             Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} best matches · narrow with a filter
             {diagnostics?.widened && " · pool widened beyond the engine's first pass"}
@@ -1135,12 +1138,14 @@ function DiscoveryGrid({
 }
 
 const FORK_OFFER_SIZE = 3;
-function TugDecisionTriad({ candidates, runId, rules, allowRepeats, renderCard }: {
+function TugDecisionTriad({ candidates, runId, rules, frontierMovieId, allowRepeats, renderCard, onUsePortal }: {
   candidates: DiscoveryCandidate[];
   runId: string;
   rules: RulesConfig;
+  frontierMovieId: number | null;
   allowRepeats: boolean;
   renderCard: (candidate: DiscoveryCandidate) => ReactNode;
+  onUsePortal: (candidate: DiscoveryCandidate) => void;
 }) {
   const [lookaheadRequested, setLookaheadRequested] = useState(false);
   const eligible = candidates.filter((candidate) => allowRepeats || !candidate.already_in_run);
@@ -1157,10 +1162,17 @@ function TugDecisionTriad({ candidates, runId, rules, allowRepeats, renderCard }
   const ids = picks.flatMap(({ candidate }) => candidate ? [candidate.movie_id] : []).join(",");
   const lookahead = useQuery({
     queryKey: ["tug-lookahead", runId, ids, rules],
-    queryFn: () => api.get<{ movies: Record<string, { scoring: number; neutral: number; partial: boolean }>; partial: boolean }>(
+    queryFn: () => api.get<{ movies: Record<string, { scoring: number; neutral: number; partial: boolean }>; partial: boolean; portal_available?: boolean }>(
       `/runs/${runId}/tug/lookahead?movie_ids=${ids}`,
     ),
     enabled: lookaheadRequested && ids.length > 0,
+    staleTime: 30_000,
+    retry: false,
+  });
+  const portalCandidates = useQuery({
+    queryKey: ["tug-portal-candidates", runId, frontierMovieId],
+    queryFn: () => api.get<DiscoveryCandidate[]>(`/runs/${runId}/tug/portal-candidates`),
+    enabled: lookahead.data?.portal_available === true && frontierMovieId !== null,
     staleTime: 30_000,
     retry: false,
   });
@@ -1181,6 +1193,37 @@ function TugDecisionTriad({ candidates, runId, rules, allowRepeats, renderCard }
         </> : <p className="text-xs text-zinc-500">No {label.toLowerCase()} matches these filters.</p>}
       </div>;
     })}
+    {lookahead.data?.portal_available && (
+      <section className="space-y-2 rounded-lg border border-amber-400/30 bg-amber-950/10 p-3 sm:col-span-3">
+        <h3 className="text-xs font-semibold text-amber-200">🌀 Portal · unlinked neutral hop</h3>
+        {portalCandidates.isFetching ? (
+          <p className="text-xs text-zinc-400">Finding cache-verified unlinked films…</p>
+        ) : portalCandidates.data?.length ? (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {portalCandidates.data.map((portalCandidate) => (
+              <div key={portalCandidate.movie_id} className="space-y-1.5 rounded-md bg-app-surface p-2">
+                <MoviePoster
+                  path={portalCandidate.poster_path}
+                  title={portalCandidate.title}
+                  movieId={portalCandidate.movie_id}
+                  className="mx-auto w-16"
+                />
+                <p className="line-clamp-2 text-xs text-zinc-200">{portalCandidate.title}</p>
+                <button
+                  type="button"
+                  onClick={() => onUsePortal(portalCandidate)}
+                  className="w-full rounded border border-amber-400/40 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/10"
+                >
+                  Use Portal
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-zinc-400">No fully cached, unlinked neutral film is available yet.</p>
+        )}
+      </section>
+    )}
     {lookahead.isError && <p role="alert" className="text-xs text-red-300 sm:col-span-3">
       Could not load cached replies. <button type="button" onClick={() => void lookahead.refetch()} className="underline">Retry</button>
     </p>}

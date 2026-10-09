@@ -34,6 +34,7 @@ from app.engines.rt_split import RT_SPLIT, RottenTomatoesSplitEngine
 from app.engines.rt_split import VICTORY_PREFIX as SPLIT_VICTORY_PREFIX
 from app.engines.rt_split import compute_scores as compute_split_scores
 from app.engines.rt_split import winning_team as split_winner
+from app.engines.traversal import get_policy
 from app.engines.tug_of_war import (
     PLAYERS_KEY,
     SEED_KEY,
@@ -46,13 +47,17 @@ from app.engines.tug_of_war import (
     _territory,
     compute_scores,
     leading_team,
+    plane_facts_for,
+    plane_for_rules,
+    plane_verdict,
     step_turn_team,
     tally,
     team_of,
     winner,
 )
+from app.engines.tug_planes import NEUTRAL
 from app.integrations.omdb import OMDbClient
-from app.models.cache import CachedMovie
+from app.models.cache import CachedCrewCredit, CachedMovie, CachedMovieCast, CachedMovieDirector
 from app.models.run import (
     DEFAULT_RULES_CONFIG,
     IMPORT_GAME_TYPE,
@@ -158,30 +163,101 @@ def _cached_tug_lookahead(
     limit = rules.get("max_cast_order") or 15
     puller = (rules.get("tug_momentum") or {}).get("next_team", TEAM_A)
     opponent = TEAM_B if puller == TEAM_A else TEAM_A
-    for movie_id in movie_ids:
-        if time.monotonic() >= deadline:
-            return
-        cast = repo.get_cached_cast(movie_id, limit)
-        count = TugReachable(partial=cast is None)
-        seen = {movie_id, *excluded}
-        for member in cast or []:
-            if time.monotonic() >= deadline:
-                count.partial = True
-                break
-            credits = repo.get_cached_actor_credits(member["actor_id"])
-            if credits is None:
-                count.partial = True
-            for movie in credits or []:
+    version = rules.get(TUG_RULES_VERSION_KEY)
+    policy = get_policy(rules.get("tug_traversal")) if version == 4 else None
+    if version == 4 and policy is not None and not policy.graph:
+        from app.services import feasibility
+
+        movies = feasibility.movies(session)
+        source = (
+            [entry["movie_id"] for entry in rules.get("tug_deal", [])]
+            if policy.key == "draft"
+            else list(movies)
+        )
+        for movie_id in movie_ids:
+            count = TugReachable()
+            for related_id in source:
                 if time.monotonic() >= deadline:
                     count.partial = True
                     break
-                if movie.tmdb_id in seen:
+                row = movies.get(related_id)
+                if row is None or related_id in excluded or related_id == movie_id:
                     continue
-                seen.add(movie.tmdb_id)
-                if not is_reality_eligible(movie):
+                if not is_reality_eligible(row):
                     continue
-                if movie.runtime is not None and movie.runtime < rules.get("min_runtime", 0):
-                    continue
+                territory, _ = plane_verdict(session, related_id, rules)
+                if territory in (None, "unknown"):
+                    count.partial = True
+                elif territory == NEUTRAL:
+                    count.neutral += 1
+                else:
+                    count.scoring += 1
+            results[movie_id] = count
+        return
+    for movie_id in movie_ids:
+        if time.monotonic() >= deadline:
+            return
+        related_movies: dict[int, CachedMovie] = {}
+        partial = False
+        if policy is None or policy.key in ("shared_cast", "shared_any_person"):
+            cast = repo.get_cached_cast(movie_id, limit)
+            partial |= cast is None
+            for member in cast or []:
+                if time.monotonic() >= deadline:
+                    partial = True
+                    break
+                credits = repo.get_cached_actor_credits(member["actor_id"])
+                partial |= credits is None
+                related_movies.update((item.tmdb_id, item) for item in (credits or []))
+        if policy is not None and policy.key in ("shared_director", "shared_any_person"):
+            director_ids = session.exec(
+                select(CachedMovieDirector.person_id).where(
+                    CachedMovieDirector.movie_id == movie_id
+                )
+            ).all()
+            for director_id in director_ids:
+                linked_ids = session.exec(
+                    select(CachedMovieDirector.movie_id).where(
+                        CachedMovieDirector.person_id == director_id
+                    )
+                ).all()
+                for linked_id in linked_ids:
+                    linked_movie = session.get(CachedMovie, linked_id)
+                    if linked_movie is not None:
+                        related_movies[linked_id] = linked_movie
+        if policy is not None and policy.key == "shared_any_person":
+            crew = repo.get_cached_crew(movie_id)
+            partial |= crew is None
+            for credit in crew or []:
+                linked_ids = session.exec(
+                    select(CachedCrewCredit.movie_id).where(
+                        CachedCrewCredit.person_id == credit.person_id
+                    )
+                ).all()
+                for linked_id in linked_ids:
+                    linked_movie = session.get(CachedMovie, linked_id)
+                    if linked_movie is not None:
+                        related_movies[linked_id] = linked_movie
+        count = TugReachable(partial=partial)
+        seen = {movie_id, *excluded}
+        for related_id, movie in related_movies.items():
+            if time.monotonic() >= deadline:
+                count.partial = True
+                break
+            if related_id in seen:
+                continue
+            seen.add(related_id)
+            if not is_reality_eligible(movie):
+                continue
+            if movie.runtime is not None and movie.runtime < rules.get("min_runtime", 0):
+                continue
+            if version == 4:
+                plane = plane_for_rules(rules)
+                facts = plane_facts_for(session, [related_id], rules).get(related_id, {})
+                if plane.unknown(facts):
+                    count.partial = True
+                territory = plane.territory(facts)
+            else:
                 territory = _territory(
                     parse_release_year(movie.release_date), movie.origin_country, rules
                 )
@@ -189,18 +265,105 @@ def _cached_tug_lookahead(
                     rules.get("dimension") == "geography" and movie.origin_country is None
                 ):
                     count.partial = True
-                if territory is None or (
-                    territory != opponent and not rules.get("steal_enabled", True)
-                ):
-                    count.neutral += 1
-                else:
-                    count.scoring += 1
+            territory = None if territory == NEUTRAL else territory
+            if territory is None or (
+                territory != opponent and not rules.get("steal_enabled", True)
+            ):
+                count.neutral += 1
+            else:
+                count.scoring += 1
         if time.monotonic() >= deadline:
             count.partial = True
         results[movie_id] = count
 
 
-@router.get("/{run_id}/tug/lookahead", response_model=TugLookahead)
+def _tug_portal_available(
+    session: Session, run: Run, rules: dict, history: list[RunStep] | None = None
+) -> bool:
+    if run.status != RUN_STATUS_ACTIVE:
+        return False
+    if rules.get(TUG_RULES_VERSION_KEY) != 4:
+        return False
+    if not get_policy(rules.get("tug_traversal")).graph:
+        return False
+    if (rules.get("tug_portals") or {}).get("remaining", 0) < 1:
+        return False
+    frontier = _last_step(session, run.id)
+    if frontier is None:
+        return False
+    steps = history if history is not None else _play_history(session, run.id)
+    excluded = {step.movie_id for step in steps} - {frontier.movie_id}
+    replies: dict[int, TugReachable] = {}
+    _cached_tug_lookahead(
+        session,
+        [frontier.movie_id],
+        rules,
+        excluded,
+        time.monotonic() + 1.5,
+        replies,
+    )
+    count = replies.get(frontier.movie_id)
+    return bool(count and not count.partial and count.scoring == 0)
+
+
+def _cached_tug_link_state(
+    session: Session, first_id: int, second_id: int, traversal: str
+) -> bool | None:
+    first = session.get(CachedMovie, first_id)
+    second = session.get(CachedMovie, second_id)
+    if first is None or second is None:
+        return None
+    first_people: set[int] = set()
+    second_people: set[int] = set()
+    if traversal in ("shared_cast", "shared_any_person"):
+        if first.cast_fetched_at is None or second.cast_fetched_at is None:
+            return None
+        first_people.update(
+            session.exec(
+                select(CachedMovieCast.actor_id).where(CachedMovieCast.movie_id == first_id)
+            ).all()
+        )
+        second_people.update(
+            session.exec(
+                select(CachedMovieCast.actor_id).where(CachedMovieCast.movie_id == second_id)
+            ).all()
+        )
+    if traversal in ("shared_director", "shared_any_person"):
+        if first.directors_fetched_at is None or second.directors_fetched_at is None:
+            return None
+        first_people.update(
+            session.exec(
+                select(CachedMovieDirector.person_id).where(
+                    CachedMovieDirector.movie_id == first_id
+                )
+            ).all()
+        )
+        second_people.update(
+            session.exec(
+                select(CachedMovieDirector.person_id).where(
+                    CachedMovieDirector.movie_id == second_id
+                )
+            ).all()
+        )
+    if traversal == "shared_any_person":
+        if first.crew_fetched_at is None or second.crew_fetched_at is None:
+            return None
+        first_people.update(
+            session.exec(
+                select(CachedCrewCredit.person_id).where(CachedCrewCredit.movie_id == first_id)
+            ).all()
+        )
+        second_people.update(
+            session.exec(
+                select(CachedCrewCredit.person_id).where(CachedCrewCredit.movie_id == second_id)
+            ).all()
+        )
+    return bool(first_people & second_people)
+
+
+@router.get(
+    "/{run_id}/tug/lookahead", response_model=TugLookahead, response_model_exclude_none=True
+)
 async def tug_lookahead(
     movie_ids: str = Query(..., max_length=200),
     run: Run = Depends(run_participant_guard),
@@ -220,6 +383,7 @@ async def tug_lookahead(
     )
     results = {movie_id: TugReachable(partial=True) for movie_id in ids}
     deadline = time.monotonic() + TUG_LOOKAHEAD_SECONDS
+    version = rules.get(TUG_RULES_VERSION_KEY)
     bind = session.get_bind()
 
     def load() -> None:
@@ -234,9 +398,88 @@ async def tug_lookahead(
         timed_out = True
         logger.info("Tug lookahead reached its %.1fs cache-only deadline", TUG_LOOKAHEAD_SECONDS)
     snapshot = dict(results)
+    portal_available: bool | None = None
+    if version == 4:
+        portal_available = False
+        policy = get_policy(rules.get("tug_traversal"))
+        portals = rules.get("tug_portals") or {}
+        frontier = _last_step(session, run.id)
+        if policy.graph and portals.get("remaining", 0) > 0 and frontier is not None:
+            frontier_replies: dict[int, TugReachable] = {}
+            _cached_tug_lookahead(
+                session,
+                [frontier.movie_id],
+                rules,
+                excluded - {frontier.movie_id},
+                deadline,
+                frontier_replies,
+            )
+            reply_count = frontier_replies.get(frontier.movie_id)
+            portal_available = bool(
+                reply_count and not reply_count.partial and reply_count.scoring == 0
+            )
     return TugLookahead(
-        movies=snapshot, partial=timed_out or any(value.partial for value in snapshot.values())
+        movies=snapshot,
+        partial=timed_out or any(value.partial for value in snapshot.values()),
+        portal_available=portal_available,
     )
+
+
+@router.get(
+    "/{run_id}/tug/portal-candidates",
+    response_model=list[DiscoveryCandidate],
+)
+async def tug_portal_candidates(
+    run: Run = Depends(run_participant_guard),
+    session: Session = Depends(get_session),
+) -> list[DiscoveryCandidate]:
+    rules = dict(run.rules_config or {})
+    if run.game_type != TUG_OF_WAR or not _tug_portal_available(session, run, rules):
+        return []
+    frontier = _last_step(session, run.id)
+    if frontier is None:
+        return []
+    excluded = {step.movie_id for step in _run_history(session, run.id)}
+    movies = feasibility.movies(session)
+    candidates = sorted(
+        (
+            movie
+            for movie_id, movie in movies.items()
+            if movie_id not in excluded and is_reality_eligible(movie)
+        ),
+        key=lambda movie: (movie.popularity or 0, movie.tmdb_id),
+        reverse=True,
+    )
+    traversal = (rules.get("tug_traversal") or "shared_cast")
+    output: list[DiscoveryCandidate] = []
+    deadline = time.monotonic() + 1.5
+    for movie in candidates:
+        if time.monotonic() >= deadline:
+            break
+        territory, evidence = plane_verdict(session, movie.tmdb_id, rules)
+        if territory != NEUTRAL:
+            continue
+        if _cached_tug_link_state(session, frontier.movie_id, movie.tmdb_id, traversal) is not False:
+            continue
+        output.append(
+            DiscoveryCandidate(
+                movie_id=movie.tmdb_id,
+                title=movie.title,
+                poster_path=movie.poster_path,
+                release_year=parse_release_year(movie.release_date),
+                origin_country=movie.origin_country,
+                genre_ids=movie.genre_ids or [],
+                popularity=movie.popularity,
+                original_language=movie.original_language,
+                runtime=movie.runtime,
+                tug_territory=NEUTRAL,
+                tug_territory_evidence=evidence,
+                tug_portal_available=True,
+            )
+        )
+        if len(output) >= 12:
+            break
+    return output
 
 
 MANUAL_STATUS_REASONS = {
@@ -293,6 +536,11 @@ SERVER_OWNED_METADATA = (
     "character_hop",
     "near_miss_with",
     "tug_team",
+    "tug_territory",
+    "tug_territory_evidence",
+    "tug_link",
+    "tug_portal",
+    "tug_portals_before",
     "seed",
     "life_lost",
     "relic_awarded",
@@ -487,7 +735,7 @@ async def _enforce_run_rules(
             )
         extra_metadata["tug_team"] = team
         rules_version = rules.get(TUG_RULES_VERSION_KEY)
-        if payload.status == "watched" and rules_version in (2, 3) and all(players.values()):
+        if payload.status == "watched" and rules_version in (2, 3, 4) and all(players.values()):
             next_team = tally(_run_history(session, run.id), rules, players).next_team
             if team != next_team:
                 expected_name = tug_engine.team_name(run, next_team)
@@ -574,6 +822,13 @@ async def _enforce_run_rules(
                 detail={"valid": False, "blocked": True, "reason": reason, "connections": []},
             )
     elif previous is not None:
+        if payload.use_tug_portal and _cached_tug_link_state(
+            session,
+            previous.movie_id,
+            movie.tmdb_id,
+            rules.get("tug_traversal") or "shared_cast",
+        ) is not False:
+            raise HTTPException(409, detail="Portal requires a cache-verified unlinked hop")
         engine = get_engine(run.game_type, session, tmdb)
         result = await engine.validate_next_step(
             previous.movie_id,
@@ -583,6 +838,30 @@ async def _enforce_run_rules(
             previous_transition=previous.transition_metadata,
             history=side_steps if tunnel else _play_history(session, run.id),
         )
+        if payload.use_tug_portal:
+            if not get_policy(rules.get("tug_traversal")).graph:
+                raise HTTPException(409, detail="Portals are only available on graph traversals")
+            if not _tug_portal_available(session, run, rules, _play_history(session, run.id)):
+                raise HTTPException(
+                    409, detail="A Portal is available only when no scoring reply exists"
+                )
+            territory, _ = plane_verdict(session, movie.tmdb_id, rules)
+            if territory != NEUTRAL:
+                raise HTTPException(409, detail="A Portal must land in the known neutral band")
+            if result.valid:
+                raise HTTPException(409, detail="A Portal is only for an unlinked hop")
+            if result.blocked:
+                raise HTTPException(status_code=409, detail=result.model_dump())
+            portals_before = dict(rules.get("tug_portals") or {})
+            run.rules_config = {
+                **(run.rules_config or {}),
+                "tug_portals": {**portals_before, "remaining": 0},
+            }
+            session.add(run)
+            extra_metadata["tug_portal"] = True
+            extra_metadata["tug_portals_before"] = portals_before
+            extra_metadata["tug_link"] = {"kind": "portal", "unlinked": True}
+            result = result.model_copy(update={"valid": True, "reason": None})
         if not result.valid and result.blocked:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
         if not result.valid:
@@ -1279,6 +1558,14 @@ async def _log_step(
         )
     if payload.no_contest and payload.status != "watched":
         raise HTTPException(422, detail="Log a no-contest film as watched")
+    if payload.use_tug_portal and (
+        run.game_type != TUG_OF_WAR
+        or (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) != 4
+        or payload.status != "watched"
+    ):
+        raise HTTPException(422, detail="A Tug Portal is only available for a watched F9 pull")
+    if payload.use_tug_portal and _last_step(session, run.id) is None:
+        raise HTTPException(409, detail="A Tug Portal cannot be used on the first film")
     rh_resources = (
         {key: run.rules_config[key] for key in rabbit_hole.RESOURCE_KEYS if key in run.rules_config}
         if run.game_type == rabbit_hole.RABBIT_HOLE and rabbit_hole.procedural(run.rules_config)
@@ -1294,6 +1581,15 @@ async def _log_step(
     if (run.rules_config or {}).get("table_mode") is True:
         extra_metadata["acting_participant_id"] = actor.id
     extra_metadata.update(settlement.transition_metadata or {})
+    if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 4:
+        territory, evidence = plane_verdict(session, movie.tmdb_id, run.rules_config)
+        extra_metadata["tug_territory"] = territory or "unknown"
+        extra_metadata["tug_territory_evidence"] = evidence
+        if _last_step(session, run.id) is not None and "tug_link" not in extra_metadata:
+            extra_metadata["tug_link"] = {
+                "kind": (run.rules_config or {}).get("tug_traversal", "shared_cast"),
+                "linked": bool(linked_metadata),
+            }
     transition_metadata = _without_server_keys(
         linked_metadata if linked_metadata is not None else payload.transition_metadata
     )
@@ -1374,6 +1670,7 @@ async def mark_step_watched(
     if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (
         2,
         3,
+        4,
     ):
         players = TugOfWarEngine(session, tmdb).team_players(run)
         team = step_turn_team(step, players)
@@ -1387,7 +1684,8 @@ async def mark_step_watched(
     await _settle_on_watch(session, run, step, payload, tmdb, omdb)
     step.status = "watched"
     if get_engine(run.game_type, session, tmdb).queue_policy == "slot" or (
-        run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 3
+        run.game_type == TUG_OF_WAR
+        and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (3, 4)
     ):
         step.logged_at = utcnow()
     step.watched_at = payload.watched_at or utcnow()
@@ -1430,6 +1728,7 @@ async def update_step(
         if run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (
             2,
             3,
+            4,
         ):
             players = TugOfWarEngine(session, tmdb).team_players(run)
             team = step_turn_team(step, players)
@@ -1445,7 +1744,8 @@ async def update_step(
                     )
         await _settle_on_watch(session, run, step, payload, tmdb, omdb)
         if get_engine(run.game_type, session, tmdb).queue_policy == "slot" or (
-            run.game_type == TUG_OF_WAR and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) == 3
+            run.game_type == TUG_OF_WAR
+            and (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (3, 4)
         ):
             step.logged_at = utcnow()
     if payload.user_notes is not None:
@@ -1537,6 +1837,11 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
             restored[LIVES_KEY] = min(restored[rabbit_hole.MAX_LIVES_KEY], restored[LIVES_KEY])
             run.rules_config = restored
         session.add(run)
+    if run.game_type == TUG_OF_WAR and metadata.get("tug_portals_before") is not None:
+        restored_rules = dict(run.rules_config or rules_before_revoke)
+        restored_rules["tug_portals"] = metadata["tug_portals_before"]
+        run.rules_config = restored_rules
+        session.add(run)
     reopen = collided and run.status == RUN_STATUS_COMPLETED
     remaining = _play_history(session, run.id)
     engine_class = ENGINE_REGISTRY.get(run.game_type)
@@ -1564,7 +1869,7 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
                 )
             )
             is None
-            if (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3)
+            if (run.rules_config or {}).get(TUG_RULES_VERSION_KEY) in (2, 3, 4)
             else leading_team(compute_scores(remaining, run.rules_config), run.rules_config) is None
         )
     ):
@@ -2207,7 +2512,9 @@ async def get_run_constraint(
             depth=len(history),
         )
         constraint = constraint.model_copy(
-            update={"rabbit_hole": rabbit_hole.RabbitHoleState.model_validate(public["rabbit_hole"])}
+            update={
+                "rabbit_hole": rabbit_hole.RabbitHoleState.model_validate(public["rabbit_hole"])
+            }
         )
     return constraint
 

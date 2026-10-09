@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import random
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC
 from typing import Any, ClassVar, Literal
@@ -13,6 +14,24 @@ from sqlmodel import select
 from app.engines.cinechain import CineChainEngine
 from app.engines.conditions import RunOutcome
 from app.engines.rulebook import RuleSection
+from app.engines.traversal import get_policy
+from app.engines.tug_planes import (
+    NEUTRAL,
+    build_plane,
+    check_balance,
+    graph_density,
+)
+from app.engines.tug_planes import (
+    TEAM_A as PLANE_TEAM_A,
+)
+from app.engines.tug_planes import (
+    TEAM_B as PLANE_TEAM_B,
+)
+from app.engines.tug_planes import (
+    deal as create_deal,
+)
+from app.facets.query import values_for
+from app.models.cache import CachedMovie
 from app.models.run import (
     LEGACY_ENGINE_VERSION,
     RUN_STATUS_ACTIVE,
@@ -23,7 +42,10 @@ from app.models.run import (
 )
 from app.models.user import User
 from app.schemas.discovery import DiscoveryCandidate
-from app.schemas.engine import FilterSpec, Preset, RuleField
+from app.schemas.engine import FilterSpec, Preset, RuleField, ValidationResult
+from app.services import feasibility
+from app.services.movie_filters import is_reality_eligible
+from app.utils.dates import parse_release_year
 
 TUG_OF_WAR = "tug_of_war"
 DIMENSION_ERA = "era"
@@ -47,6 +69,11 @@ SCORES_KEY = "tug_scores"
 PLAYERS_KEY = "tug_players"
 MOMENTUM_KEY = "tug_momentum"
 TUG_RULES_VERSION_KEY = "tug_rules_version"
+PLANE_KEY = "tug_plane"
+PLANE_SNAPSHOT_KEY = "tug_plane_snapshot"
+TUG_SEED_KEY = "tug_seed"
+TUG_DEAL_KEY = "tug_deal"
+TUG_PORTALS_KEY = "tug_portals"
 SEED_KEY = "seed"
 VICTORY_PREFIX = "Tug of War won by"
 
@@ -205,6 +232,59 @@ def _territory(
 def step_team(step: RunStep, rules: dict | None) -> TugTeam | None:
     """Which territory a film belongs to (None = neutral)."""
     return _territory(step.movie_release_year, step.movie_origin_country, rules)
+
+
+def plane_for_rules(rules: dict | None):
+    rules = rules or {}
+    snapshot = rules.get(PLANE_SNAPSHOT_KEY) or {}
+    plane_id = snapshot.get("id")
+    config = rules.get(PLANE_KEY) or {}
+    if not plane_id:
+        plane_id = (
+            ("geo_west_rest" if rules.get("dimension") == DIMENSION_GEOGRAPHY else "era_classic")
+            if rules.get("dimension")
+            else config.get("id", "genre_clusters")
+        )
+    params = snapshot.get("params") or config.get("params") or {}
+    return build_plane(plane_id, params)
+
+
+def _stored_territory(step: RunStep, rules: dict | None) -> TugTeam | None:
+    if (rules or {}).get(TUG_RULES_VERSION_KEY) == 4:
+        territory = (step.transition_metadata or {}).get("tug_territory")
+        return territory if territory in (TEAM_A, TEAM_B) else None
+    return step_team(step, rules)
+
+
+def plane_facts_for(session, movie_ids: Sequence[int], rules: dict | None) -> dict[int, dict]:
+    plane = plane_for_rules(rules)
+
+    def leaf_ids(query):
+        if query.facet:
+            return {query.facet}
+        return set().union(*(leaf_ids(child) for child in query.children()))
+
+    facet_ids = leaf_ids(plane.pole_a.query) | leaf_ids(plane.pole_b.query)
+    return values_for(session, movie_ids, facet_ids)
+
+
+def plane_verdict(
+    session, movie_id: int, rules: dict | None
+) -> tuple[str | None, dict[str, bool | None]]:
+    plane = plane_for_rules(rules)
+    facts = plane_facts_for(session, [movie_id], rules).get(movie_id, {})
+    evidence = {
+        TEAM_A: plane.pole_a.query.evaluate(facts),
+        TEAM_B: plane.pole_b.query.evaluate(facts),
+    }
+    if plane.unknown(facts):
+        return "unknown", evidence
+    territory = plane.territory(facts)
+    return territory or NEUTRAL, evidence
+
+
+def territory_of_step(step: RunStep, rules: dict | None) -> TugTeam | None:
+    return _stored_territory(step, rules)
 
 
 def _v1_compute_scores(steps: Sequence[RunStep], rules: dict | None) -> dict[str, int]:
@@ -371,6 +451,7 @@ def tally_v3(
     steps: Sequence[RunStep],
     rules: dict | None,
     players: dict[str, str | None] | None = None,
+    territory_of: Callable[[RunStep], str | None] | None = None,
 ) -> TugTally:
     """A round gives each team one pull; only completed rounds can settle victory."""
     rules = rules or {}
@@ -394,7 +475,9 @@ def tally_v3(
         if puller is None:
             continue
         opponent: TugTeam = TEAM_B if puller == TEAM_A else TEAM_A
-        territory = step_team(step, rules)
+        territory = (territory_of or (lambda item: step_team(item, rules)))(step)
+        if territory == NEUTRAL:
+            territory = None
         multiplier = 2 if banks[puller] else 1
         if territory is None or (territory != puller and not config["steal_enabled"]):
             kind: TugEffect = "neutral"
@@ -461,8 +544,10 @@ def tally(
     rules: dict | None,
     players: dict[str, str | None] | None = None,
 ) -> TugTally:
-    if (rules or {}).get(TUG_RULES_VERSION_KEY) == 3:
-        return tally_v3(steps, rules, players)
+    version = (rules or {}).get(TUG_RULES_VERSION_KEY)
+    if version in (3, 4):
+        territory_of = (lambda step: _stored_territory(step, rules)) if version == 4 else None
+        return tally_v3(steps, rules, players, territory_of)
     return tally_v2(steps, rules, players)
 
 
@@ -472,7 +557,7 @@ def compute_scores(steps: Sequence[RunStep], rules: dict | None) -> dict[str, in
     version = rules.get(TUG_RULES_VERSION_KEY)
     if version in (None, 1):
         return _v1_compute_scores(steps, rules)
-    if version not in (2, 3):
+    if version not in (2, 3, 4):
         raise ValueError(f"Unsupported Tug rules version: {version}")
     players = rules.get(PLAYERS_KEY) or {}
     return tally(steps, rules, players).scores
@@ -626,17 +711,27 @@ class TugOfWarEngine(CineChainEngine):
         config = tug_config(rules)
         state = (rules or {}).get(MOMENTUM_KEY) or {}
         legacy = (rules or {}).get(TUG_RULES_VERSION_KEY) == 1
-        v3 = (rules or {}).get(TUG_RULES_VERSION_KEY, 3) == 3
+        v3 = (rules or {}).get(TUG_RULES_VERSION_KEY, 3) in (3, 4)
+        snapshot = (rules or {}).get(PLANE_SNAPSHOT_KEY) or {}
+        poles = snapshot.get("poles") or {}
+        team_a_label = (poles.get(TEAM_A) or {}).get("label")
+        team_b_label = (poles.get(TEAM_B) or {}).get("label")
         return {
             **super().rulebook_values(rules),
             **config,
             "effective_target": state.get("effective_target", config["target_lead"]),
-            "territory_a": f"pre-{config['era_a_before']}"
-            if config["dimension"] == DIMENSION_ERA
-            else "US and Europe",
-            "territory_b": f"post-{config['era_b_after']}"
-            if config["dimension"] == DIMENSION_ERA
-            else "the rest of the world",
+            "territory_a": team_a_label
+            or (
+                f"pre-{config['era_a_before']}"
+                if config["dimension"] == DIMENSION_ERA
+                else "US and Europe"
+            ),
+            "territory_b": team_b_label
+            or (
+                f"post-{config['era_b_after']}"
+                if config["dimension"] == DIMENSION_ERA
+                else "the rest of the world"
+            ),
             "tug_first_turn": "Log shared-cast films."
             if legacy
             else "Each team pulls once per round. Check for a win after both pulls."
@@ -681,7 +776,7 @@ class TugOfWarEngine(CineChainEngine):
 
     def coach_line(self, run: Run, steps: Sequence[RunStep]) -> str | None:
         rules = run.rules_config or {}
-        if rules.get(TUG_RULES_VERSION_KEY) not in (2, 3):
+        if rules.get(TUG_RULES_VERSION_KEY) not in (2, 3, 4):
             return None
         players = self.team_players(run)
         result = tally(steps, rules, players)
@@ -707,6 +802,7 @@ class TugOfWarEngine(CineChainEngine):
     capabilities: ClassVar[list[str]] = [
         *(cap for cap in CineChainEngine.capabilities if cap != "modifiers"),
         "tug_of_war",
+        "tug_draft",
     ]
     modifier_scopes = frozenset({"film", "sequence"})
 
@@ -714,8 +810,20 @@ class TugOfWarEngine(CineChainEngine):
         problems = super().validate_rules_config(rules)
         rules = rules or {}
         dimension = rules.get("dimension", DEFAULT_DIMENSION)
-        if dimension not in DIMENSIONS:
+        plane_choice = rules.get(PLANE_KEY)
+        if plane_choice is None and dimension not in DIMENSIONS:
             problems.append(f"dimension must be one of: {', '.join(DIMENSIONS)}")
+        if plane_choice is not None:
+            if not isinstance(plane_choice, dict) or not isinstance(plane_choice.get("id"), str):
+                problems.append("tug_plane must include a plane id")
+            else:
+                try:
+                    plane = build_plane(plane_choice["id"], plane_choice.get("params") or {})
+                    traversal = rules.get("tug_traversal", plane.default_traversal)
+                    if traversal not in plane.allowed_traversals:
+                        problems.append("tug_traversal is not allowed for the selected plane")
+                except (TypeError, ValueError) as exc:
+                    problems.append(str(exc))
         lead = rules.get("target_lead", DEFAULT_TARGET_LEAD)
         if isinstance(lead, bool) or not isinstance(lead, int) or not 2 <= lead <= MAX_TARGET_LEAD:
             problems.append(f"target_lead must be a whole number from 2 to {MAX_TARGET_LEAD}")
@@ -755,17 +863,163 @@ class TugOfWarEngine(CineChainEngine):
 
     def prepare_rules_config(self, rules: dict) -> dict:
         config = tug_config(rules)
+        plane_config = rules.get(PLANE_KEY)
+        if plane_config is None:
+            return {
+                **rules,
+                "dimension": config["dimension"],
+                "target_lead": config["target_lead"],
+                TUG_RULES_VERSION_KEY: 3,
+                "steal_enabled": config["steal_enabled"],
+                "momentum_cap": config["momentum_cap"],
+                "sudden_death_after": config["sudden_death_after"],
+                "sudden_death_every": config["sudden_death_every"],
+                "sudden_death_enabled": config["sudden_death_enabled"],
+            }
+        plane_id = plane_config["id"]
+        params = plane_config.get("params") or {}
+        plane = build_plane(plane_id, params)
         return {
             **rules,
             "dimension": config["dimension"],
             "target_lead": config["target_lead"],
-            TUG_RULES_VERSION_KEY: 3,
+            PLANE_KEY: {"id": plane.id, "params": plane.defaults},
+            "tug_traversal": rules.get("tug_traversal", plane.default_traversal),
+            TUG_RULES_VERSION_KEY: 4,
             "steal_enabled": config["steal_enabled"],
             "momentum_cap": config["momentum_cap"],
             "sudden_death_after": config["sudden_death_after"],
             "sudden_death_every": config["sudden_death_every"],
             "sudden_death_enabled": config["sudden_death_enabled"],
         }
+
+    async def prepare_run(self, rules: dict, user_id: str) -> dict:
+        rules = dict(rules)
+        if rules.get(TUG_RULES_VERSION_KEY) != 4:
+            return rules
+        plane_config = rules.get(PLANE_KEY) or {}
+        plane = build_plane(plane_config.get("id", "genre_clusters"), plane_config.get("params"))
+        params = plane.defaults
+        selected_traversal = rules.get("tug_traversal", plane.default_traversal)
+        movies = feasibility.movies(self.session)
+        eligible = {
+            movie_id: movie for movie_id, movie in movies.items() if is_reality_eligible(movie)
+        }
+        density = (
+            graph_density(self.session, list(eligible), traversal=selected_traversal)
+            if get_policy(selected_traversal).graph
+            else None
+        )
+        balance = check_balance(
+            self.session,
+            plane,
+            eligible,
+            bridge_density=density,
+            traversal=selected_traversal,
+        )
+        selected_traversal = balance["traversal"]
+        rules[PLANE_KEY] = {"id": plane.id, "params": params}
+        rules["tug_traversal"] = selected_traversal
+        rules[PLANE_SNAPSHOT_KEY] = plane.snapshot(params, selected_traversal, balance)
+        seed = random.SystemRandom().randrange(1, 2**63)
+        rules[TUG_SEED_KEY] = seed
+        rules[TUG_PORTALS_KEY] = {"remaining": 1}
+        if selected_traversal == "draft":
+            values = plane_facts_for(self.session, list(eligible), rules)
+            buckets = {PLANE_TEAM_A: [], PLANE_TEAM_B: [], NEUTRAL: []}
+            for movie_id in eligible:
+                territory = plane.territory(values.get(movie_id, {}))
+                if territory in buckets:
+                    buckets[territory].append(movie_id)
+            rules[TUG_DEAL_KEY] = create_deal(seed, buckets)
+        return rules
+
+    @classmethod
+    def public_rules(cls, rules: dict | None, run: Run) -> dict[str, Any]:
+        result = dict(rules or {})
+        if result.get(TUG_RULES_VERSION_KEY) == 4 and result.get(PLANE_SNAPSHOT_KEY):
+            return result
+        legacy_id = (
+            "geo_west_rest" if result.get("dimension") == DIMENSION_GEOGRAPHY else "era_classic"
+        )
+        plane = build_plane(legacy_id)
+        result[PLANE_SNAPSHOT_KEY] = plane.snapshot(
+            plane.defaults,
+            "shared_cast",
+            {"legacy": True},
+        )
+        return result
+
+    async def validate_primary(
+        self,
+        from_movie_id: int,
+        to_movie_id: int,
+        cast_limit: int | None = None,
+        rules: dict | None = None,
+        previous_transition: dict | None = None,
+    ) -> ValidationResult:
+        if (rules or {}).get(TUG_RULES_VERSION_KEY) != 4:
+            return await super().validate_primary(
+                from_movie_id, to_movie_id, cast_limit, rules, previous_transition
+            )
+        traversal = get_policy((rules or {}).get("tug_traversal"))
+        if traversal.key == "draft" and to_movie_id not in {
+            entry["movie_id"] for entry in (rules or {}).get(TUG_DEAL_KEY, [])
+        }:
+            return ValidationResult(valid=False, reason="Film is not in this round's draft deal")
+        return await traversal.validate(
+            self,
+            from_movie_id,
+            to_movie_id,
+            cast_limit,
+            rules,
+            previous_transition,
+            None,
+        )
+
+    async def validate_attribute_link(
+        self, traversal: str, from_movie_id: int, to_movie_id: int, rules: dict | None
+    ) -> ValidationResult:
+        earlier = self.session.get(CachedMovie, from_movie_id)
+        later = self.session.get(CachedMovie, to_movie_id)
+        if earlier is None or later is None:
+            return ValidationResult(valid=False, reason="Cached film details are incomplete")
+        if traversal == "genre_overlap":
+            from_genres = set(earlier.genre_ids or [])
+            to_genres = set(later.genre_ids or [])
+            shared = sorted(from_genres & to_genres)
+            valid = bool(shared)
+            evidence = {"genre_ids": shared}
+        elif traversal == "decade_adjacent":
+            year_a = parse_release_year(earlier.release_date)
+            year_b = parse_release_year(later.release_date)
+            valid = (
+                year_a is not None and year_b is not None and abs(year_a // 10 - year_b // 10) <= 1
+            )
+            evidence = {"release_years": [year_a, year_b]}
+        elif traversal == "language":
+            valid = bool(
+                earlier.original_language and earlier.original_language == later.original_language
+            )
+            evidence = {"language": earlier.original_language}
+        elif traversal == "shared_trope":
+            from app.facets.tropes import trusted_tropes
+
+            shared = sorted(
+                set(trusted_tropes(self.session, [from_movie_id]).get(from_movie_id, []))
+                & set(trusted_tropes(self.session, [to_movie_id]).get(to_movie_id, []))
+            )
+            valid = bool(shared)
+            evidence = {"tropes": shared}
+        else:
+            return ValidationResult(
+                valid=False, reason=f"Unsupported attribute traversal: {traversal}"
+            )
+        return ValidationResult(
+            valid=bool(valid),
+            reason=None if valid else f"No {traversal.replace('_', ' ')} link found",
+            mechanic={"tug_link": {"kind": traversal, **evidence}} if valid else None,
+        )
 
     def team_players(self, run: Run) -> dict[str, str | None]:
         """Team A = owner; Team B = the first other participant to join."""
@@ -783,7 +1037,7 @@ class TugOfWarEngine(CineChainEngine):
         players = self.team_players(run)
         scores = compute_scores(steps, {**rules, PLAYERS_KEY: players})
         state = {**rules, SCORES_KEY: scores, PLAYERS_KEY: players}
-        if rules.get(TUG_RULES_VERSION_KEY) in (2, 3):
+        if rules.get(TUG_RULES_VERSION_KEY) in (2, 3, 4):
             result = tally(steps, rules, players)
             state[MOMENTUM_KEY] = {
                 "streak_team": result.streak[0],
@@ -794,7 +1048,7 @@ class TugOfWarEngine(CineChainEngine):
                 "next_team": result.next_team,
                 "pulls": [asdict(pull) for pull in result.pulls],
             }
-            if rules.get(TUG_RULES_VERSION_KEY) == 3:
+            if rules.get(TUG_RULES_VERSION_KEY) in (3, 4):
                 state[MOMENTUM_KEY].update(
                     {
                         "rope": result.rope,
@@ -804,6 +1058,8 @@ class TugOfWarEngine(CineChainEngine):
                         "round_complete": result.round_complete,
                     }
                 )
+            if rules.get(TUG_RULES_VERSION_KEY) == 4:
+                state[TUG_DEAL_KEY] = self._next_draft_deal(rules, steps)
         if any(rules.get(key) != value for key, value in state.items()):
             run.rules_config = state
             self.session.add(run)
@@ -817,7 +1073,7 @@ class TugOfWarEngine(CineChainEngine):
         if run.engine_version <= LEGACY_ENGINE_VERSION or run.status != RUN_STATUS_ACTIVE:
             return None
         rules = run.rules_config or {}
-        if rules.get(TUG_RULES_VERSION_KEY) in (2, 3):
+        if rules.get(TUG_RULES_VERSION_KEY) in (2, 3, 4):
             result = tally(steps, rules, self.team_players(run))
             winning_team = winner(result)
         else:
@@ -844,15 +1100,91 @@ class TugOfWarEngine(CineChainEngine):
         previous_transition: dict | None = None,
         history: Sequence[RunStep] | None = None,
     ) -> list[DiscoveryCandidate]:
-        candidates = await super().discover_candidates(
-            frontier_movie_id,
-            mode,
-            cast_limit,
-            rules,
-            previous_transition,
-            history,
-        )
+        if (rules or {}).get(TUG_RULES_VERSION_KEY) == 4 and not get_policy(
+            (rules or {}).get("tug_traversal")
+        ).graph:
+            candidates = await self._discover_attribute_pool(frontier_movie_id, rules, history)
+        else:
+            candidates = await super().discover_candidates(
+                frontier_movie_id,
+                mode,
+                cast_limit,
+                rules,
+                previous_transition,
+                history,
+            )
         return self.annotate_candidates(candidates, rules, history)
+
+    async def _discover_attribute_pool(
+        self, frontier_movie_id: int, rules: dict | None, history: Sequence[RunStep] | None
+    ) -> list[DiscoveryCandidate]:
+        rules = rules or {}
+        traversal = get_policy(rules.get("tug_traversal"))
+        source_ids = (
+            [entry["movie_id"] for entry in rules.get(TUG_DEAL_KEY, [])]
+            if traversal.key == "draft"
+            else list(feasibility.movies(self.session))
+        )
+        visited = {step.movie_id for step in history or []}
+        output: list[DiscoveryCandidate] = []
+        movies = feasibility.movies(self.session)
+        for movie_id in source_ids:
+            movie = movies.get(movie_id)
+            if (
+                movie is None
+                or movie_id == frontier_movie_id
+                or movie_id in visited
+                or not is_reality_eligible(movie)
+                or (movie.runtime is not None and movie.runtime < rules.get("min_runtime", 0))
+            ):
+                continue
+            link = await self.validate_primary(
+                frontier_movie_id, movie_id, rules=rules, previous_transition=None
+            )
+            if not link.valid:
+                continue
+            output.append(
+                DiscoveryCandidate(
+                    movie_id=movie_id,
+                    title=movie.title,
+                    poster_path=movie.poster_path,
+                    release_year=parse_release_year(movie.release_date),
+                    origin_country=movie.origin_country,
+                    genre_ids=movie.genre_ids or [],
+                    popularity=movie.popularity,
+                    original_language=movie.original_language,
+                    rating=movie.vote_average,
+                    runtime=movie.runtime,
+                )
+            )
+            if len(output) >= 500:
+                break
+        return output
+
+    def _next_draft_deal(self, rules: dict, steps: Sequence[RunStep]) -> list[dict]:
+        if rules.get("tug_traversal") != "draft":
+            return rules.get(TUG_DEAL_KEY, [])
+        movies = feasibility.movies(self.session)
+        plane = plane_for_rules(rules)
+        ids = list(movies)
+        facts = plane_facts_for(self.session, ids, rules)
+        buckets = {PLANE_TEAM_A: [], PLANE_TEAM_B: [], NEUTRAL: []}
+        watched_ids = {
+            step.movie_id
+            for step in steps
+            if step.status == "watched" and not (step.transition_metadata or {}).get(SEED_KEY)
+        }
+        for movie_id, movie in movies.items():
+            if movie_id in watched_ids or not is_reality_eligible(movie):
+                continue
+            territory = plane.territory(facts.get(movie_id, {}))
+            if territory in buckets:
+                buckets[territory].append(movie_id)
+        pulls = sum(
+            step.status == "watched" and not (step.transition_metadata or {}).get(SEED_KEY)
+            for step in steps
+        )
+        return create_deal((rules.get(TUG_SEED_KEY, 0) + pulls) % (2**63), buckets)
 
     def annotate_candidates(
         self,
@@ -862,12 +1194,22 @@ class TugOfWarEngine(CineChainEngine):
     ) -> list[DiscoveryCandidate]:
         candidates = super().annotate_candidates(candidates, rules, history)
         rules = rules or {}
-        if rules.get(TUG_RULES_VERSION_KEY) not in (2, 3):
+        if rules.get(TUG_RULES_VERSION_KEY) not in (2, 3, 4):
             return candidates
         players = rules.get(PLAYERS_KEY) or {}
         result = tally(history or [], rules, players)
         for candidate in candidates:
-            territory = _territory(candidate.release_year, candidate.origin_country, rules)
+            if rules.get(TUG_RULES_VERSION_KEY) == 4:
+                territory, evidence = plane_verdict(self.session, candidate.movie_id, rules)
+                candidate.tug_territory = (
+                    territory if territory in (PLANE_TEAM_A, PLANE_TEAM_B, NEUTRAL) else None
+                )
+                candidate.tug_territory_evidence = evidence
+                if candidate.tug_territory is None:
+                    continue
+                territory = None if candidate.tug_territory == NEUTRAL else candidate.tug_territory
+            else:
+                territory = _territory(candidate.release_year, candidate.origin_country, rules)
             effect, points = preview_pull(result.next_team, territory, result, rules)
             candidate.tug_effect = effect
             candidate.tug_points = points

@@ -89,10 +89,17 @@ class EngineMeta(BaseModel):
     modifiers: list[dict[str, Any]]
     rabbit_tiers: list[dict[str, Any]] | None = None
     warning_window: int | None = None
+    tug_planes: list[dict[str, Any]] | None = None
 
 
 class RabbitHolePreviewRequest(BaseModel):
     rules: dict[str, Any] = Field(default_factory=dict)
+
+
+class TugBalanceRequest(BaseModel):
+    plane: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    traversal: str | None = None
 
 
 class RulebookOverlay(BaseModel):
@@ -137,6 +144,7 @@ def list_engines(
     base = get_settings()
     overrides = settings_repo.get_overrides(session)
     from app.engines.modifier_registry import param_values, registry
+    from app.engines.tug_planes import catalogue as tug_plane_catalogue
 
     return [
         EngineMeta(
@@ -174,6 +182,7 @@ def list_engines(
             warning_window=(
                 rabbit_hole.WARNING_WINDOW if cls.game_type == rabbit_hole.RABBIT_HOLE else None
             ),
+            tug_planes=(tug_plane_catalogue() if cls.game_type == "tug_of_war" else None),
             tagline=cls.tagline,
             tags=cls.tags,
             rulebook=render(
@@ -208,6 +217,68 @@ def list_engines(
         )
         for cls in ENGINE_REGISTRY.values()
     ]
+
+
+@router.post("/engine/tug/balance")
+def tug_balance(
+    payload: TugBalanceRequest,
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    import random
+
+    from app.engines.tug_planes import build_plane, check_balance, graph_density
+    from app.services import feasibility
+    from app.services.movie_filters import is_reality_eligible
+
+    movies = feasibility.movies(session)
+    eligible = {movie_id: movie for movie_id, movie in movies.items() if is_reality_eligible(movie)}
+    if payload.plane == "random":
+        from app.engines.traversal import get_policy
+        from app.engines.tug_planes import NEW_PLANE_IDS
+
+        options = []
+        densities = {}
+        for plane_id in NEW_PLANE_IDS:
+            plane = build_plane(plane_id)
+            traversal = payload.traversal or plane.default_traversal
+            if get_policy(traversal).graph and traversal not in densities:
+                densities[traversal] = graph_density(
+                    session, list(eligible), traversal=traversal
+                )
+            density = densities.get(traversal)
+            result = check_balance(
+                session, plane, eligible, bridge_density=density, traversal=traversal
+            )
+            if result["balanced"] and result["traversal_valid"]:
+                options.append({"plane": plane_id, **result})
+        if not options:
+            raise HTTPException(
+                status_code=422, detail="No Tug plane currently meets the balance thresholds."
+            )
+        return random.choice(options)
+    try:
+        plane = build_plane(payload.plane, payload.params)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from app.engines.traversal import get_policy
+
+    traversal = payload.traversal or plane.default_traversal
+    density = (
+        graph_density(session, list(eligible), traversal=traversal)
+        if get_policy(traversal).graph
+        else None
+    )
+    return {
+        "plane": plane.id,
+        **check_balance(
+            session,
+            plane,
+            eligible,
+            bridge_density=density,
+            traversal=traversal,
+        ),
+    }
 
 
 @router.post("/engine/rabbit-hole/preview")
@@ -250,8 +321,12 @@ def run_rulebook(
         if run.game_type == rabbit_hole.RABBIT_HOLE
         else None
     )
-    render_rules = engine.public_rules(rules, run, depth=depth) if depth is not None else engine.public_rules(rules, run)
-    if run.game_type == "tug_of_war" and rules.get("tug_rules_version") not in (2, 3):
+    render_rules = (
+        engine.public_rules(rules, run, depth=depth)
+        if depth is not None
+        else engine.public_rules(rules, run)
+    )
+    if run.game_type == "tug_of_war" and rules.get("tug_rules_version") not in (2, 3, 4):
         render_rules = {**rules, "tug_rules_version": 1}
     values = engine.rulebook_values(render_rules)
     if run.engine_version <= 1:

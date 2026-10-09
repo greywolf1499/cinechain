@@ -666,6 +666,8 @@ export function useCreateStep(runId: string) {
 			/** Rotten Tomatoes Split: the household's joint rating (1-100). */
 			household_score?: number;
 			no_contest?: boolean;
+			/** Tug of War: spend a Portal for one unlinked hop into known neutral territory. */
+			use_tug_portal?: boolean;
 			skip_overlays?: string[];
 		}) => api.post<RunStep>(`/runs/${runId}/steps`, { ...payload, ...actingFields(runId) }),
 		onSuccess: (step) => {

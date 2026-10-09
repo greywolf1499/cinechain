@@ -70,6 +70,10 @@ class DiscoveryCandidate(BaseModel):
     tug_effect: Literal["home", "invasion", "neutral", "sudden_neutral"] | None = None
     tug_points: int | None = None
     tug_breaks_streak: bool = False
+    tug_territory: Literal["team_a", "team_b", "neutral"] | None = None
+    tug_territory_evidence: dict[str, bool | None] = {}
+    tug_link: dict[str, object] | None = None
+    tug_portal_available: bool = False
 
     @computed_field
     @property
@@ -91,3 +95,4 @@ class TugReachable(BaseModel):
 class TugLookahead(BaseModel):
     movies: dict[int, TugReachable]
     partial: bool = False
+    portal_available: bool | None = None

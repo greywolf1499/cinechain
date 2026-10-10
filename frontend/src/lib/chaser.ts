@@ -1,21 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
-import { api } from "./api";
+import { useEngines } from "./queries";
+import type { RulesConfig } from "../types/api";
 
-interface ChaserCatalogue {
-  named_variants: {
-    chaser_trigger: { query: { any: [{ facet: "runtime"; op: "ge"; value: number }, { facet: "genre"; op: "contains"; value: number }] } };
-  };
-}
-
-export function useNeedsChaser(runtime: number | null | undefined, genreIds: number[] | null | undefined) {
-  const catalogue = useQuery({
-    queryKey: ["facets"],
-    queryFn: () => api.get<ChaserCatalogue>("/facets"),
-    staleTime: 5 * 60 * 1000,
-  });
-  const leaves = catalogue.data?.named_variants.chaser_trigger.query.any;
+export function useNeedsChaser(rules: RulesConfig) {
+  const engines = useEngines();
+  const settings = engines.data?.find((engine) => engine.vibe)?.vibe;
+  const vibe = rules.vibe_state;
+  const comfort = rules.modifiers?.find((modifier) => modifier.key === "vibe_control")?.params.comfort;
+  const setpoint = settings?.setpoints[
+    comfort === "gentle" || comfort === "brave" ? comfort : "balanced"
+  ];
   return {
-    heavy: !!leaves && ((runtime != null && runtime >= leaves[0].value) || !!genreIds?.includes(leaves[1].value)),
-    error: catalogue.error,
+    heavy:
+      settings !== undefined &&
+      (vibe?.chaser_recommended === true ||
+        (vibe?.rolling_load != null && setpoint !== undefined && vibe.rolling_load > setpoint)),
+    error: engines.error,
   };
 }

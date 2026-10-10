@@ -1,21 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useNeedsChaser } from "../lib/chaser";
-import { useMovieDetail } from "../lib/queries";
-import type { RunStep } from "../types/api";
+import type { RulesConfig, RunStep } from "../types/api";
 
 /** 🍺 Grab a Chaser: use the catalogue's heavy-film rule to offer a light palate cleanser.
  * An inline action button stays while the heavy film is the frontier; a toast pops up when the
  * film is logged during this visit. */
 export default function ChaserPrompt({
   frontier,
+  rules,
   onGrab,
 }: {
   frontier: RunStep;
+  rules: RulesConfig;
   onGrab: () => void;
 }) {
-  const { movie } = useMovieDetail(frontier.movie_id);
-  const { heavy, error } = useNeedsChaser(movie?.runtime, movie?.genre_ids);
+  const { heavy, error } = useNeedsChaser(rules);
   const initialStepId = useRef(frontier.id);
   const [dismissedStepId, setDismissedStepId] = useState<string | null>(null);
   const loggedThisVisit = frontier.id !== initialStepId.current;
@@ -50,7 +50,7 @@ export default function ChaserPrompt({
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-2">
             <p className="text-sm text-zinc-200">
-              <span className="font-semibold">{frontier.movie_title}</span> was a heavy one. Cleanse the palate?
+              Recent films have run above your comfort level. Pick something lighter?
             </p>
             <button
               type="button"

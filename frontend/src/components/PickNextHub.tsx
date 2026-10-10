@@ -1349,6 +1349,11 @@ function CandidateCard({
             />
           )}
           <p className="text-[10px] text-zinc-500">{candidate.release_year ?? "—"}</p>
+          {candidate.vibe_load != null && (
+            <span className="mt-1 inline-flex w-fit rounded-full bg-fuchsia-950 px-2 py-0.5 text-[9px] font-medium text-fuchsia-200">
+              🎚️ Film load {Math.round(candidate.vibe_load * 100)}%
+            </span>
+          )}
           <RatingBadges ratings={ratings} movieId={candidate.movie_id} />
           <div className="mt-1">
             <CanonBadgeList badges={badges} />

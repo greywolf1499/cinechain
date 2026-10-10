@@ -353,16 +353,28 @@ def test_a_handicap_fetches_the_detail_it_needs(client, monkeypatch):
 
 
 def test_the_chaser_trigger_and_qualification():
-    assert pool_options.needs_chaser(135, []) and pool_options.needs_chaser(90, [DRAMA])
-    assert not pool_options.needs_chaser(134, [COMEDY]) and not pool_options.needs_chaser(
-        None, None
+    medians = {"en": 100.0}
+    assert pool_options.needs_chaser([0.8, 0.7], 0.55)
+    assert not pool_options.needs_chaser([], 0.55)
+    assert not pool_options.needs_chaser([0.5, 0.55], 0.55)
+    assert pool_options.is_chaser(0.4, 90, "en", medians, 0.55)
+    assert not pool_options.is_chaser(0.401, 90, "en", medians, 0.55)
+    assert not pool_options.is_chaser(0.3, 100, "en", medians, 0.55)
+    assert not pool_options.is_chaser(None, 90, "en", medians, 0.55)
+
+
+def _patch_candidate_vibe(monkeypatch, loads):
+    async def candidate_loads(_session, movie_ids):
+        return {movie_id: loads[movie_id] for movie_id in movie_ids if movie_id in loads}
+
+    monkeypatch.setattr("app.api.routes_runs.vibe_controller.candidate_loads", candidate_loads)
+    monkeypatch.setattr(
+        "app.api.routes_runs.vibe_controller.cached_runtime_medians",
+        lambda _session: {"en": 100.0},
     )
-    assert pool_options.is_chaser(95, [COMEDY]) and pool_options.is_chaser(60, [ANIMATION, DRAMA])
-    assert not pool_options.is_chaser(96, [COMEDY]) and not pool_options.is_chaser(90, [DRAMA])
-    assert not pool_options.is_chaser(None, [COMEDY]) and not pool_options.is_chaser(0, [COMEDY])
 
 
-def test_chaser_mode_keeps_only_short_lighthearted_films(client):
+def test_chaser_mode_uses_load_and_language_relative_runtime(client, monkeypatch):
     universe = {
         1: film("Heavy Drama", runtime=170, genres=[DRAMA]),
         2: film("Quick Comedy", runtime=90, genres=[COMEDY]),
@@ -372,6 +384,10 @@ def test_chaser_mode_keeps_only_short_lighthearted_films(client):
         6: film("Exactly 95", runtime=95, genres=[COMEDY]),
         7: film("Action Short", runtime=80, genres=[28]),
     }
+    _patch_candidate_vibe(
+        monkeypatch,
+        {2: 0.3, 3: 0.4, 4: 0.2, 5: 0.2, 6: 0.4, 7: 0.35},
+    )
     run_id = make_run(client)
     with respx.mock:
         mock_universe(universe)
@@ -386,16 +402,17 @@ def test_chaser_mode_keeps_only_short_lighthearted_films(client):
             f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1, "chaser": "true"}
         ).json()
     assert {2, 3, 4, 5, 6, 7} <= plain
-    assert {c["movie_id"] for c in chaser} == {2, 3, 6}
-    assert all(0 < c["runtime"] <= 95 for c in chaser)  # the runtime came from the detail fetch
+    assert {c["movie_id"] for c in chaser} == {2, 3, 5, 6, 7}
+    assert all(c["vibe_load"] <= 0.4 and c["runtime"] < 100 for c in chaser)
 
 
-def test_the_chaser_also_applies_to_suggestions(client):
+def test_the_chaser_also_applies_to_suggestions(client, monkeypatch):
     universe = {
         1: film("Heavy Drama", runtime=170, genres=[DRAMA]),
         2: film("Quick Comedy", runtime=90, genres=[COMEDY]),
         3: film("Long Comedy", runtime=120, genres=[COMEDY]),
     }
+    _patch_candidate_vibe(monkeypatch, {2: 0.3, 3: 0.8})
     run_id = make_run(client)
     with respx.mock:
         mock_universe(universe)
@@ -404,6 +421,27 @@ def test_the_chaser_also_applies_to_suggestions(client):
             f"/api/runs/{run_id}/suggestions", params={"chaser": "true"}
         ).json()
     assert [s["movie_id"] for s in suggestions] == [2]
+
+
+def test_strict_vibe_overlay_blocks_only_known_heavy_films_while_fatigued(client, monkeypatch):
+    universe = {
+        1: film("Heavy Anchor", runtime=120),
+        2: film("Heavy Candidate", runtime=110),
+        3: film("Light Candidate", runtime=90),
+        4: film("Unknown Candidate", runtime=100),
+    }
+    run_id = make_run(
+        client,
+        modifiers=[{"key": "vibe_control", "params": {"mode": "strict", "comfort": "balanced"}}],
+    )
+    _patch_candidate_vibe(monkeypatch, {1: 0.9, 2: 0.8, 3: 0.5})
+    with respx.mock:
+        mock_universe(universe)
+        log(client, run_id, 1)
+        pool = client.get(f"/api/runs/{run_id}/discover", params={"frontier_movie_id": 1}).json()
+
+    assert {candidate["movie_id"] for candidate in pool} == {3, 4}
+    assert next(candidate for candidate in pool if candidate["movie_id"] == 4)["vibe_load"] is None
 
 
 # --- The Underdog B-Side flip ---
@@ -439,13 +477,14 @@ def test_underdog_sorts_by_ascending_popularity_and_drops_dead_entries(client):
     )
 
 
-def test_underdog_and_chaser_combine(client):
+def test_underdog_and_chaser_combine(client, monkeypatch):
     universe = {
         1: film("Anchor", runtime=150, genres=[DRAMA]),
         2: film("Popular Comedy", runtime=90, genres=[COMEDY], popularity=90.0),
         3: film("Obscure Comedy", runtime=88, genres=[COMEDY], popularity=2.0),
         4: film("Obscure Drama", runtime=88, genres=[DRAMA], popularity=1.5),
     }
+    _patch_candidate_vibe(monkeypatch, {2: 0.3, 3: 0.2, 4: 0.8})
     run_id = make_run(client)
     with respx.mock:
         mock_universe(universe)

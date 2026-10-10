@@ -41,6 +41,11 @@ class CastParams(Params):
     enabled: bool = True
 
 
+class VibeControlParams(Params):
+    mode: Literal["soft", "strict"] = "soft"
+    comfort: Literal["gentle", "balanced", "brave"] = "balanced"
+
+
 @dataclass(frozen=True)
 class ModCtx:
     params: BaseModel
@@ -173,11 +178,52 @@ def legacy_entries() -> dict[str, ModifierSpec]:
     return {entry.key: entry for entry in entries}
 
 
+class VibeControlModifier(LegacyModifier):
+    def __init__(self) -> None:
+        super().__init__(
+            "vibe_control",
+            "Vibe control",
+            "🎚️",
+            "Track recent film load and optionally prefer lighter choices.",
+            "film",
+            frozenset({"runtime", "overview_embedding"}),
+            VibeControlParams,
+            RuleSection(
+                "Keep the film load near your selected comfort level.",
+                [
+                    "Recent films shape a rolling load score.",
+                    "Soft mode puts lighter options first.",
+                ],
+                ["Strict mode blocks films above the setpoint only while fatigued."],
+                ["Unknown film facts stay unverified and are not blocked."],
+                ["Choose Gentle, Balanced or Brave to set the comfort level."],
+                [],
+            ),
+        )
+
+    @property
+    def overlay(self) -> bool:
+        return True
+
+    def compatible(self, engine: type[BaseChallengeEngine]) -> str | None:
+        return None
+
+    def check(self, ctx: ModCtx, film: CachedMovie) -> Verdict:
+        return Verdict()
+
+    def progress(self, ctx: ModCtx) -> dict[str, Any] | None:
+        return None
+
+    def outcome(self, ctx: ModCtx) -> RunOutcome | None:
+        return None
+
+
 def registry() -> dict[str, ModifierSpec]:
     return {
         **legacy_entries(),
         **{spec.key: spec for spec in legacy_sequence_entries()},
         **{spec.key: spec for spec in TITLE_MODIFIERS},
+        "vibe_control": VibeControlModifier(),
     }
 
 

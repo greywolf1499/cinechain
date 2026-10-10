@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 import random
 import time
@@ -110,7 +111,15 @@ from app.schemas.runs import (
     RunUpdate,
     StepValidateRequest,
 )
-from app.services import blind_fork, bounties, cache_repo, feasibility, pool_options
+from app.services import (
+    blind_fork,
+    bounties,
+    cache_repo,
+    embeddings,
+    feasibility,
+    pool_options,
+    vibe_controller,
+)
 from app.services.bridge_paths import parse_countries
 from app.services.movie_filters import is_reality_eligible, rating_of
 from app.services.tmdb import TMDBClient
@@ -450,7 +459,7 @@ async def tug_portal_candidates(
         key=lambda movie: (movie.popularity or 0, movie.tmdb_id),
         reverse=True,
     )
-    traversal = (rules.get("tug_traversal") or "shared_cast")
+    traversal = rules.get("tug_traversal") or "shared_cast"
     output: list[DiscoveryCandidate] = []
     deadline = time.monotonic() + 1.5
     for movie in candidates:
@@ -459,7 +468,10 @@ async def tug_portal_candidates(
         territory, evidence = plane_verdict(session, movie.tmdb_id, rules)
         if territory != NEUTRAL:
             continue
-        if _cached_tug_link_state(session, frontier.movie_id, movie.tmdb_id, traversal) is not False:
+        if (
+            _cached_tug_link_state(session, frontier.movie_id, movie.tmdb_id, traversal)
+            is not False
+        ):
             continue
         output.append(
             DiscoveryCandidate(
@@ -822,12 +834,16 @@ async def _enforce_run_rules(
                 detail={"valid": False, "blocked": True, "reason": reason, "connections": []},
             )
     elif previous is not None:
-        if payload.use_tug_portal and _cached_tug_link_state(
-            session,
-            previous.movie_id,
-            movie.tmdb_id,
-            rules.get("tug_traversal") or "shared_cast",
-        ) is not False:
+        if (
+            payload.use_tug_portal
+            and _cached_tug_link_state(
+                session,
+                previous.movie_id,
+                movie.tmdb_id,
+                rules.get("tug_traversal") or "shared_cast",
+            )
+            is not False
+        ):
             raise HTTPException(409, detail="Portal requires a cache-verified unlinked hop")
         engine = get_engine(run.game_type, session, tmdb)
         result = await engine.validate_next_step(
@@ -2788,6 +2804,7 @@ async def _checked_suggestions(
                 suggestion.origin_country = row.origin_country
                 suggestion.genre_ids = row.genre_ids or []
                 suggestion.runtime = row.runtime
+                suggestion.original_language = row.original_language
                 suggestion.popularity = row.popularity
                 suggestion.narrative_year = row.narrative_year
                 suggestion.narrative_era_label = row.narrative_era_label
@@ -2795,8 +2812,40 @@ async def _checked_suggestions(
     suggestions = checked
     if chaser or sort_by:
         by_id = {s.movie_id: s for s in suggestions}
+        active_vibe = engine.active_modifiers(_run_rules(run)).get("vibe_control")
+        setpoint = vibe_controller.SETPOINTS.get(
+            active_vibe.get("comfort", "balanced") if isinstance(active_vibe, dict) else "balanced",
+            vibe_controller.SETPOINTS["balanced"],
+        )
+        if chaser:
+            await pool_options.hydrate_candidate_runtimes(
+                session,
+                engine.tmdb,
+                [suggestion.movie_id for suggestion in suggestions],
+                pool_options.HYDRATE_BUDGET,
+            )
+            for suggestion in suggestions:
+                row = session.get(CachedMovie, suggestion.movie_id)
+                if row is not None:
+                    suggestion.runtime = row.runtime
+                    suggestion.original_language = row.original_language
+        try:
+            loads = await vibe_controller.candidate_loads(
+                session, [suggestion.movie_id for suggestion in suggestions]
+            )
+        except embeddings.EmbeddingUnavailable:
+            loads = {}
+        for suggestion in suggestions:
+            suggestion.vibe_load = loads.get(suggestion.movie_id)
         kept = await pool_options.shape_pool(
-            session, engine.tmdb, [s.movie_id for s in suggestions], chaser=chaser, sort_by=sort_by
+            session,
+            engine.tmdb,
+            [s.movie_id for s in suggestions],
+            chaser=chaser,
+            sort_by=sort_by,
+            load_by_id=loads,
+            runtime_medians=vibe_controller.cached_runtime_medians(session),
+            setpoint=setpoint,
         )
         suggestions = [by_id[movie_id] for movie_id in kept]
     return suggestions
@@ -3247,18 +3296,6 @@ async def discover_next_movies(
     step_number_by_movie_id: dict[int, int] = {}
     for index, step in enumerate(ordered_steps):
         step_number_by_movie_id.setdefault(step.movie_id, index + 1)
-    if chaser or sort_by:
-        by_id = {c.movie_id: c for c in candidates}
-        kept = await pool_options.shape_pool(
-            session,
-            tmdb,
-            [c.movie_id for c in candidates],
-            chaser=chaser,
-            sort_by=sort_by,
-            hydrate_budget=engine._hydration_left or 0,
-            deadline=engine._hydration_deadline,
-        )
-        candidates = [by_id[movie_id] for movie_id in kept]
     for candidate in candidates:
         candidate.already_in_run = candidate.movie_id in logged_movie_ids
         candidate.existing_step_number = step_number_by_movie_id.get(candidate.movie_id)
@@ -3266,6 +3303,93 @@ async def discover_next_movies(
         candidate.runtime = row.runtime if row is not None else None
         candidate.original_language = row.original_language if row is not None else None
         candidate.rating = rating_of(session, row) if row is not None else None
+    history = _play_history(session, run.id)
+    active_vibe = engine.active_modifiers(rules).get("vibe_control")
+    setpoint = vibe_controller.SETPOINTS.get(
+        active_vibe.get("comfort", "balanced") if isinstance(active_vibe, dict) else "balanced",
+        vibe_controller.SETPOINTS["balanced"],
+    )
+    loads: dict[int, float] = {}
+    if active_vibe is not None or chaser:
+        if chaser:
+            await pool_options.hydrate_candidate_runtimes(
+                session,
+                tmdb,
+                [candidate.movie_id for candidate in candidates],
+                engine._hydration_left
+                if engine._hydration_left is not None
+                else pool_options.HYDRATE_BUDGET,
+                engine._hydration_deadline or None,
+            )
+            for candidate in candidates:
+                row = session.get(CachedMovie, candidate.movie_id)
+                candidate.runtime = row.runtime if row is not None else None
+                candidate.original_language = row.original_language if row is not None else None
+        tracked_ids = [step.movie_id for step in history if step.status == "watched"]
+        if active_vibe is not None or chaser:
+            tracked_ids.extend(candidate.movie_id for candidate in candidates)
+        if tracked_ids:
+            try:
+                loads = await vibe_controller.candidate_loads(session, tracked_ids)
+            except embeddings.EmbeddingUnavailable:
+                loads = {}
+        if active_vibe is not None or chaser:
+            for candidate in candidates:
+                candidate.vibe_load = loads.get(candidate.movie_id)
+    if active_vibe is not None or chaser:
+        state: dict = {"state": "steady", "integral": 0.0}
+        for step in history:
+            if step.status == "watched":
+                state = vibe_controller.update_controller(state, loads.get(step.movie_id), setpoint)
+        recent_loads = [
+            loads[step.movie_id]
+            for step in history[-5:]
+            if step.status == "watched" and step.movie_id in loads
+        ]
+        state["rolling_load"] = sum(recent_loads) / len(recent_loads) if recent_loads else None
+        state["chaser_recommended"] = pool_options.needs_chaser(recent_loads, setpoint)
+        server_rules = copy.deepcopy(run.rules_config or {})
+        server_rules["vibe_state"] = state
+        if server_rules != run.rules_config:
+            run.rules_config = server_rules
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+    if chaser or sort_by:
+        by_id = {candidate.movie_id: candidate for candidate in candidates}
+        kept = await pool_options.shape_pool(
+            session,
+            tmdb,
+            [candidate.movie_id for candidate in candidates],
+            chaser=chaser,
+            sort_by=sort_by,
+            load_by_id=loads,
+            runtime_medians=vibe_controller.cached_runtime_medians(session),
+            setpoint=setpoint,
+            hydrate_budget=engine._hydration_left or 0,
+            deadline=engine._hydration_deadline,
+        )
+        candidates = [by_id[movie_id] for movie_id in kept]
+        for candidate in candidates:
+            row = session.get(CachedMovie, candidate.movie_id)
+            candidate.runtime = row.runtime if row is not None else None
+            candidate.original_language = row.original_language if row is not None else None
+            candidate.rating = rating_of(session, row) if row is not None else None
+    if active_vibe is not None:
+        state = (run.rules_config or {}).get("vibe_state", {})
+        if active_vibe.get("mode", "soft") == "strict" and state.get("state") == "fatigued":
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.vibe_load is None or candidate.vibe_load <= setpoint
+            ]
+        elif active_vibe.get("mode", "soft") == "soft":
+            candidates.sort(
+                key=lambda candidate: (
+                    candidate.vibe_load is None,
+                    candidate.vibe_load if candidate.vibe_load is not None else 0.0,
+                )
+            )
     candidates = engine.annotate_candidates(candidates, rules, _play_history(session, run.id))
     engine.discovery_diagnostics.after_filters = len(candidates)
     if not candidates and engine.discovery_diagnostics.after_modifiers:

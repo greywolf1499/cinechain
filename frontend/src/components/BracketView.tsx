@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Play, Trophy, Vote } from "lucide-react";
 import Modal from "./Modal";
 import MoviePoster from "./MoviePoster";
@@ -12,10 +12,9 @@ import {
   useAdvanceBracket,
   useBracketVote,
   useJellyfinLookup,
-  useLlmStatus,
   useMatchupCommentary,
 } from "../lib/queries";
-import type { Bracket, BracketFilm, BracketMatchup, JellyfinItemSummary, RunDetail } from "../types/api";
+import type { Bracket, BracketFilm, BracketMatchup, BracketTape, JellyfinItemSummary, RunDetail } from "../types/api";
 
 type Films = Record<string, BracketFilm>;
 
@@ -87,7 +86,7 @@ export default function BracketView({
           participantIds={run.participants.map((p) => p.user_id)}
           currentUserId={currentUserId}
           tableMode={!!run.rules_config.table_mode}
-          cachedCommentary={run.rules_config.bracket_commentary?.[open.id] ?? null}
+          cachedTape={run.rules_config.bracket_tape?.[open.id] ?? null}
           onClose={() => setOpenId(null)}
         />
       )}
@@ -262,7 +261,7 @@ function MatchupCard({
   participantIds,
   currentUserId,
   tableMode,
-  cachedCommentary,
+  cachedTape,
   onClose,
 }: {
   runId: string;
@@ -273,18 +272,31 @@ function MatchupCard({
   participantIds: string[];
   currentUserId: string | undefined;
   tableMode: boolean;
-  /** The AI announcer's line for this matchup, if one was already generated. */
-  cachedCommentary: string | null;
+  cachedTape: BracketTape | null;
   onClose: () => void;
 }) {
   const advance = useAdvanceBracket(runId);
-  const { data: llm } = useLlmStatus();
   const tape = useMatchupCommentary(runId);
-  const commentary = cachedCommentary || tape.data?.commentary || null;
+  const selectedTape =
+    cachedTape || (tape.data?.matchup_id === matchup.id ? tape.data.tape : null);
+  const requestedMatchups = useRef(new Set<string>());
   const castVote = useBracketVote(runId);
   const [error, setError] = useState<string | null>(null);
   const partners = participantIds.length > 1;
   const pending = advance.isPending || castVote.isPending;
+
+  useEffect(() => {
+    if (
+      matchup.a !== null &&
+      matchup.b !== null &&
+      !selectedTape &&
+      !tape.isPending &&
+      !requestedMatchups.current.has(matchup.id)
+    ) {
+      requestedMatchups.current.add(matchup.id);
+      tape.mutate(matchup.id);
+    }
+  }, [matchup.id, matchup.a, matchup.b, selectedTape, tape.isPending, tape.mutate]);
 
   async function run(action: () => Promise<unknown>) {
     setError(null);
@@ -313,33 +325,27 @@ function MatchupCard({
               {index === 1 && (
                 <div className="flex flex-col items-center justify-center gap-3 sm:w-44">
                   <span className="text-lg font-black text-zinc-600">VS</span>
-                  {commentary ? (
-                    <blockquote
-                      aria-label="Tale of the Tape"
-                      className="rounded-lg border border-fuchsia-400/40 bg-fuchsia-500/5 px-3 py-2 text-center font-serif text-xs italic leading-relaxed text-fuchsia-100"
-                    >
-                      “{commentary}”
-                    </blockquote>
-                  ) : (
-                    llm?.enabled && (
-                      <>
-                        <button
-                          type="button"
-                          disabled={tape.isPending}
-                          onClick={() => tape.mutate(matchup.id)}
-                          className="flex items-center gap-1.5 rounded-md border border-fuchsia-400/50 bg-fuchsia-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-fuchsia-200 transition-colors hover:bg-fuchsia-500/20 disabled:opacity-60"
-                        >
-                          {tape.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <span aria-hidden>🎙️</span>}
-                          Tale of the Tape
-                        </button>
-                        {tape.isError && (
-                          <p role="alert" className="text-center text-[10px] text-amber-400">
-                            {tape.error instanceof ApiError ? tape.error.message : "The announcer lost their voice."}
-                          </p>
-                        )}
-                      </>
-                    )
-                  )}
+                  {selectedTape ? (
+                    <div aria-label="Tale of the Tape" className="w-full rounded-lg border border-fuchsia-400/40 bg-fuchsia-500/5 p-3">
+                      <blockquote className="text-center font-serif text-xs italic leading-relaxed text-fuchsia-100">
+                        “{selectedTape.headline}”
+                      </blockquote>
+                      <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                        {selectedTape.axes.map((axis) => (
+                          <div key={axis.name} className="contents">
+                            <dt className={cn("text-right", axis.contrast ? "text-fuchsia-200" : "text-emerald-300")}>{axis.name}</dt>
+                            <dd className="truncate text-zinc-400">{axis.left ?? "—"} / {axis.right ?? "—"}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  ) : tape.isPending ? (
+                    <Loader2 aria-label="Preparing matchup tape" className="h-4 w-4 animate-spin text-fuchsia-300" />
+                  ) : tape.isError ? (
+                    <p role="alert" className="text-center text-[10px] text-amber-400">
+                      {tape.error instanceof ApiError ? tape.error.message : "The matchup tape could not be prepared."}
+                    </p>
+                  ) : null}
                 </div>
               )}
               <article

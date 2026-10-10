@@ -69,6 +69,8 @@ SERVER_OWNED_RULES = (
     "active_chaos",
     # AI March Madness commentary and the Bounty Board's AI-generated bounty definitions.
     "bracket_commentary",
+    "bracket_tape",
+    "vibe_state",
     "custom_bounties",
 )
 

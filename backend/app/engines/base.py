@@ -213,7 +213,8 @@ class BaseChallengeEngine(ABC):
     def active_modifiers(self, rules: dict | None) -> dict[str, Any]:
         """The pair modifiers in force: this engine's defaults overridden by the run's."""
         if not self.modifier_scopes:
-            return {}
+            active = modifiers.merge_modifiers({}, rules)
+            return {"vibe_control": active["vibe_control"]} if "vibe_control" in active else {}
         return modifiers.merge_modifiers(self.default_modifiers, rules)
 
     def modifier_violation(
@@ -536,12 +537,14 @@ class BaseChallengeEngine(ABC):
                 if feasibility.within_movie(row, bounds) and is_reality_eligible(row)
             ]
         for spec, ctx in overlays:
-            if spec.scope == "film":
+            if spec.scope == "film" and spec.key != "vibe_control":
                 kept = matching_rows(self.session, spec.query(ctx), rows)
                 rows = [row for row in rows if row.tmdb_id in kept]
         if not exact and cached and not rows:
             raise RunSetupError("Title overlays have no qualifying films in the cached mode pool")
         for spec, ctx in overlays:
+            if spec.key == "vibe_control":
+                continue
             if spec.key == "number_in_title":
                 if track is not None and len(rows) < 3:
                     raise RunSetupError(
@@ -549,7 +552,7 @@ class BaseChallengeEngine(ABC):
                     )
                 if exact and not rows:
                     raise RunSetupError("Number in title has no qualifying checklist films")
-            elif spec.scope == "film":
+            elif spec.scope == "film" and spec.key != "vibe_control":
                 if exact and not rows:
                     raise RunSetupError(f"{spec.label} has no eligible checklist films")
             elif rows:

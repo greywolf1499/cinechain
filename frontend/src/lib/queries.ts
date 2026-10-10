@@ -440,7 +440,7 @@ export function useCanonBadgesBulk(movieIds: number[]) {
 }
 
 export interface DiscoverOptions {
-	/** The Chaser: only short (<= 95 min) Comedy / Animation palate cleansers. */
+	/** The Chaser: films below the comfort setpoint and their language's median runtime. */
 	chaser?: boolean;
 	/** Underdog B-Sides: least popular first, dead entries (popularity < 1) dropped. */
 	underdog?: boolean;
@@ -456,6 +456,7 @@ interface DiscoverResult {
 }
 
 function discoverQuery(
+	queryClient: ReturnType<typeof useQueryClient>,
 	runId: string,
 	frontierMovieId: number | undefined,
 	mode: "or" | "and",
@@ -472,6 +473,7 @@ function discoverQuery(
 					(underdog ? "&sort_by=underdog" : "") +
 					(wider ? "&wider=1" : ""),
 			);
+			void queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
 			return Array.isArray(data) ? { candidates: data, diagnostics: null } : data;
 		},
 		enabled: !!frontierMovieId,
@@ -485,8 +487,9 @@ export function useDiscoverCandidates(
 	mode: "or" | "and",
 	options: DiscoverOptions = {},
 ) {
+	const queryClient = useQueryClient();
 	return useQuery({
-		...discoverQuery(runId, frontierMovieId, mode, options),
+		...discoverQuery(queryClient, runId, frontierMovieId, mode, options),
 		select: (result: DiscoverResult) => result.candidates,
 	});
 }
@@ -498,8 +501,9 @@ export function useDiscoverDiagnostics(
 	mode: "or" | "and",
 	options: DiscoverOptions = {},
 ) {
+	const queryClient = useQueryClient();
 	return useQuery({
-		...discoverQuery(runId, frontierMovieId, mode, options),
+		...discoverQuery(queryClient, runId, frontierMovieId, mode, options),
 		select: (result: DiscoverResult) => result.diagnostics,
 	});
 }
@@ -709,10 +713,10 @@ export function useBracketVote(runId: string) {
 
 export interface MatchupCommentary {
 	matchup_id: string;
-	/** "" when the AI model is off. */
 	commentary: string;
 	enabled: boolean;
 	cached: boolean;
+	tape: import("../types/api").BracketTape | null;
 }
 
 /** March Madness: the AI announcer's "Tale of the Tape" for a matchup (generated once, then cached on the run). */

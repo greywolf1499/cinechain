@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.engines.predicates import MovieFacts, Predicate, QueryPredicate, named_predicate
 from app.engines.rulebook import RuleSection
@@ -594,18 +594,39 @@ async def generate_custom_bounty(
 ) -> dict:
     """Asks the model for a new bounty (one retry). Raises `LlmUnavailable` if it can't produce one."""
     avoid = f" Do not reuse these titles: {', '.join(taken_titles)}." if taken_titles else ""
-    for _ in range(2):
-        text = await llm.generate(
-            config,
-            BOUNTY_SYSTEM,
-            f"Invent a new bounty.{avoid}\nMode context: {context}",
-            max_tokens=260,
-        )
-        bounty = parse_custom_bounty(text, taken_titles)
+
+    class BountyReply(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        title: str = Field(max_length=MAX_TITLE)
+        icon: str = Field(default="✨", max_length=4)
+        description: str = Field(default="", max_length=MAX_DESCRIPTION)
+        rule: Any
+
+    def valid(reply: BountyReply) -> bool:
+        bounty = parse_custom_bounty(json.dumps(reply.model_dump()), taken_titles)
         runnable = custom_bounty(bounty) if bounty else None
-        if bounty is not None and runnable is not None and (feasible is None or feasible(runnable)):
-            return bounty
-    raise llm.LlmUnavailable("The model didn't produce a usable bounty")
+        return (
+            bounty is not None and runnable is not None and (feasible is None or feasible(runnable))
+        )
+
+    result = await llm.generate_structured(
+        config,
+        BOUNTY_SYSTEM
+        + " Return JSON with title, icon, description and rule fields. "
+        + "The rule must contain one to three conditions. "
+        + avoid,
+        {"mode_context": context},
+        BountyReply,
+        retries=1,
+        fallback={"title": "", "icon": "✨", "description": "", "rule": {}},
+        validator=valid,
+    )
+    bounty = parse_custom_bounty(json.dumps(result.value.model_dump()), taken_titles)
+    runnable = custom_bounty(bounty) if bounty else None
+    if bounty is None or runnable is None or (feasible is not None and not feasible(runnable)):
+        raise llm.LlmUnavailable("The model didn't produce a usable bounty")
+    return bounty
 
 
 def _taken_titles(rules: dict | None) -> list[str]:

@@ -150,6 +150,7 @@ export interface RulesConfig {
 	seed_from_watchlist?: boolean;
 	bracket?: Bracket;
 	bracket_films?: Record<string, BracketFilm>;
+	bracket_tape?: Record<string, BracketTape>;
 	/** The Method Actor Marathon: the picked actor's TMDB id when creating; the server builds the rest. */
 	actor_id?: number;
 	actor?: { id: number; name: string };
@@ -180,6 +181,7 @@ export interface RulesConfig {
 	custom_bounties?: Record<BountyId, CustomBounty>;
 	/** AI "Tale of the Tape" lines by matchup id (server-owned). */
 	bracket_commentary?: Record<string, string>;
+	vibe_state?: { state: "steady" | "fatigued" | "recovering"; load?: number; rolling_load?: number | null; chaser_recommended?: boolean; setpoint?: number; reason?: string };
 	/** The Rotten Tomatoes Split: first team to this many points wins; scores are server-owned. */
 	target_points?: number;
 	split_scores?: { team_a: number; team_b: number };
@@ -251,6 +253,13 @@ export interface BracketFilm {
 	runtime: number | null;
 	overview: string;
 	tagline: string;
+}
+
+export interface BracketTape {
+	axes: { name: string; left: string | null; right: string | null; contrast: boolean }[];
+	headline: string;
+	source: "ai" | "template";
+	version: number;
 }
 
 export type CareerMilestone = "debut" | "breakout" | "prestige_peak" | "modern_resurgence"
@@ -513,6 +522,7 @@ export interface EngineMeta {
 	rabbit_tiers?: { number: number; name: string; rule: string; start_depth: number; emoji: string }[] | null;
 	warning_window?: number | null;
 	tug_planes?: TugPlaneMeta[] | null;
+	vibe?: { setpoints: Record<"gentle" | "balanced" | "brave", number>; chaser_load_margin: number; chaser_length: string } | null;
 }
 
 export type ModifierParamValue = string | number | boolean | string[];
@@ -792,6 +802,7 @@ export interface RouletteMovie {
 	origin_country: string | null;
 	origin_countries?: string[];
 	runtime: number | null;
+	vibe_load?: number | null;
 	overview: string | null;
 	tagline: string | null;
 	genre_ids: number[];
@@ -916,6 +927,8 @@ export interface DiscoveryCandidate {
 	rating?: number | null;
 	/** Minutes, when the film's detail is cached. */
 	runtime?: number | null;
+	/** Culture-neutral load score when Vibe Control or Chaser is active. */
+	vibe_load?: number | null;
 	connections: DiscoveryConnection[];
 	already_in_run: boolean;
 	existing_step_number: number | null;

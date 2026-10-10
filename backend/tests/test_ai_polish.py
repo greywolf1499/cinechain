@@ -54,19 +54,16 @@ async def test_the_model_off_means_no_commentary():
     )
 
 
-def test_commentary_is_empty_and_not_stored_while_the_model_is_off(client):
+def test_tape_uses_template_and_is_stored_while_the_model_is_off(client):
     with respx.mock:
         mock_films()
         run_id = make_bracket(client)
     answer = commentary(client, run_id)
     assert answer.status_code == 200
-    assert answer.json() == {
-        "matchup_id": FIRST,
-        "commentary": "",
-        "enabled": False,
-        "cached": False,
-    }
-    assert "bracket_commentary" not in detail(client, run_id)["rules_config"]
+    assert answer.json()["tape"]["source"] == "template"
+    assert len(answer.json()["tape"]["axes"]) == 4
+    assert answer.json()["commentary"]
+    assert detail(client, run_id)["rules_config"]["bracket_tape"][FIRST] == answer.json()["tape"]
 
 
 def test_commentary_is_generated_once_and_cached_on_the_run(client):
@@ -74,11 +71,13 @@ def test_commentary_is_generated_once_and_cached_on_the_run(client):
         mock_films()
         run_id = make_bracket(client)
         enable_llm(client)
-        route = mock_reply("In the left corner, Film 1; in the right, Film 2 - ding ding!")
+        route = mock_reply({"headline": "Film 1 and Film 2 share Origin, but differ on Scale."})
         first = commentary(client, run_id)
         second = commentary(client, run_id)
     assert (
-        first.json()["commentary"].startswith("In the left corner") and not first.json()["cached"]
+        "Film 1" in first.json()["commentary"]
+        and first.json()["tape"]["source"] == "ai"
+        and not first.json()["cached"]
     )
     assert (
         second.json()["commentary"] == first.json()["commentary"]
@@ -87,8 +86,8 @@ def test_commentary_is_generated_once_and_cached_on_the_run(client):
     assert route.call_count == 1
     prompt = json.loads(route.calls[0].request.content)["messages"][1]["content"]
     assert "Film 1" in prompt and "Film 2" in prompt and "Plot 1" in prompt
-    stored = detail(client, run_id)["rules_config"]["bracket_commentary"]
-    assert stored == {FIRST: first.json()["commentary"]}
+    stored = detail(client, run_id)["rules_config"]["bracket_tape"]
+    assert stored == {FIRST: first.json()["tape"]}
 
 
 def test_commentary_survives_the_matchup_being_decided(client):
@@ -96,10 +95,13 @@ def test_commentary_survives_the_matchup_being_decided(client):
         mock_films()
         run_id = make_bracket(client)
         enable_llm(client)
-        mock_reply("Hype!")
-        commentary(client, run_id)
+        mock_reply("not valid structured output")
+        first = commentary(client, run_id)
         assert advance(client, run_id, FIRST, 1).status_code == 200
-    assert detail(client, run_id)["rules_config"]["bracket_commentary"][FIRST] == "Hype!"
+    assert (
+        detail(client, run_id)["rules_config"]["bracket_commentary"][FIRST]
+        == first.json()["commentary"]
+    )
 
 
 def test_commentary_needs_a_known_filled_matchup(client):
@@ -114,15 +116,16 @@ def test_commentary_needs_a_known_filled_matchup(client):
         )  # nobody's in it yet
 
 
-def test_a_failing_model_is_a_503_and_nothing_is_stored(client):
+def test_a_failing_model_uses_the_template_tape(client):
     with respx.mock:
         mock_films()
         run_id = make_bracket(client)
         enable_llm(client)
         respx.post(OLLAMA_CHAT).mock(return_value=httpx.Response(500, json={"error": "boom"}))
-        failed = commentary(client, run_id)
-    assert failed.status_code == 503
-    assert "bracket_commentary" not in detail(client, run_id)["rules_config"]
+        generated = commentary(client, run_id)
+    assert generated.status_code == 200
+    assert generated.json()["tape"]["source"] == "template"
+    assert detail(client, run_id)["rules_config"]["bracket_tape"][FIRST]
 
 
 def test_commentary_cannot_be_forged_at_creation(client):
@@ -131,6 +134,7 @@ def test_commentary_cannot_be_forged_at_creation(client):
         resp = create(client, bracket_commentary={FIRST: "Rigged!"})
     assert resp.status_code == 201
     assert "bracket_commentary" not in resp.json()["rules_config"]
+    assert "bracket_tape" not in resp.json()["rules_config"]
 
 
 def test_commentary_only_works_on_a_bracket_run(client):

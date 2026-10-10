@@ -44,6 +44,7 @@ import AuteurTrack from "../components/AuteurTrack";
 import BountyBoardPanel from "../components/BountyBoardPanel";
 import ChaosBanner from "../components/ChaosBanner";
 import ChaserPrompt from "../components/ChaserPrompt";
+import VibeMeter from "../components/VibeMeter";
 import SplitBoard from "../components/SplitBoard";
 import BracketView from "../components/BracketView";
 import ExpeditionBoard from "../components/ExpeditionBoard";
@@ -821,8 +822,12 @@ function ActiveFrontierCard({
         </button>
         )}
         {canDiscover && tailStep && (
+          <VibeMeter rules={rulesConfig} />
+        )}
+        {canDiscover && tailStep && (
           <ChaserPrompt
             frontier={tailStep}
+            rules={rulesConfig}
             onGrab={() => {
               setChaserHub(true);
               setShowHub(true);

@@ -90,6 +90,7 @@ class EngineMeta(BaseModel):
     rabbit_tiers: list[dict[str, Any]] | None = None
     warning_window: int | None = None
     tug_planes: list[dict[str, Any]] | None = None
+    vibe: dict[str, Any] | None = None
 
 
 class RabbitHolePreviewRequest(BaseModel):
@@ -145,6 +146,7 @@ def list_engines(
     overrides = settings_repo.get_overrides(session)
     from app.engines.modifier_registry import param_values, registry
     from app.engines.tug_planes import catalogue as tug_plane_catalogue
+    from app.services import vibe_controller
 
     return [
         EngineMeta(
@@ -183,6 +185,11 @@ def list_engines(
                 rabbit_hole.WARNING_WINDOW if cls.game_type == rabbit_hole.RABBIT_HOLE else None
             ),
             tug_planes=(tug_plane_catalogue() if cls.game_type == "tug_of_war" else None),
+            vibe={
+                "setpoints": vibe_controller.SETPOINTS,
+                "chaser_load_margin": 0.15,
+                "chaser_length": "below_language_median",
+            },
             tagline=cls.tagline,
             tags=cls.tags,
             rulebook=render(
@@ -243,9 +250,7 @@ def tug_balance(
             plane = build_plane(plane_id)
             traversal = payload.traversal or plane.default_traversal
             if get_policy(traversal).graph and traversal not in densities:
-                densities[traversal] = graph_density(
-                    session, list(eligible), traversal=traversal
-                )
+                densities[traversal] = graph_density(session, list(eligible), traversal=traversal)
             density = densities.get(traversal)
             result = check_balance(
                 session, plane, eligible, bridge_density=density, traversal=traversal

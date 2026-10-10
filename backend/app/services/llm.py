@@ -24,13 +24,14 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import anyio.to_thread
 import httpx
+from pydantic import BaseModel, ValidationError
 from sqlmodel import Session
 
 from app.config import get_settings
@@ -39,6 +40,13 @@ from app.services import settings_repo
 from app.utils.dates import parse_release_year
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StructuredResult[Model: BaseModel]:
+    value: Model
+    source: Literal["ai", "template"]
+
 
 PROVIDER_OFF = "off"
 PROVIDER_LOCAL = "local_gguf"
@@ -379,6 +387,68 @@ async def generate(config: LlmConfig, system: str, prompt: str, max_tokens: int 
     return text
 
 
+_JSON_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+
+
+async def generate_structured[Model: BaseModel](
+    config: LlmConfig,
+    system: str,
+    facts: Any,
+    schema: type[Model],
+    retries: int = 1,
+    fallback: Model | dict[str, Any] | Callable[[], Model | dict[str, Any]] | None = None,
+    validator: Callable[[Model], bool | None] | None = None,
+) -> StructuredResult[Model]:
+    """Generate and validate JSON from supplied facts, falling back deterministically.
+
+    Prompts contain only the caller's facts and the JSON schema. Malformed or failed
+    generations are retried once by default; failures and template output are never
+    inserted into the text-generation cache.
+    """
+    prompt = (
+        "Return one JSON object matching this schema. Use only the supplied facts; "
+        "do not add facts or commentary.\n"
+        f"Schema: {json.dumps(schema.model_json_schema(), ensure_ascii=False, sort_keys=True)}\n"
+        f"Facts: {json.dumps(facts, ensure_ascii=False, sort_keys=True, default=str)}"
+    )
+    last_error: Exception | None = None
+    for attempt in range(max(0, retries) + 1):
+        try:
+            raw = await generate(config, system, prompt, max_tokens=240)
+            body = _THINK_BLOCK.sub("", raw).split("</think>")[-1].strip()
+            body = _JSON_FENCE.sub("", body).strip()
+            decoded = json.loads(body)
+            value = schema.model_validate(decoded)
+            if validator is not None and validator(value) is False:
+                raise ValueError("Structured output failed its domain validator")
+            return StructuredResult(value=value, source="ai")
+        except (
+            LlmUnavailable,
+            json.JSONDecodeError,
+            ValidationError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            last_error = exc
+            if attempt < max(0, retries):
+                logger.info(
+                    "Structured generation attempt %s failed validation: %s", attempt + 1, exc
+                )
+    if fallback is None:
+        message = "No deterministic fallback was supplied for structured generation"
+        if last_error is not None:
+            message = f"{message}: {last_error}"
+        raise LlmUnavailable(message) from last_error
+    fallback_value = fallback() if callable(fallback) else fallback
+    try:
+        value = schema.model_validate(fallback_value)
+        if validator is not None and validator(value) is False:
+            raise ValueError("Structured fallback failed its domain validator")
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise LlmUnavailable(f"Structured fallback did not match {schema.__name__}: {exc}") from exc
+    return StructuredResult(value=value, source="template")
+
+
 async def check_connection(config: LlmConfig) -> dict:
     """A tiny real generation for the Settings page: {ok, latency_ms, output, provider, model, detail}."""
     result: dict = {
@@ -458,17 +528,31 @@ async def pitch(
     key = f"{config.fingerprint}|{kind}|{previous.tmdb_id}|{candidate.tmdb_id}|{link or ''}"
     if key in _cache:
         return _cache[key]
-    connection = f"\nThe two films are linked by: {link}." if link else ""
-    prompt = (
-        f"Previous film - {_blurb(previous)}\nNext film - {_blurb(candidate)}{connection}\n"
-        + (
-            "Warn about the transition from the previous film to the next one in one sentence."
-            if critic
-            else "Pitch the transition from the previous film to the next one in one sentence."
+    system = CRITIC_SYSTEM if critic else PITCH_SYSTEM
+
+    class Sentence(BaseModel):
+        text: str
+
+    facts = {
+        "previous": _blurb(previous),
+        "next": _blurb(candidate),
+        "connection": link,
+    }
+    fallback = Sentence(
+        text=(
+            f"{candidate.title} follows {previous.title} through a "
+            f"{'challenging' if critic else 'fresh'} change of tone."
         )
     )
-    system = CRITIC_SYSTEM if critic else PITCH_SYSTEM
-    return _remember(key, await generate(config, system, prompt, max_tokens=80))
+    result = await generate_structured(
+        config,
+        system + " Return JSON with a single text field containing that sentence.",
+        facts,
+        Sentence,
+        fallback=fallback,
+        validator=lambda value: 0 < len(value.text.split()) <= 30,
+    )
+    return _remember(key, result.value.text) if result.source == "ai" else result.value.text
 
 
 def mask_title(text: str, title: str) -> str:
@@ -483,15 +567,31 @@ async def teaser(config: LlmConfig, movie: CachedMovie) -> str:
     key = f"{config.fingerprint}|teaser|{movie.tmdb_id}"
     if key in _cache:
         return _cache[key]
-    prompt = f"{_blurb(movie)}\nWrite the cryptic one-sentence teaser. Do not use the film's title."
-    text = mask_title(await generate(config, TEASER_SYSTEM, prompt, max_tokens=64), movie.title)
-    return _remember(key, text)
+
+    class Teaser(BaseModel):
+        text: str
+
+    result = await generate_structured(
+        config,
+        TEASER_SYSTEM + " Return JSON with one text field. Do not include the film title.",
+        {"movie": _blurb(movie)},
+        Teaser,
+        fallback=Teaser(
+            text="A curious journey shifts between intimate choices and larger stakes."
+        ),
+        validator=lambda value: (
+            0 < len(value.text.split()) <= 25
+            and movie.title.casefold() not in value.text.casefold()
+        ),
+    )
+    text = mask_title(result.value.text, movie.title)
+    return _remember(key, text) if result.source == "ai" else text
 
 
 TROPE_SYSTEM = (
     "You tag films for cinephiles. From a plot summary, extract 3 to 5 concise, normalized "
-    "tropes or themes (for example heist, time-loop, cyberpunk, unreliable-narrator). Reply "
-    "with ONLY a JSON array of lowercase kebab-case strings and nothing else."
+    "tropes or themes (for example heist, time-loop, cyberpunk, unreliable-narrator). "
+    "Reply with ONLY a JSON object containing a tropes array of lowercase kebab-case strings."
 )
 MAX_TROPES = 5
 MAX_TROPE_LENGTH = 40
@@ -511,7 +611,7 @@ def normalize_trope(raw: object) -> str | None:
 def parse_tropes(text: str) -> list[str]:
     """Normalized, de-duplicated tropes from a model reply: a JSON array, else a loose list."""
     text = _THINK_BLOCK.sub("", text).split("</think>")[-1]
-    items: list[object] = []
+    items: Sequence[object] = []
     match = _JSON_ARRAY.search(text)
     if match:
         try:
@@ -563,8 +663,23 @@ async def extract_tropes(overview: str, config: LlmConfig | None = None) -> list
 
 
 async def _generate_tropes(config: LlmConfig, overview: str) -> list[str]:
-    prompt = f"Plot: {overview[:800]}\nReply with the JSON array of 3 to 5 kebab-case tropes."
-    tropes = parse_tropes(await generate(config, TROPE_SYSTEM, prompt, max_tokens=64))
+    class Tropes(BaseModel):
+        tropes: list[str]
+
+    result = await generate_structured(
+        config,
+        TROPE_SYSTEM,
+        {"plot": overview[:800]},
+        Tropes,
+        fallback=Tropes(tropes=[]),
+        validator=lambda value: (
+            len(value.tropes) <= MAX_TROPES
+            and all(normalize_trope(item) is not None for item in value.tropes)
+        ),
+    )
+    tropes = list(
+        dict.fromkeys(filter(None, (normalize_trope(item) for item in result.value.tropes)))
+    )[:MAX_TROPES]
     if not tropes:
         raise LlmUnavailable("The model returned no usable tropes")
     return tropes
@@ -615,7 +730,7 @@ async def generate_matchup_commentary(
     config = config or _env_config()
     if not config.enabled:
         return ""
-    key = f"{config.fingerprint}|tape|{_card_blurb(movie_a)}|{_card_blurb(movie_b)}"
+    key = f"{config.fingerprint}|commentary|{_card_blurb(movie_a)}|{_card_blurb(movie_b)}"
     if key in _cache:
         return _cache[key]
     prompt = (

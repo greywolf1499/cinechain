@@ -1,7 +1,6 @@
 """Phase 25c: LLM discrete trope extraction and shared-trope hops in the Semantic Trope Web."""
 
 import json
-import re
 from unittest.mock import Mock
 
 import httpx
@@ -86,9 +85,11 @@ def mock_llm(client, replies: dict[str, object] | None = None) -> respx.Route:
 
     def answer(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        plot = re.search(r"Plot: (.*)\n", body["messages"][1]["content"]).group(1)
+        facts_text = body["messages"][1]["content"].split("Facts: ", 1)[1]
+        facts, _ = json.JSONDecoder().raw_decode(facts_text)
+        plot = facts["plot"]
         reply = replies[plot]
-        text = reply if isinstance(reply, str) else json.dumps(reply)
+        text = reply if isinstance(reply, str) else json.dumps({"tropes": reply})
         return httpx.Response(200, json={"message": {"role": "assistant", "content": text}})
 
     return respx.post(OLLAMA_CHAT).mock(side_effect=answer)
@@ -123,7 +124,13 @@ async def test_extract_tropes_prompts_the_configured_model():
     with respx.mock:
         route = respx.post(OLLAMA_CHAT).mock(
             return_value=httpx.Response(
-                200, json={"message": {"role": "assistant", "content": '["heist", "Time Loop"]'}}
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"tropes": ["heist", "Time Loop"]}',
+                    }
+                },
             )
         )
         tropes = await llm.extract_tropes("A crew plans a heist.", config)

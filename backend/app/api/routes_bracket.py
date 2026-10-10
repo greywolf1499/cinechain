@@ -18,7 +18,7 @@ from app.engines import march_madness
 from app.models.run import RUN_STATUS_COMPLETED, Run, RunParticipant, RunStep
 from app.models.user import User
 from app.schemas.runs import RunDetail
-from app.services import cache_repo, llm
+from app.services import cache_repo, llm, tale_of_the_tape
 from app.utils.ids import utcnow
 
 router = APIRouter(prefix="/runs", tags=["bracket"])
@@ -42,12 +42,14 @@ class CommentaryRequest(BaseModel):
 
 class CommentaryOut(BaseModel):
     matchup_id: str
-    commentary: str  # "" = the AI model is off
+    commentary: str
     enabled: bool
     cached: bool = False
+    tape: dict | None = None
 
 
 COMMENTARY_KEY = "bracket_commentary"
+TAPE_KEY = "bracket_tape"
 
 
 def _bracket_of(run: Run) -> dict:
@@ -180,9 +182,7 @@ async def matchup_commentary(
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
 ) -> CommentaryOut:
-    """The AI announcer's one-sentence "Tale of the Tape" for a matchup whose two films are known.
-    Generated once and kept in `rules_config["bracket_commentary"][matchup_id]`; with the model
-    off the answer is empty (and nothing is stored)."""
+    """Generate a deterministic, facet-grounded Tale of the Tape on first open."""
     bracket = _bracket_of(run)
     _ensure_run_open(run)
     try:
@@ -193,32 +193,48 @@ async def matchup_commentary(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Both films must be in the matchup first"
         )
-    stored = (run.rules_config or {}).get(COMMENTARY_KEY) or {}
+    stored = (run.rules_config or {}).get(TAPE_KEY) or {}
     if payload.matchup_id in stored:
         return CommentaryOut(
             matchup_id=payload.matchup_id,
-            commentary=stored[payload.matchup_id],
+            commentary=stored[payload.matchup_id].get("headline", ""),
             enabled=True,
             cached=True,
+            tape=stored[payload.matchup_id],
         )
 
     config = llm.load_config(session)
-    if not config.enabled:
-        return CommentaryOut(matchup_id=payload.matchup_id, commentary="", enabled=False)
     films = (run.rules_config or {}).get("bracket_films") or {}
     try:
-        text = await llm.generate_matchup_commentary(
-            films.get(str(matchup["a"]), {}), films.get(str(matchup["b"]), {}), config
+        tape = await tale_of_the_tape.build_tape(
+            session,
+            payload.matchup_id,
+            {
+                **films.get(str(matchup["a"]), {}),
+                "movie_id": matchup["a"],
+            },
+            {
+                **films.get(str(matchup["b"]), {}),
+                "movie_id": matchup["b"],
+            },
+            config,
         )
     except llm.LlmUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
-    session.refresh(run)  # a partner may have generated it meanwhile: the first one wins
+    session.refresh(run)
     rules = copy.deepcopy(run.rules_config or {})
-    kept = rules.setdefault(COMMENTARY_KEY, {})
-    text = kept.setdefault(payload.matchup_id, text)
+    kept = rules.setdefault(TAPE_KEY, {})
+    tape = kept.setdefault(payload.matchup_id, tape)
+    legacy = rules.setdefault(COMMENTARY_KEY, {})
+    legacy.setdefault(payload.matchup_id, tape["headline"])
     run.rules_config = rules
     session.add(run)
     session.commit()
-    return CommentaryOut(matchup_id=payload.matchup_id, commentary=text, enabled=True)
+    return CommentaryOut(
+        matchup_id=payload.matchup_id,
+        commentary=tape["headline"],
+        enabled=tape["source"] == "ai",
+        tape=tape,
+    )

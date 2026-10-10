@@ -10,6 +10,7 @@ import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.db import get_session
@@ -159,6 +160,60 @@ async def test_every_failure_is_an_llm_unavailable(failure):
 async def test_off_refuses_to_generate():
     with pytest.raises(llm.LlmUnavailable, match="off"):
         await llm.generate(llm.LlmConfig(), "s", "p")
+
+
+async def test_structured_generation_strips_reasoning_and_json_fences():
+    class Reply(BaseModel):
+        text: str = Field(min_length=3)
+
+    with respx.mock:
+        respx.post(OLLAMA_CHAT).mock(
+            return_value=ollama_reply('<think>reason</think>```json\n{"text":"Grounded."}\n```')
+        )
+        result = await llm.generate_structured(
+            llm.LlmConfig(provider="ollama"), "system", {"fact": "Grounded."}, Reply
+        )
+    assert result.value.text == "Grounded."
+    assert result.source == "ai"
+
+
+async def test_structured_generation_retries_then_uses_validated_fallback():
+    class Reply(BaseModel):
+        text: str
+
+    with respx.mock:
+        route = respx.post(OLLAMA_CHAT).mock(
+            side_effect=[
+                ollama_reply("not JSON"),
+                ollama_reply('{"text":"still not allowed"}'),
+            ]
+        )
+        result = await llm.generate_structured(
+            llm.LlmConfig(provider="ollama"),
+            "system",
+            {},
+            Reply,
+            fallback=Reply(text="Template."),
+            validator=lambda value: value.text == "Template.",
+        )
+    assert route.call_count == 2
+    assert result.value.text == "Template."
+    assert result.source == "template"
+
+
+async def test_structured_generation_rejects_invalid_fallback():
+    class Reply(BaseModel):
+        text: str
+
+    with pytest.raises(llm.LlmUnavailable, match="fallback"):
+        await llm.generate_structured(
+            llm.LlmConfig(),
+            "system",
+            {},
+            Reply,
+            fallback=Reply(text="bad"),
+            validator=lambda value: value.text == "good",
+        )
 
 
 # --- local GGUF: JIT load, idle unload ---
@@ -363,7 +418,7 @@ def test_pitch_endpoint_grounds_the_prompt_and_caches(client):
     with respx.mock:
         mock_movies()
         chat = respx.post(OLLAMA_CHAT).mock(
-            return_value=ollama_reply("Two LA nights, one stolen heartbeat.")
+            return_value=ollama_reply('{"text":"Two LA nights, one stolen heartbeat."}')
         )
         payload = {"previous_movie_id": 1, "candidate_movie_id": 2, "link_label": "Jamie Foxx"}
         first = client.post("/api/engine/pitch", json=payload)
@@ -382,7 +437,7 @@ def test_critic_style_uses_the_veto_advice_prompt_and_its_own_cache(client):
     with respx.mock:
         mock_movies()
         chat = respx.post(OLLAMA_CHAT).mock(
-            return_value=ollama_reply("Brace for a three-hour slog.")
+            return_value=ollama_reply('{"text":"Brace for a three-hour slog."}')
         )
         base = {"previous_movie_id": 1, "candidate_movie_id": 2}
         critic = client.post("/api/engine/pitch", json={**base, "style": "critic"})
@@ -394,7 +449,7 @@ def test_critic_style_uses_the_veto_advice_prompt_and_its_own_cache(client):
     assert "exhausting" in system
 
 
-def test_pitch_failure_is_a_503_with_the_reason(client):
+def test_pitch_failure_uses_a_deterministic_fallback(client):
     enable_ollama(client)
     with respx.mock:
         mock_movies()
@@ -402,12 +457,19 @@ def test_pitch_failure_is_a_503_with_the_reason(client):
         resp = client.post(
             "/api/engine/pitch", json={"previous_movie_id": 1, "candidate_movie_id": 2}
         )
-    assert resp.status_code == 503 and "refused" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert "Collateral" in resp.json()["pitch"] and "Heat" in resp.json()["pitch"]
 
 
 def test_teasers_are_title_free_and_partial_failures_are_tolerated(client):
     enable_ollama(client)
-    replies = iter([ollama_reply("Heat smolders under a neon sky."), httpx.ConnectError("boom")])
+    replies = iter(
+        [
+            ollama_reply('{"text":"Neon streets hide a quiet pursuit."}'),
+            httpx.ConnectError("boom"),
+            httpx.ConnectError("boom"),
+        ]
+    )
 
     def chat(request):
         item = next(replies)
@@ -420,16 +482,20 @@ def test_teasers_are_title_free_and_partial_failures_are_tolerated(client):
         respx.post(OLLAMA_CHAT).mock(side_effect=chat)
         resp = client.post("/api/engine/teasers", json={"movie_ids": [1, 2]})
     assert resp.status_code == 200
-    assert resp.json()["teasers"] == {"1": "▒▒▒ smolders under a neon sky."}  # film 2 simply absent
+    assert resp.json()["teasers"] == {
+        "1": "Neon streets hide a quiet pursuit.",
+        "2": "A curious journey shifts between intimate choices and larger stakes.",
+    }
 
 
-def test_teasers_all_failing_is_a_503(client):
+def test_teasers_all_failing_use_title_free_templates(client):
     enable_ollama(client)
     with respx.mock:
         mock_movies()
         respx.post(OLLAMA_CHAT).mock(side_effect=httpx.ConnectError("refused"))
         resp = client.post("/api/engine/teasers", json={"movie_ids": [1]})
-    assert resp.status_code == 503
+    assert resp.status_code == 200
+    assert "1" in resp.json()["teasers"]
 
 
 def test_teasers_validate_the_batch_size(client):

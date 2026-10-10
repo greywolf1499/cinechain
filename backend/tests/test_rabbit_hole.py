@@ -1458,11 +1458,21 @@ def test_the_tier_verdict_is_stamped_after_the_pool_is_final(client, world):
     assert candidate.constraint_unverified is False
 
 
-def test_a_film_hydrated_by_pool_shaping_is_never_both_timed_and_unverified(client, world):
+def test_a_film_hydrated_by_pool_shaping_is_never_both_timed_and_unverified(
+    client, world, monkeypatch
+):
     """The chaser pass fetches missing runtimes; the card must not say "rule unverified" after."""
     add_candidates(world)
     run_id = rabbit_run(client)
     put_at_depth(world, run_id, 15)
+    async def candidate_loads(_session, movie_ids):
+        return {movie_id: 0.3 for movie_id in movie_ids if movie_id == 14}
+
+    monkeypatch.setattr("app.api.routes_runs.vibe_controller.candidate_loads", candidate_loads)
+    monkeypatch.setattr(
+        "app.api.routes_runs.vibe_controller.cached_runtime_medians",
+        lambda _session: {"en": 100.0},
+    )
     with Session(world) as session:
         film = session.get(CachedMovie, 14)
         film.runtime = None

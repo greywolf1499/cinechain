@@ -525,7 +525,18 @@ def test_cold_semantic_pool_widens_via_discover_with_llm_off(client, fake_model)
     assert fake_model == [["heist"], ["heist-ish"]]
 
 
-def test_discovery_envelope_distinguishes_filters_and_preserves_legacy_list(client, fake_model):
+def test_discovery_envelope_distinguishes_filters_and_preserves_legacy_list(
+    client, fake_model, monkeypatch
+):
+    from app.api import routes_runs
+
+    async def candidate_loads(_session, movie_ids):
+        return {movie_id: 0.9 for movie_id in movie_ids}
+
+    monkeypatch.setattr(routes_runs.vibe_controller, "candidate_loads", candidate_loads)
+    monkeypatch.setattr(
+        routes_runs.vibe_controller, "cached_runtime_medians", lambda _session: {"en": 100.0}
+    )
     run_id = create_run(client, "semantic_trope", require_cast_link=True)
     with respx.mock:
         mock_universe(PLOTS)

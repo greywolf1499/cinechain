@@ -1,13 +1,15 @@
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Database, Loader2, Sparkles, Wand2 } from "lucide-react";
 import EmptyState from "../../components/EmptyState";
 import TaskProgressBar from "../../components/TaskProgressBar";
 import { SettingsCard, inputClass } from "../../components/settings/shared";
 import { useCacheHealth } from "../../lib/queries";
+import { api } from "../../lib/api";
 import { TASK_TITLES, describeProgress, taskPausedReason } from "../../lib/tasks";
 import { useTrackedTask } from "../../lib/useTrackedTask";
 import { useAuthStore } from "../../store/authStore";
-import type { CoverageCount, SpaTreatment } from "../../types/api";
+import type { CoverageCount, IntegrationConfig, SpaTreatment } from "../../types/api";
 
 const DEFAULT_BATCH_CAP = 200;
 const MAX_BATCH_CAP = 2000;
@@ -98,6 +100,22 @@ export default function DataSpaPage() {
   const batchValid = Number.isInteger(parsed) && parsed >= 1 && parsed <= MAX_BATCH_CAP;
   const batchCap = batchValid ? parsed : DEFAULT_BATCH_CAP;
   const families = Object.entries(health?.families ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const queryClient = useQueryClient();
+  const [softCapInput, setSoftCapInput] = useState<string | null>(null);
+  const savedCap = health?.budgets.find((budget) => budget.provider === "omdb")?.limit ?? 0;
+  const capInput = softCapInput ?? String(savedCap);
+  const softCap = capInput.trim() === "" ? 0 : Number(capInput);
+  const capValid = Number.isSafeInteger(softCap) && softCap >= 0;
+  const saveCap = useMutation({
+    mutationFn: () => api.patch<IntegrationConfig>("/settings/integrations", { omdb_soft_cap: softCap }),
+    onSuccess: async () => {
+      await Promise.all([
+        refetch(),
+        queryClient.invalidateQueries({ queryKey: ["settings", "integrations"] }),
+      ]);
+      setSoftCapInput(null);
+    },
+  });
 
   return (
     <div className="flex flex-col gap-5">
@@ -136,6 +154,27 @@ export default function DataSpaPage() {
 
       {health && (
         <SettingsCard title="Provider budgets (today)">
+          {isAdmin && (
+            <div className="flex flex-col gap-2 px-5 py-4">
+              <label htmlFor="omdb-soft-cap" className="text-sm font-medium text-zinc-200">OMDb Soft Cap</label>
+              <div className="flex flex-wrap gap-2">
+                <input id="omdb-soft-cap" type="number" min={0} step={1}
+                  value={capInput} onChange={(event) => setSoftCapInput(event.target.value)}
+                  disabled={saveCap.isPending} className={inputClass} />
+                <button type="button" disabled={!capValid || saveCap.isPending}
+                  onClick={() => saveCap.mutate()}
+                  className="rounded-md border border-app-border px-3 py-1.5 text-sm text-zinc-200 disabled:opacity-50">
+                  {saveCap.isPending ? "Saving..." : "Save"}
+                </button>
+              </div>
+              <p className="text-xs text-zinc-500">
+                {capValid && softCap === 0 ? "Auto (Scales until API limit)" : "Optional maximum daily calls. Zero or blank uses Auto."}
+              </p>
+              {!capValid && <p role="alert" className="text-xs text-red-300">Enter a non-negative whole number.</p>}
+              {saveCap.isError && <p role="alert" className="text-xs text-red-300">{saveCap.error.message}</p>}
+              {saveCap.isSuccess && <p role="status" className="text-xs text-emerald-300">Soft cap saved.</p>}
+            </div>
+          )}
           {health.budgets.length === 0 ? (
             <p className="px-5 py-4 text-sm text-zinc-500">No metered provider calls recorded today.</p>
           ) : (
@@ -154,9 +193,9 @@ export default function DataSpaPage() {
                   <tr key={`${budget.provider}:${budget.day}`} className="border-t border-app-border">
                     <th scope="row" className="px-5 py-2 font-medium text-zinc-200">{budget.provider}</th>
                     <td className="px-2 py-2 text-zinc-400">{budget.day}</td>
-                    <td className="px-2 py-2 text-right tabular-nums text-zinc-300">{budget.used} / {budget.limit}</td>
-                    <td className={budget.remaining <= 0 ? "px-5 py-2 text-right tabular-nums text-red-300" : "px-5 py-2 text-right tabular-nums text-zinc-300"}>
-                      {budget.remaining <= 0 ? "Exhausted" : budget.remaining}
+                    <td className="px-2 py-2 text-right tabular-nums text-zinc-300">{budget.used} / {budget.limit > 0 ? budget.limit : "Auto (Scales until API limit)"}</td>
+                    <td className={budget.exhausted || budget.remaining === 0 ? "px-5 py-2 text-right tabular-nums text-red-300" : "px-5 py-2 text-right tabular-nums text-zinc-300"}>
+                      {budget.exhausted ? <span role="status" className="rounded bg-red-950 px-2 py-1 text-xs">API Limit Reached for Today</span> : budget.remaining === 0 ? "Soft cap reached" : budget.remaining ?? "Auto"}
                     </td>
                   </tr>
                 ))}

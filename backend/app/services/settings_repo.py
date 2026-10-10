@@ -19,6 +19,7 @@ OVERRIDABLE_KEYS = (
     "jellyfin_url",
     "jellyfin_api_key",
     "omdb_api_key",
+    "omdb_soft_cap",
     "bridge_max_duration_seconds",
     "radarr_url",
     "radarr_api_key",

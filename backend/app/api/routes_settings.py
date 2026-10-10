@@ -15,7 +15,7 @@ from app.integrations.seerr import DEFAULT_URL as SEERR_DEFAULT_URL
 from app.integrations.seerr import check_seerr_connectivity
 from app.models.system import SystemTask
 from app.models.user import User
-from app.services import embeddings, llm, settings_repo, task_runner, tvtropes
+from app.services import embeddings, llm, provider_budgets, settings_repo, task_runner, tvtropes
 from app.services.tmdb import check_tmdb_connectivity
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -40,6 +40,7 @@ class IntegrationConfigOut(BaseModel):
     jellyfin_api_key_masked: str | None = None
     omdb_configured: bool
     omdb_api_key_masked: str | None = None
+    omdb_soft_cap: int = 0
     radarr_url: str
     radarr_configured: bool
     radarr_api_key_masked: str | None = None
@@ -71,6 +72,7 @@ class IntegrationConfigUpdate(BaseModel):
     jellyfin_url: str | None = None
     jellyfin_api_key: str | None = None
     omdb_api_key: str | None = None
+    omdb_soft_cap: int | None = Field(default=None, ge=0)
     radarr_url: str | None = None
     radarr_api_key: str | None = None
     radarr_default_quality_profile_id: int | None = None
@@ -189,6 +191,7 @@ def _build_config(session: Session) -> IntegrationConfigOut:
         jellyfin_api_key_masked=_mask(jellyfin_key),
         omdb_configured=bool(omdb_key),
         omdb_api_key_masked=_mask(omdb_key),
+        omdb_soft_cap=provider_budgets.soft_cap(session, "omdb"),
         radarr_url=overrides.get("radarr_url") or base.radarr_url or RADARR_DEFAULT_URL,
         radarr_configured=bool(radarr_key),
         radarr_api_key_masked=_mask(radarr_key),

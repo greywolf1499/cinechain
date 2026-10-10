@@ -1,8 +1,7 @@
 """OMDb ratings client: IMDb rating, Rotten Tomatoes %, and Metacritic score.
 
-Never raises to callers - if OMDb is unconfigured or the request fails, the
-caller gets `None` and the rest of the app degrades gracefully (no ratings
-shown), exactly like the Jellyfin client's approach.
+Lookups raise ProviderLimitReachedError on API backpressure. Other failures
+remain retryable; the compatibility ratings wrapper degrades to None.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ from typing import TypedDict
 import httpx
 
 from app.config import Settings, get_settings
+from app.services.provider_budgets import ProviderLimitReachedError
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,11 @@ class OMDbClient:
         """Looks up a movie by title (+optional year) - OMDb has no bulk-by-id
         endpoint, so this is always a single request per movie. This compatibility
         wrapper preserves the never-raises, ratings-or-None contract."""
-        return (await self.lookup_by_title(title, year)).ratings
+        try:
+            return (await self.lookup_by_title(title, year)).ratings
+        except ProviderLimitReachedError:
+            logger.warning("OMDb API limit reached")
+            return None
 
     async def lookup_by_title(self, title: str, year: int | None) -> OMDbLookup:
         """Return ratings and whether a failure may be retried without negative-caching."""
@@ -74,6 +78,8 @@ class OMDbClient:
             response = await self._client.get(
                 self._settings.omdb_api_base, params=params, timeout=10.0
             )
+            if response.status_code in (401, 403, 429):
+                raise ProviderLimitReachedError("OMDb daily limit reached")
             response.raise_for_status()
             data = response.json()
         except (httpx.HTTPError, ValueError):
@@ -84,6 +90,8 @@ class OMDbClient:
             return OMDbLookup(ratings=None, transient=True)
         if data.get("Response") != "True":
             error = data.get("Error")
+            if isinstance(error, str) and "request limit reached" in error.casefold():
+                raise ProviderLimitReachedError("OMDb daily limit reached")
             if error != "Movie not found!":
                 logger.warning("OMDb could not provide ratings; leaving it retryable")
             return OMDbLookup(

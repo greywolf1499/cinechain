@@ -57,7 +57,8 @@ export function describeProgress(task: SystemTask<unknown>, unit = "films"): str
 }
 
 const PAUSE_REASONS: Record<string, string> = {
-	omdb_budget: "the OMDb daily request budget is used up",
+	omdb_budget: "the OMDb soft cap is reached; raise it or wait for the daily reset",
+	omdb_limit: "Daily limit reached: the OMDb API limit is reached for today",
 };
 
 /** Why a completed task stopped early, or null when it really finished. */

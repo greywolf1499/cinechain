@@ -12,6 +12,7 @@ class ProviderBudget(SQLModel, table=True):
     provider: str = Field(primary_key=True)
     day: str = Field(primary_key=True)
     used: int = 0
+    exhausted: bool = False
 
 
 class SystemSetting(SQLModel, table=True):

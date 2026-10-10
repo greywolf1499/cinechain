@@ -394,6 +394,11 @@ async def _run(ctx: task_runner.TaskContext) -> dict[str, Any]:
         treatments = ctx._data["treatments"]
         while ctx._data["stage"] < len(treatments):
             treatment = treatments[ctx._data["stage"]]
+            if treatment == "ratings":
+                with ctx.session() as session:
+                    reason = provider_budgets.paused_reason(session, "omdb")
+                if reason:
+                    return _pause_ratings(ctx, reason)
             while ctx._data["cursor"] < len(worklist):
                 ctx.check_cancelled(force=True)
                 cursor = ctx._data["cursor"]
@@ -429,16 +434,28 @@ async def _run(ctx: task_runner.TaskContext) -> dict[str, Any]:
                                     status = "error"
                                     ctx._data["last_error"] = str(exc)
                                 outcomes.append((movie.tmdb_id, status))
+                    except provider_budgets.ProviderLimitReachedError:
+                        session.rollback()
+                        provider_budgets.mark_exhausted(session.get_bind(), "omdb")
+                        return _pause_ratings(ctx, "omdb_limit")
                     except provider_budgets.BudgetExhausted:
-                        ctx.set("paused", "omdb_budget")
-                        ctx.flush()
-                        return {"paused": "omdb_budget", "cursor": cursor}
+                        session.rollback()
+                        session.expire_all()
+                        reason = provider_budgets.paused_reason(session, "omdb")
+                        return _pause_ratings(ctx, reason or "omdb_budget")
                     ctx.check_cancelled(force=True)
                     _checkpoint(ctx, session, outcomes, treatment, cursor + len(ids))
             ctx.set("stage", ctx._data["stage"] + 1)
             ctx.set("cursor", 0)
             ctx.flush()
     return {"processed": ctx._data["processed"]}
+
+
+def _pause_ratings(ctx: task_runner.TaskContext, reason: str) -> dict[str, Any]:
+    ctx.set("paused", reason)
+    ctx.set("message", "Daily limit reached" if reason == "omdb_limit" else "OMDb soft cap reached")
+    ctx.flush()
+    return {"paused": reason, "cursor": ctx._data["cursor"]}
 
 
 def _coverage_conditions(session: Session) -> dict[str, Any]:
@@ -514,7 +531,8 @@ def health(session: Session) -> dict[str, Any]:
     conditions = _coverage_conditions(session)
     day = utcnow().date().isoformat()
     budgets = []
-    for provider, limit in provider_budgets.LIMITS.items():
+    for provider in provider_budgets.PROVIDERS:
+        limit = provider_budgets.soft_cap(session, provider)
         row = session.get(ProviderBudget, (provider, day))
         used = row.used if row else 0
         budgets.append(
@@ -523,7 +541,8 @@ def health(session: Session) -> dict[str, Any]:
                 "day": day,
                 "used": used,
                 "limit": limit,
-                "remaining": max(0, limit - used),
+                "remaining": max(0, limit - used) if limit > 0 else None,
+                "exhausted": row.exhausted if row else False,
             }
         )
     return {

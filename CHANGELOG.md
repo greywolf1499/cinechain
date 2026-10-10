@@ -2,6 +2,24 @@
 
 Notable changes to CineChain are recorded here.
 
+## [4.0.1] - 2026-10-10
+
+### Adaptive API Circuit Breaker
+
+- **OMDb budgets adapt to your API tier:** Removed the fixed 900-call ceiling.
+  Auto mode continues until the provider signals a limit, including OMDb's
+  HTTP-200 "Request limit reached!" payload and HTTP 401/403/429 backpressure.
+- **Persistent daily breaker:** API backpressure stops ratings jobs immediately,
+  records exhaustion in SQLite and preserves the pending-film cursor. Repeated
+  jobs and JIT ratings calls honor the same breaker; a new UTC day reopens it.
+- **Optional OMDb Soft Cap:** Admins can save a non-negative daily ceiling in
+  Data Spa. Zero or blank means "Auto (Scales until API limit)"; raising a soft
+  cap allows same-day resumption without clearing a tripped API breaker.
+- **Clear health status:** The budget panel reports actual reserved calls,
+  optional remaining allowance and an "API Limit Reached for Today" badge.
+- Back up `/config` before upgrading. The new single-head migration adds the
+  exhaustion flag without resetting existing usage records.
+
 ## [4.0.0] - 2026-10-10
 
 ### The Facet & Modes Update

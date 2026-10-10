@@ -634,7 +634,7 @@ def test_backfill_batch_resume_and_cancellation(db_engine, monkeypatch):
 def test_migration_roundtrip_preserves_raw_cache(config_dir, monkeypatch):
     monkeypatch.setenv("CONFIG_DIR", str(config_dir))
     config = Config("alembic.ini")
-    assert ScriptDirectory.from_config(config).get_heads() == ["f7a8b9c0d1e2"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["a8b9c0d1e2f3"]
     command.upgrade(config, "c4d5e6f7a8b9")
     from sqlalchemy import create_engine
 

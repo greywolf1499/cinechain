@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # --- OMDb ratings (optional) ---
     omdb_api_key: str = ""
+    omdb_soft_cap: int = Field(default=0, ge=0)
     omdb_api_base: str = "https://www.omdbapi.com/"
 
     # --- Pathfinder budget (Phase 6) ---

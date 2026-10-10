@@ -1057,7 +1057,8 @@ export interface ProviderBudget {
 	day: string;
 	used: number;
 	limit: number;
-	remaining: number;
+	remaining: number | null;
+	exhausted: boolean;
 }
 
 /** `GET /system/cache/health`: SQL coverage counts per data family. */
@@ -1099,6 +1100,7 @@ export interface IntegrationConfig {
 	jellyfin_api_key_masked: string | null;
 	omdb_configured: boolean;
 	omdb_api_key_masked: string | null;
+	omdb_soft_cap: number;
 	radarr_url: string;
 	radarr_configured: boolean;
 	radarr_api_key_masked: string | null;

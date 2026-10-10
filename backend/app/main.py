@@ -30,6 +30,7 @@ from app.api.routes_users import router as users_router
 from app.config import get_settings
 from app.integrations.omdb import OMDbClient
 from app.services import task_runner
+from app.services.provider_budgets import BudgetExhausted
 from app.services.tmdb import TMDBClient, TMDBError, TMDBRateLimitError
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CineChain", default_response_class=JSONResponse, lifespan=lifespan)
+
+
+@app.exception_handler(BudgetExhausted)
+async def provider_budget_handler(request: Request, exc: BudgetExhausted) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"detail": str(exc) or "OMDb daily limit reached; try again tomorrow"},
+    )
 
 
 @app.exception_handler(TMDBRateLimitError)

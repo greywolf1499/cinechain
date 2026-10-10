@@ -7,7 +7,7 @@ import pytest
 import respx
 
 from app.config import Settings
-from app.integrations.omdb import OMDbClient, check_omdb_connectivity
+from app.integrations.omdb import OMDbClient, ProviderLimitReachedError, check_omdb_connectivity
 
 OMDB_BASE = "https://www.omdbapi.com/"
 
@@ -33,7 +33,6 @@ async def test_lookup_by_imdb_id_uses_exact_id(settings):
         (httpx.Response(200, json={"Response": "True", "Ratings": None}), True),
         (httpx.Response(200, json={"Response": "True", "Ratings": ["broken"]}), True),
         (httpx.Response(200, json={"Response": "True", "imdbRating": {"bad": 1}}), True),
-        (httpx.Response(200, json={"Response": "False", "Error": "Request limit reached!"}), True),
         (httpx.Response(200, json={"Response": "False", "Error": "Movie not found!"}), False),
     ],
 )
@@ -97,7 +96,6 @@ async def test_get_ratings_by_title_returns_none_when_not_found(settings):
     "response",
     [
         httpx.Response(500, json={"Response": "False", "Error": "Internal error"}),
-        httpx.Response(200, json={"Response": "False", "Error": "Request limit reached!"}),
     ],
 )
 async def test_lookup_by_title_marks_service_errors_transient(settings, response):
@@ -118,6 +116,25 @@ async def test_lookup_by_title_marks_timeout_transient(settings):
 
     assert lookup.ratings is None
     assert lookup.transient is True
+
+
+@pytest.mark.parametrize("status", [200, 401, 403, 429])
+@pytest.mark.parametrize("by_id", [True, False])
+async def test_limit_reached_raises_specific_error(settings, status, by_id):
+    with respx.mock:
+        respx.get(OMDB_BASE).mock(
+            return_value=httpx.Response(
+                status, json={"Response": "False", "Error": "Request limit reached!"}
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            omdb = OMDbClient(client, settings)
+            with pytest.raises(ProviderLimitReachedError):
+                if by_id:
+                    await omdb.lookup_by_imdb_id("tt1")
+                else:
+                    await omdb.lookup_by_title("One", 2000)
+            assert await omdb.get_ratings_by_title("One", 2000) is None
 
 
 async def test_lookup_by_title_marks_not_found_non_transient(settings):

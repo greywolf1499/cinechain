@@ -31,6 +31,7 @@ from app.services import (
     embeddings,
     movie_features,
     provider_budgets,
+    settings_repo,
     task_runner,
     tvtropes,
 )
@@ -163,6 +164,7 @@ def test_atomic_budget_and_day(spa_engine):
 async def test_real_jit_ratings_budget_reserved_before_http(spa_engine):
     with Session(spa_engine) as session:
         movie(session, imdb_id="tt123")
+        settings_repo.set_overrides(session, {"omdb_soft_cap": "900"})
     with Session(spa_engine) as session, respx.mock:
 
         def response(_):
@@ -193,6 +195,7 @@ async def test_budget_clean_stop_resume_without_skipping(spa_engine, monkeypatch
 
     get_settings.cache_clear()
     with Session(spa_engine) as session:
+        settings_repo.set_overrides(session, {"omdb_soft_cap": "900"})
         for i in (1, 2, 3):
             movie(session, i, imdb_id=f"tt{i}")
         session.add(ProviderBudget(provider="omdb", day=utcnow().date().isoformat(), used=899))
@@ -212,14 +215,109 @@ async def test_budget_clean_stop_resume_without_skipping(spa_engine, monkeypatch
         assert route.call_count == 1
         with Session(spa_engine) as session:
             assert session.get(MovieFacetStatus, (2, "spa:ratings")) is None
-            budget = session.get(ProviderBudget, ("omdb", utcnow().date().isoformat()))
-            budget.used = 0
-            session.add(budget)
-            session.commit()
+            settings_repo.set_overrides(session, {"omdb_soft_cap": "902"})
         resumed_id, _ = submit(spa_engine, "ratings")
         resumed = await execute(spa_engine, resumed_id)
         assert resumed.progress_data["stage"] == 1
         assert [call.request.url.params["i"] for call in route.calls] == ["tt1", "tt2", "tt3"]
+        with Session(spa_engine) as session:
+            budget = session.get(ProviderBudget, ("omdb", utcnow().date().isoformat()))
+            assert budget.used == 902 and not budget.exhausted
+
+
+@pytest.mark.parametrize("status", [200, 401, 403, 429])
+async def test_adaptive_limit_trips_persists_and_resumes_next_day(spa_engine, monkeypatch, status):
+    monkeypatch.setenv("OMDB_API_KEY", "fixture")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    with Session(spa_engine) as session:
+        movie(session, 1, imdb_id="tt1")
+        movie(session, 2, imdb_id="tt2")
+        session.add(ProviderBudget(provider="omdb", day=utcnow().date().isoformat(), used=1200))
+        session.commit()
+    with respx.mock:
+        route = respx.get("https://www.omdbapi.com/").mock(
+            side_effect=[
+                httpx.Response(200, json={"Response": "True", "imdbRating": "7.0"}),
+                httpx.Response(
+                    status, json={"Response": "False", "Error": "Request limit reached!"}
+                ),
+            ]
+        )
+        task_id, _ = submit(spa_engine, "ratings")
+        task = await execute(spa_engine, task_id)
+        assert task.status == "completed"
+        assert task.progress_data["paused"] == "omdb_limit"
+        assert task.progress_data["message"] == "Daily limit reached"
+        assert task.progress_data["cursor"] == 1
+        with Session(spa_engine) as session:
+            budget = session.get(ProviderBudget, ("omdb", utcnow().date().isoformat()))
+            assert budget.used == 1202 and budget.exhausted
+            assert session.get(MovieFacetStatus, (2, "spa:ratings")) is None
+            assert session.get(cache_repo.CachedMovieRating, 2) is None
+            health = data_spa.health(session)["budgets"][0]
+            assert health["exhausted"] and health["remaining"] is None
+        task_id, _ = submit(spa_engine, "ratings")
+        assert (await execute(spa_engine, task_id)).progress_data["cursor"] == 1
+        assert route.call_count == 2
+        tomorrow = utcnow() + timedelta(days=1)
+        monkeypatch.setattr(provider_budgets, "utcnow", lambda: tomorrow)
+        route.mock(return_value=httpx.Response(200, json={"Response": "True", "imdbRating": "8"}))
+        task_id, _ = submit(spa_engine, "ratings")
+        assert (await execute(spa_engine, task_id)).progress_data["stage"] == 1
+        assert route.calls[-1].request.url.params["i"] == "tt2"
+        with Session(spa_engine) as session:
+            assert not session.get(ProviderBudget, ("omdb", tomorrow.date().isoformat())).exhausted
+
+
+async def test_jit_limit_trips_shared_breaker(spa_engine):
+    with Session(spa_engine) as session:
+        movie(session, imdb_id="tt1")
+    with Session(spa_engine) as session, respx.mock:
+        route = respx.get("https://www.omdbapi.com/").mock(
+            return_value=httpx.Response(
+                200, json={"Response": "False", "Error": "Request limit reached!"}
+            )
+        )
+        async with httpx.AsyncClient() as http:
+            omdb = OMDbClient(http, Settings(omdb_api_key="fixture"))
+            with pytest.raises(provider_budgets.ProviderLimitReachedError):
+                await cache_repo.get_movie_ratings(session, TMDBClient(http), omdb, 1)
+            with pytest.raises(provider_budgets.BudgetExhausted):
+                await cache_repo.get_movie_ratings(session, TMDBClient(http), omdb, 1)
+        assert route.call_count == 1
+
+
+def test_auto_cap_and_exhaustion_are_independent(spa_engine):
+    with Session(spa_engine) as session:
+        settings_repo.set_overrides(session, {"omdb_soft_cap": "0"})
+        session.add(ProviderBudget(provider="omdb", day=utcnow().date().isoformat(), used=5000))
+        session.commit()
+    assert provider_budgets.reserve(spa_engine, "omdb")
+    provider_budgets.mark_exhausted(spa_engine, "omdb")
+    assert not provider_budgets.reserve(spa_engine, "omdb", limit=10000)
+
+
+def test_breaker_migration_preserves_usage(config_dir):
+    from app.db import engine
+
+    config = Config("alembic.ini")
+    command.upgrade(config, "f7a8b9c0d1e2")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO provider_budgets (provider, day, used) VALUES ('omdb', '2026-10-10', 1234)"
+            )
+        )
+    command.upgrade(config, "head")
+    with Session(engine) as session:
+        row = session.get(ProviderBudget, ("omdb", "2026-10-10"))
+        assert row.used == 1234 and row.exhausted is False
+    command.downgrade(config, "f7a8b9c0d1e2")
+    command.upgrade(config, "head")
+    with Session(engine) as session:
+        assert session.get(ProviderBudget, ("omdb", "2026-10-10")).used == 1234
 
 
 async def test_unavailable_cooldown_errors_retry_no_catalogue_poison(spa_engine, monkeypatch):
@@ -396,7 +494,9 @@ def test_health_and_endpoint_auth_contract(spa_engine):
         data = response.json()
         assert data["total_movies"] == 0
         assert set(data["coverage"]) == set(data_spa.TREATMENTS)
-        assert data["budgets"][0]["remaining"] == 900
+        assert data["budgets"][0]["remaining"] is None
+        assert data["budgets"][0]["limit"] == 0
+        assert data["budgets"][0]["exhausted"] is False
         app.dependency_overrides[get_current_user] = lambda: User(
             id="admin",
             username="admin",
@@ -501,7 +601,7 @@ def test_migration_single_head_and_preservation_roundtrip(config_dir):
     from app.db import engine
 
     config = Config("alembic.ini")
-    assert ScriptDirectory.from_config(config).get_heads() == ["f7a8b9c0d1e2"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["a8b9c0d1e2f3"]
     command.upgrade(config, "d5e6f7a8b9c0")
     with Session(engine) as session:
         session.exec(

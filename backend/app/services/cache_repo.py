@@ -804,15 +804,26 @@ async def get_movie_ratings(
     movie = await get_movie(session, tmdb, tmdb_id)
     if not movie.imdb_id and movie.origin_country is None:
         movie = await get_movie(session, tmdb, tmdb_id, require_detail=True)
-    from app.services.provider_budgets import BudgetExhausted, reserve
+    from app.services.provider_budgets import (
+        BudgetExhausted,
+        ProviderLimitReachedError,
+        mark_exhausted,
+        reserve,
+    )
 
     if not await anyio.to_thread.run_sync(reserve, session.get_bind(), "omdb"):
-        raise BudgetExhausted("OMDb daily budget exhausted; try again tomorrow")
-    lookup = (
-        await omdb.lookup_by_imdb_id(movie.imdb_id)
-        if movie.imdb_id
-        else await omdb.lookup_by_title(movie.title, parse_release_year(movie.release_date))
-    )
+        raise BudgetExhausted(
+            "OMDb daily limit or soft cap reached; check Data Spa settings or try again tomorrow"
+        )
+    try:
+        lookup = (
+            await omdb.lookup_by_imdb_id(movie.imdb_id)
+            if movie.imdb_id
+            else await omdb.lookup_by_title(movie.title, parse_release_year(movie.release_date))
+        )
+    except ProviderLimitReachedError:
+        await anyio.to_thread.run_sync(mark_exhausted, session.get_bind(), "omdb")
+        raise
     if lookup.transient:
         return cached
     return await anyio.to_thread.run_sync(repo.upsert_ratings, tmdb_id, lookup.ratings)

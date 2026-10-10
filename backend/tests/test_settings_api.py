@@ -83,6 +83,24 @@ def test_tvtropes_can_be_enabled_and_disabled_as_an_admin(client):
     assert disabled.json()["tvtropes_enabled"] is False
 
 
+def test_omdb_soft_cap_saved_validated_and_auto_overrides_env(client, monkeypatch):
+    _register_and_login(client)
+    assert client.get("/api/settings/integrations").json()["omdb_soft_cap"] == 0
+    response = client.patch("/api/settings/integrations", json={"omdb_soft_cap": 2500})
+    assert response.status_code == 200 and response.json()["omdb_soft_cap"] == 2500
+    assert client.get("/api/system/cache/health").json()["budgets"][0]["limit"] == 2500
+    assert client.patch("/api/settings/integrations", json={"omdb_soft_cap": -1}).status_code == 422
+    from app.config import get_settings
+
+    monkeypatch.setenv("OMDB_SOFT_CAP", "100")
+    get_settings.cache_clear()
+    response = client.patch("/api/settings/integrations", json={"omdb_soft_cap": 0})
+    assert response.status_code == 200 and response.json()["omdb_soft_cap"] == 0
+    assert client.get("/api/system/cache/health").json()["budgets"][0]["remaining"] is None
+    response = client.patch("/api/settings/integrations", json={"omdb_soft_cap": None})
+    assert response.json()["omdb_soft_cap"] == 100
+
+
 def test_admin_patch_sets_and_masks_override(client):
     _register_and_login(client)
     resp = client.patch(

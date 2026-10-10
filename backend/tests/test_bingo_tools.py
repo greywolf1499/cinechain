@@ -278,7 +278,9 @@ def test_squares_for_an_empty_watchlist_have_no_matches(client):
     assert all(s["matches"] == [] and s["unknown"] == 0 for s in squares.values())
 
 
-def test_grid_board_reuses_tool_generator_and_stamps_its_server_query(client, db_engine, monkeypatch):
+def test_grid_board_reuses_tool_generator_and_stamps_its_server_query(
+    client, db_engine, monkeypatch
+):
     seed(db_engine)
     from app.api import routes_tools
 

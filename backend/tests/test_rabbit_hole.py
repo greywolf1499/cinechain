@@ -872,7 +872,9 @@ def test_fog_redacts_future_tiers_and_terminal_runs_reveal_the_deck(
     with Session(db_engine) as session:
         run = session.get(Run, run_id)
         private_deck = run.rules_config["tier_deck"]
-        future_start = next(entry["start_depth"] for entry in private_deck if entry["start_depth"] > 1)
+        future_start = next(
+            entry["start_depth"] for entry in private_deck if entry["start_depth"] > 1
+        )
         private_tier = next(entry for entry in private_deck if entry["start_depth"] == future_start)
         assert private_tier.get("predicate_id") or private_tier.get("query")
         run.status = "failed"
@@ -946,13 +948,9 @@ def test_fog_creation_owns_generated_state_and_periscope_checks_before_spending(
     assert run_detail(client, run_id)["rules_config"]["periscope_charges"] == 1
 
     boundary = next(
-        entry["start_depth"]
-        for entry in rules["tier_deck"]
-        if entry["start_depth"] > 1
+        entry["start_depth"] for entry in rules["tier_deck"] if entry["start_depth"] > 1
     )
-    revealed = client.post(
-        f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": boundary}
-    )
+    revealed = client.post(f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": boundary})
     assert revealed.status_code == 200, revealed.text
     after = revealed.json()["rules_config"]
     assert after["periscope_charges"] == 0
@@ -960,14 +958,10 @@ def test_fog_creation_owns_generated_state_and_periscope_checks_before_spending(
     disclosed = next(entry for entry in after["tier_deck"] if entry["start_depth"] == boundary)
     assert disclosed["hidden"] is False
     assert "params" not in disclosed and "query" not in disclosed
-    repeated = client.post(
-        f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": boundary}
-    )
+    repeated = client.post(f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": boundary})
     assert repeated.status_code == 409
     next_boundary = next(
-        entry["start_depth"]
-        for entry in rules["tier_deck"]
-        if entry["start_depth"] > boundary
+        entry["start_depth"] for entry in rules["tier_deck"] if entry["start_depth"] > boundary
     )
     no_charge = client.post(
         f"/api/runs/{run_id}/rabbit-hole/periscope", json={"depth": next_boundary}
@@ -1465,6 +1459,7 @@ def test_a_film_hydrated_by_pool_shaping_is_never_both_timed_and_unverified(
     add_candidates(world)
     run_id = rabbit_run(client)
     put_at_depth(world, run_id, 15)
+
     async def candidate_loads(_session, movie_ids):
         return {movie_id: 0.3 for movie_id in movie_ids if movie_id == 14}
 

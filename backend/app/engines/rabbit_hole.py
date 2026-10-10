@@ -255,9 +255,7 @@ def _public_predicate(item: dict) -> dict:
     return {key: value for key, value in item.items() if key not in ("params", "query")}
 
 
-def _public_state(
-    state: dict, fog: str, depth: int, revealed: set[int], deck: list[dict]
-) -> dict:
+def _public_state(state: dict, fog: str, depth: int, revealed: set[int], deck: list[dict]) -> dict:
     current = dict(state)
     current["fog"] = fog
     current["periscope_charges"] = state.get("periscope_charges", 0)
@@ -266,12 +264,10 @@ def _public_state(
     next_entry = next(
         (entry for entry in deck if entry.get("number") == state.get("next_tier")), None
     )
-    visible_next = (
-        state.get("next_tier") is not None
-        and (
-            state.get("steps_until_next", 0) <= 1
-            or next_entry is not None and not next_entry.get("hidden", True)
-        )
+    visible_next = state.get("next_tier") is not None and (
+        state.get("steps_until_next", 0) <= 1
+        or next_entry is not None
+        and not next_entry.get("hidden", True)
     )
     if not visible_next:
         current["next_tier_name"] = "Unrevealed"
@@ -687,9 +683,7 @@ class RabbitHoleEngine(CineChainEngine):
     bounty_reward = "life"
 
     @classmethod
-    def public_rules(
-        cls, rules: dict | None, run: Run, *, depth: int | None = None
-    ) -> dict:
+    def public_rules(cls, rules: dict | None, run: Run, *, depth: int | None = None) -> dict:
         public = dict(rules or {})
         fog = public.get("fog", "off")
         if fog == "off" or run.status != "active":
@@ -836,8 +830,7 @@ class RabbitHoleEngine(CineChainEngine):
             else "no escape depth is configured.",
             "tier_schedule": ("This run's tier rules: ")
             + "; ".join(
-                f"depth {entry.get('start_depth')}: "
-                f"{entry.get('rule', 'undisclosed tier')}"
+                f"depth {entry.get('start_depth')}: {entry.get('rule', 'undisclosed tier')}"
                 for entry in (rules or {}).get("tier_deck", [])
             )
             if procedural(rules)

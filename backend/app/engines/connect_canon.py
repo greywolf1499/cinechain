@@ -23,7 +23,9 @@ class ConnectCanonEngine(CineChainEngine):
     game_type = CONNECT_CANON
     seed_policy = "none"
     display_name = "Connect the Canon"
-    description = "Reach all configured canon waypoints while staying near or under par on each leg."
+    description = (
+        "Reach all configured canon waypoints while staying near or under par on each leg."
+    )
     tagline = "Three waypoints, one clean route"
     tags: ClassVar[list[str]] = ["Shared cast", "Waypoints", "Par scoring"]
     rulebook: ClassVar[RuleSection] = RuleSection(
@@ -50,16 +52,17 @@ class ConnectCanonEngine(CineChainEngine):
         prepared = self.prepare_rules_config(rules)
         waypoints = [int(movie_id) for movie_id in prepared.get("waypoint_movie_ids") or []]
         if len(waypoints) != 3 or len(set(waypoints)) != 3:
-            raise RunSetupError("Connect the Canon needs exactly three distinct waypoint movie ids.")
+            raise RunSetupError(
+                "Connect the Canon needs exactly three distinct waypoint movie ids."
+            )
         order = prepared.get("order", "ordered")
         if order == "best_order":
             best = None
             for permutation in itertools.permutations(waypoints):
-                legs = await self._build_legs(list(permutation), prepared.get("link", "shared_cast"))
-                score = sum(
-                    leg["par"] if isinstance(leg.get("par"), int) else 9
-                    for leg in legs
+                legs = await self._build_legs(
+                    list(permutation), prepared.get("link", "shared_cast")
                 )
+                score = sum(leg["par"] if isinstance(leg.get("par"), int) else 9 for leg in legs)
                 candidate = (score, list(permutation), legs)
                 if best is None or candidate < best:
                     best = candidate

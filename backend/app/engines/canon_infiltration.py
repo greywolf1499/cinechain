@@ -29,7 +29,9 @@ DEFAULT_TARGET_LIST = "sight_and_sound_2022"
 class CanonInfiltrationEngine(CineChainEngine):
     game_type = CANON_INFILTRATION
     display_name = "Canon Infiltration"
-    description = "Start from a B-movie seed and infiltrate a canon list before the hop limit runs out."
+    description = (
+        "Start from a B-movie seed and infiltrate a canon list before the hop limit runs out."
+    )
     tagline = "Break into the canon in limited hops"
     tags: ClassVar[list[str]] = ["Shared cast", "Target set", "Hop budget"]
     rulebook: ClassVar[RuleSection] = RuleSection(
@@ -151,7 +153,9 @@ class CanonInfiltrationEngine(CineChainEngine):
             return []
         return list(
             self.session.exec(
-                select(CanonMovieBadge.movie_id).where(CanonMovieBadge.curated_list_id == target_list_id)
+                select(CanonMovieBadge.movie_id).where(
+                    CanonMovieBadge.curated_list_id == target_list_id
+                )
             ).all()
         )
 

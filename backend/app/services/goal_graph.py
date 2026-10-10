@@ -354,7 +354,9 @@ def search(
             )
             if not f_frontier:
                 break
-            searched_depth = max(searched_depth, max(f_visited[movie_id] for movie_id in f_frontier))
+            searched_depth = max(
+                searched_depth, max(f_visited[movie_id] for movie_id in f_frontier)
+            )
             meetings = sorted(movie_id for movie_id in f_frontier if movie_id in b_visited)
         else:
             b_frontier = _expand_frontier(
@@ -362,7 +364,9 @@ def search(
             )
             if not b_frontier:
                 break
-            searched_depth = max(searched_depth, max(b_visited[movie_id] for movie_id in b_frontier))
+            searched_depth = max(
+                searched_depth, max(b_visited[movie_id] for movie_id in b_frontier)
+            )
             meetings = sorted(movie_id for movie_id in b_frontier if movie_id in f_visited)
         for movie_id in meetings:
             distance = f_visited[movie_id] + b_visited[movie_id]

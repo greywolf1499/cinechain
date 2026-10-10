@@ -25,7 +25,9 @@ def _step(movie_id: int, cell: str) -> RunStep:
 
 
 def test_public_rules_redacts_unrevealed_cells(config_dir):
-    engine = create_engine(f"sqlite:///{config_dir}/grid_redact.db", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{config_dir}/grid_redact.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     run = Run(name="Grid", game_type="grid_crawler", rules_config={})
     rules = {
@@ -46,7 +48,9 @@ def test_public_rules_redacts_unrevealed_cells(config_dir):
 
 
 def test_claimable_cells_start_on_top_edge_then_expand_adjacent(config_dir):
-    engine = create_engine(f"sqlite:///{config_dir}/grid_claims.db", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{config_dir}/grid_claims.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
         crawler = GridCrawlerEngine(session, tmdb=None)
@@ -57,9 +61,7 @@ def test_claimable_cells_start_on_top_edge_then_expand_adjacent(config_dir):
             }
         }
         starts = {cell["id"] for cell in crawler._claimable_cells(rules, [])}
-        next_cells = {
-            cell["id"] for cell in crawler._claimable_cells(rules, [_step(1, "0:1")])
-        }
+        next_cells = {cell["id"] for cell in crawler._claimable_cells(rules, [_step(1, "0:1")])}
     assert starts == {"0:0", "0:1", "0:2"}
     assert next_cells == {"0:0", "0:2", "1:1"}
 
@@ -131,7 +133,10 @@ def test_bingo_and_blackout_victories(config_dir, victory, claimed):
         run = Run(
             name="Grid",
             game_type="grid_crawler",
-            rules_config={"victory": victory, GRID_RULES_KEY: {"size": 2 if victory == "blackout" else 3, "cells": []}},
+            rules_config={
+                "victory": victory,
+                GRID_RULES_KEY: {"size": 2 if victory == "blackout" else 3, "cells": []},
+            },
         )
         outcome = crawler.evaluate_run_outcome(
             run, [_step(index + 1, cell) for index, cell in enumerate(claimed)]
@@ -148,8 +153,16 @@ def test_grid_generation_is_seeded_and_covers_a_winning_line(monkeypatch):
             "query": {"facet": "runtime", "op": "ge", "value": 60},
         }
         for key in (
-            "short", "epic", "classic", "modern", "crowd_pleaser",
-            "female_director", "one_word", "non_english", "canon", "cult_classic",
+            "short",
+            "epic",
+            "classic",
+            "modern",
+            "crowd_pleaser",
+            "female_director",
+            "one_word",
+            "non_english",
+            "canon",
+            "cult_classic",
         )
     }
     monkeypatch.setattr("app.facets.registry.named_variants", lambda: named)

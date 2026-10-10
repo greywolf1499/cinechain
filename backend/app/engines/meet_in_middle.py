@@ -222,13 +222,17 @@ class MeetInTheMiddleEngine(CineChainEngine):
                 if event["type"] == "result":
                     path = event.get("path") or []
                     path_movie_ids = [
-                        node.get("movie_id") if isinstance(node, dict) else getattr(node, "movie_id", None)
+                        node.get("movie_id")
+                        if isinstance(node, dict)
+                        else getattr(node, "movie_id", None)
                         for node in path
                     ]
                     return TunnelDistance(
                         hops=event.get("hops"),
                         searched_depth=event.get("hops") or result.searched_depth,
-                        path_movie_ids=[movie_id for movie_id in path_movie_ids if movie_id is not None],
+                        path_movie_ids=[
+                            movie_id for movie_id in path_movie_ids if movie_id is not None
+                        ],
                         connections=event.get("connections") or [],
                     )
                 if event["type"] in {"exhausted", "timeout", "error"}:

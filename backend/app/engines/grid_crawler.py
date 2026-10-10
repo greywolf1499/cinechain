@@ -168,7 +168,9 @@ def generate_grid_board(
     for index, (variant_id, label, emoji) in enumerate(selected):
         definition = variants[variant_id]
         query = FacetQuery.model_validate(definition["query"])
-        counts = feasibility.counts(session, type("P", (), {"query": query, "id": variant_id})(), universe_ids)
+        counts = feasibility.counts(
+            session, type("P", (), {"query": query, "id": variant_id})(), universe_ids
+        )
         rate = counts["pass_rate"] if counts["pass_rate"] is not None else 0.0
         if not (0.02 <= rate <= 0.60):
             continue
@@ -204,7 +206,8 @@ def generate_grid_board(
         "size": size,
         "layout": layout,
         "cells": [
-            {key: value for key, value in cell.items() if key != "distance_to_edge"} for cell in ordered
+            {key: value for key, value in cell.items() if key != "distance_to_edge"}
+            for cell in ordered
         ],
     }
 
@@ -386,12 +389,9 @@ class GridCrawlerEngine(TrackerEngine):
         history = history or []
         adjacent = self._claimable_cells(rules, history)
         jump_available = bool(rules.get("_grid_jump")) and (
-            int(rules.get("wildcards_budget", 0)) == -1
-            or int(rules.get("wildcards_budget", 0)) > 0
+            int(rules.get("wildcards_budget", 0)) == -1 or int(rules.get("wildcards_budget", 0)) > 0
         )
-        claimable = (
-            self._claimable_cells(rules, history, jump=True) if jump_available else adjacent
-        )
+        claimable = self._claimable_cells(rules, history, jump=True) if jump_available else adjacent
         matching = [cell["id"] for cell in claimable if self._matches_cell(to_movie_id, cell)]
         adjacent_matching = [
             cell["id"] for cell in adjacent if self._matches_cell(to_movie_id, cell)

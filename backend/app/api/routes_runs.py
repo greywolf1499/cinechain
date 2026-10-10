@@ -820,10 +820,7 @@ async def _enforce_run_rules(
     engine_class = ENGINE_REGISTRY.get(run.game_type)
     if run.game_type == "grid_crawler" and rules.get("table_mode") is True:
         history = _play_history(session, run.id)
-        if (
-            payload.status == "watched"
-            and not actor_claim_turn_allowed(history, user.id)
-        ):
+        if payload.status == "watched" and not actor_claim_turn_allowed(history, user.id):
             raise HTTPException(409, detail="Grid claims must alternate between participants")
     if previous is None:
         # The very first film has no inbound link; ignore any client-claimed one so it
@@ -1670,10 +1667,7 @@ async def _log_step(
         session, tmdb, run, movie, payload, actor, fork_team
     )
     if linked_metadata:
-        if (
-            run.game_type == CONNECT_CANON
-            and linked_metadata.get("waypoint_reached") is True
-        ):
+        if run.game_type == CONNECT_CANON and linked_metadata.get("waypoint_reached") is True:
             extra_metadata["waypoint_reached"] = True
         if (
             run.game_type == CanonInfiltrationEngine.game_type

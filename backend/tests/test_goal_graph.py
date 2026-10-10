@@ -26,7 +26,9 @@ def _seed_actor_links(session: Session, pairs: list[tuple[int, int]]) -> None:
 
 
 def test_search_finds_shortest_path_and_connections(config_dir):
-    engine = create_engine(f"sqlite:///{config_dir}/goal_graph.db", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{config_dir}/goal_graph.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
         _seed_movies(session, [1, 2, 3, 4, 10, 20])

@@ -96,9 +96,7 @@ BALANCE = BalanceSpec()
 
 FacetOperator = Literal["eq", "ne", "lt", "le", "gt", "ge", "contains", "has_any", "has_all"]
 
-PLANE_PARAMETERS: dict[
-    str, dict[str, tuple[str, Any, int | float | None, int | float | None]]
-] = {
+PLANE_PARAMETERS: dict[str, dict[str, tuple[str, Any, int | float | None, int | float | None]]] = {
     "bipolar_decades": {
         "team_a_before": ("integer", 1970, 1900, 2030),
         "team_b_from": ("integer", 2000, 1900, 2030),

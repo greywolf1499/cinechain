@@ -108,9 +108,7 @@ def test_live_distance_fallback_is_bounded_and_accepts_solver_result(config_dir,
             yield {"type": "result", "hops": 3}
 
         monkeypatch.setattr(infiltration, "solve_bridge", solve)
-        distance = __import__("asyncio").run(
-            infiltration._live_distance(1, [10, 11, 12, 13], 4)
-        )
+        distance = __import__("asyncio").run(infiltration._live_distance(1, [10, 11, 12, 13], 4))
     assert distance == 3
     assert len(targets) == 1
 

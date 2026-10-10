@@ -710,3 +710,7 @@
 - **Ground generated tape in cache facts:** Pick axes deterministically from facets and matchup identity, constrain model output to those facts, and run template output through the same validator. Use first-writer-wins persistence and preserve the legacy commentary view.
 - **Verified:** Full backend suite: 1698 passed + 1 expected xfail, 93 existing framework/deprecation warnings; focused F10 regressions passed; `uv run ruff check .` and frontend TypeScript/Vite production build passed. Vite reports the existing WorldMap dynamic-import and bundle-size warnings. No migrations, dependencies, daemons or new ML models. Pause for human review before F11.
 - **Files and scope:** Structured LLM generation and migrated call sites; bracket tape service/route/UI; vibe controller, Chaser and overlay integration; frontend load/meter presentation; and F10 regression fixtures.
+
+## V4 Release: Final Verification
+- **Format before releasing:** The final Ruff pass reformatted 14 backend files without changing behavior. Verify the formatted tree with the complete backend suite and frontend production build before committing polish separately from release metadata.
+- **Verified:** 1751 backend tests passed, 1 expected xfail, 93 existing deprecation warnings; Ruff lint and format checks passed; frontend TypeScript/Vite build passed with the existing WorldMap import and large-chunk warnings. The full suite ran with a scratch `CONFIG_DIR`, not the household database.

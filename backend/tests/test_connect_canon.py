@@ -32,13 +32,13 @@ def test_bridge_lock_tracks_active_leg():
 def test_waypoint_reached_metadata_is_server_generated():
     connect = ConnectCanonEngine(session=None, tmdb=None)
     result = ValidationResult(valid=True, mechanic={"waypoint_reached": True})
-    assert connect.link_metadata(result, {"waypoint_reached": False}) == {
-        "waypoint_reached": True
-    }
+    assert connect.link_metadata(result, {"waypoint_reached": False}) == {"waypoint_reached": True}
 
 
 def test_sync_state_marks_leg_progress(config_dir):
-    engine = create_engine(f"sqlite:///{config_dir}/connect_sync.db", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{config_dir}/connect_sync.db", connect_args={"check_same_thread": False}
+    )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
         connect = ConnectCanonEngine(session, tmdb=None)
@@ -97,10 +97,13 @@ def test_par_score_sums_completed_leg_hops_minus_par():
             ]
         },
     )
-    assert ConnectCanonEngine.par_score(
-        run,
-        [_watched(10), _watched(11), _watched(20), _watched(21), _watched(30)],
-    ) == 0
+    assert (
+        ConnectCanonEngine.par_score(
+            run,
+            [_watched(10), _watched(11), _watched(20), _watched(21), _watched(30)],
+        )
+        == 0
+    )
 
 
 def test_prepare_run_computes_disjoint_leg_pars(config_dir, monkeypatch):

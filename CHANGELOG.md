@@ -2,6 +2,110 @@
 
 Notable changes to CineChain are recorded here.
 
+## [4.0.0] - 2026-10-10
+
+### The Facet & Modes Update
+
+The complete V4 blueprint brings a shared language for movie facts, deeper
+replayable challenges, and a consistent queue-to-watch loop. Discover more
+useful picks, repair missing evidence, and play three entirely new game modes
+without adding background daemons or new AI models.
+
+### One movie-night loop, everywhere
+
+- **Universal Up Next:** Queue a film first, then log it watched with ratings
+  and scores when the night is done. Planned board entries do not earn points
+  prematurely; RT Split settles only on watching. Queued films always offer
+  Log watched and Unqueue actions.
+- **Ubiquitous detail sheets:** Open any unconcealed movie poster for full
+  details and available actions. Contextual How to Play leads with a cache-only
+  "Right now" coaching line and bite-sized explanations.
+- **Tasks that survive navigation:** A shared progress feed exposes cancellation,
+  status and return links. Interrupted imports and list syncs retain checkpoints
+  for resumable work.
+
+### A universal language for movie challenges
+
+- **Universal Facet Engine:** Shared, evidence-backed facts power filters,
+  bounties, Chaos, Bingo and Rabbit Hole rules. Unknown facts remain unknown
+  rather than becoming misleading passes or failures.
+- **Bidirectional sequence modifiers:** Climb or descend through ordered
+  attributes, including numbers, title length and ratings; explore obscurity
+  or chain a title's last letter. Existing modifier keys remain compatible.
+- **Measured difficulty:** Cached pass rates guide challenge difficulty and
+  feasibility instead of scattered thresholds.
+
+### Cache care that keeps discovery alive
+
+- **The Data Spa:** Admin treatments repair details, people, ratings,
+  embeddings, facets and trope evidence with batch limits, resumable cursors
+  and deduplicated jobs. Health bars show coverage and provider usage.
+- **Rate-limited provider budgets:** Daily budgets, including OMDb's default
+  900-call allowance, keep cache healing within predictable limits.
+- **Dry-pool recovery:** Discovery widens eligible pools within mode rules and
+  explains whether filters hid results or the cache needs more evidence.
+- **Resilient curated lists:** Per-film outcomes preserve partial successes;
+  TV entries are excluded from movie badges. Atomic sync, ambiguity review and
+  persistent manual matches make canon imports more trustworthy.
+
+### Trustworthy trope and vibe evidence
+
+- **Opt-in TVTropes hybrid scraper:** Polite, identifying requests respect
+  robots rules, pacing and local caching, and stop on challenges or rate limits.
+  Mapped tropes must pass the genre gate and semantic or enabled local-Qwen
+  validation before becoming evidence.
+- **Source-aware trope chips:** See whether a trope came from TV Tropes,
+  AI or a household annotation.
+- **Culture-neutral semantic facets:** Existing JIT embeddings derive tone,
+  arousal and household-relative heaviness without installing new models.
+
+### Deeper Rabbit Hole and Tug strategy
+
+- **Rabbit Hole Fog of War:** Optional Fog or Abyss hides future descent rules.
+  Periscope relics reveal future boundaries; Game Over shows what lay below.
+  Visible rule chips resolve as candidate facts become available.
+- **Tug Plane Registry:** Choose replayable decade, country, language, genre,
+  runtime, setting-era or critic/audience boards with balance readouts.
+  Traversal is independent of territory: graph links, attributes and seeded
+  draft deals offer different ways to play.
+- **Neutral-band Portals:** When no scoring reply exists, a limited unlinked
+  neutral hop can reopen play. Stored snapshots and scoring stamps preserve
+  the rules of a run; legacy Tug runs retain their original targets and folds.
+
+### Grounded narrative, gentler pacing
+
+- **Structured narrative AI:** Pitches, teasers, criticism, bounties and tropes
+  use schema-checked outputs with deterministic fallbacks.
+- **Tale of the Tape:** Bracket matchups automatically compare three contrasting
+  axes and one common-ground axis, grounded in cached facts.
+- **Vibe Controller:** Rolling load and clear fatigue/recovery signals support
+  soft or strict pacing. Chaser picks use heaviness and language-relative runtime
+  instead of assuming particular genres or cultures need a break.
+
+### Three new ways to play
+
+- **Grid Crawler:** Claim adjacent facet-query cells on a seeded board, spend a
+  Jump wildcard to cross gaps, and reveal fogged cells as you explore. Supports
+  alternating Table Mode claims and shares its generator with Watchlist Bingo.
+- **Connect the Canon:** Chain through ordered canon waypoints, with per-leg par
+  and hops-minus-par scoring. The active Bridge Solver leg stays locked unless
+  assist is enabled.
+- **Canon Infiltration:** Start with an eligible B-movie and work toward a canon
+  target within a hop limit, guided by cached distance chips or optional fog.
+- **Shared goal graph:** Bounded multi-source/multi-target search also powers
+  Daily Bridge and Meet in the Middle while retaining their solver fallbacks.
+
+### Upgrade and release notes
+
+- Back up the `/config` volume before upgrading; startup applies the included
+  SQLite migrations. Existing runs retain versioned rules and server-owned state.
+- TVTropes and generative AI remain opt-in. Local inference uses the existing
+  on-demand models; no Redis, Celery, message broker or vector database is needed.
+- Final verification: **1751 backend tests passed, 1 expected xfail**, Ruff lint
+  and formatting passed, and the TypeScript/Vite production build passed.
+  Existing framework deprecation and Vite chunk warnings remain. The final
+  F11 mobile browser acceptance playthrough was not performed.
+
 ## [3.0.0] - 2026-10-06
 
 ### The Synergy Update

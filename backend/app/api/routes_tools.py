@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from hashlib import sha256
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
@@ -14,6 +15,7 @@ from app.api.deps import get_current_user, get_omdb_client, get_tmdb_client
 from app.db import get_session
 from app.engines import march_madness
 from app.engines.base import RunSetupError
+from app.engines.grid_crawler import tool_board
 from app.facets import store as facet_store
 from app.facets.genres import GENRE_IDS
 from app.facets.query import FacetQuery, compile, universe_ids
@@ -377,6 +379,11 @@ class BingoStampRequest(BaseModel):
     movie_id: int
 
 
+def _grid_bingo_seed(user_id: str) -> int:
+    """Stable per-user generator seed so local board stamps remain verifiable."""
+    return int.from_bytes(sha256(f"watchlist-bingo:{user_id}".encode()).digest()[:4], "big")
+
+
 class BingoStampResult(BaseModel):
     square_id: str
     movie_id: int
@@ -415,6 +422,33 @@ def _refresh_facets(session: Session, ids: list[int]) -> None:
     session.commit()
 
 
+def _tool_squares(session: Session, user_id: str, ids: list[int]) -> list[BingoSquare]:
+    board = tool_board(session, user_id, seed=_grid_bingo_seed(user_id))
+    return [
+        BingoSquare(
+            id=cell["id"],
+            label=cell["label"],
+            hint=f"Match {cell['label'].lower()}",
+            query=FacetQuery.model_validate(cell["query"]),
+        )
+        for cell in board["cells"]
+    ]
+
+
+def _square_matches(session: Session, squares: list[BingoSquare], ids: list[int]) -> BingoSquares:
+    matched = []
+    for square in squares:
+        verdicts = _verdicts(session, square.query, ids)
+        matched.append(
+            BingoSquareMatches(
+                **square.model_dump(by_alias=True),
+                matches=[movie_id for movie_id in ids if verdicts.get(movie_id) is True],
+                unknown=sum(verdict is None for verdict in verdicts.values()),
+            )
+        )
+    return BingoSquares(squares=matched)
+
+
 @router.get("/bingo/squares", response_model=BingoSquares, response_model_exclude_none=True)
 def bingo_squares_for_watchlist(
     session: Session = Depends(get_session),
@@ -423,17 +457,40 @@ def bingo_squares_for_watchlist(
     """Every Bingo square with the caller's watchlist films that fill it (cache only)."""
     ids = _watchlist_ids(session, current_user.id)
     _refresh_facets(session, ids)
-    result = []
-    for square in bingo_squares():
-        verdicts = _verdicts(session, square.query, ids)
-        result.append(
-            BingoSquareMatches(
-                **square.model_dump(by_alias=True),
-                matches=[movie_id for movie_id in ids if verdicts.get(movie_id) is True],
-                unknown=sum(1 for movie_id in ids if verdicts.get(movie_id) is None),
-            )
+    return _square_matches(session, bingo_squares(), ids)
+
+
+@router.get("/bingo/grid", response_model=BingoSquares, response_model_exclude_none=True)
+def bingo_grid_for_watchlist(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> BingoSquares:
+    """A seeded Grid Crawler board for Watchlist Bingo, using only cached watchlist facets."""
+    ids = _watchlist_ids(session, current_user.id)
+    _refresh_facets(session, ids)
+    try:
+        return _square_matches(session, _tool_squares(session, current_user.id, ids), ids)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Your watchlist needs more varied cached films for a Grid Crawler Bingo board.",
+        ) from exc
+
+
+def _stamp_square(session: Session, user_id: str, square_id: str) -> BingoSquare | None:
+    square = next((item for item in bingo_squares() if item.id == square_id), None)
+    if square is not None:
+        return square
+    if ":" not in square_id:
+        return None
+    ids = _watchlist_ids(session, user_id)
+    try:
+        return next(
+            (item for item in _tool_squares(session, user_id, ids) if item.id == square_id),
+            None,
         )
-    return BingoSquares(squares=result)
+    except ValueError:
+        return None
 
 
 @router.post("/bingo/stamp", response_model=BingoStampResult)
@@ -443,7 +500,7 @@ def bingo_stamp(
     current_user: User = Depends(get_current_user),
 ) -> BingoStampResult:
     """Check a watchlist film fills a square, using the server's own query for that square."""
-    square = next((s for s in bingo_squares() if s.id == body.square_id), None)
+    square = _stamp_square(session, current_user.id, body.square_id)
     if square is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown Bingo square")
 

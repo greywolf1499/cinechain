@@ -48,6 +48,8 @@ import VibeMeter from "../components/VibeMeter";
 import SplitBoard from "../components/SplitBoard";
 import BracketView from "../components/BracketView";
 import ExpeditionBoard from "../components/ExpeditionBoard";
+import GridBoard from "../components/GridBoard";
+import ConnectCanonProgress from "../components/ConnectCanonProgress";
 import CareerTrack from "../components/CareerTrack";
 import RabbitHoleHud from "../components/RabbitHoleHud";
 import RabbitHoleGameOver from "../components/RabbitHoleGameOver";
@@ -298,6 +300,9 @@ export default function RunDetailPage() {
       {run.game_type !== MEET_IN_THE_MIDDLE && <GoldenVetoBar run={run} users={users} />}
 
       {engine && engine.queue_policy !== "none" && <UpNextShelf run={run} />}
+      {run.game_type === "connect_canon" && (
+        <ConnectCanonProgress run={run} score={stats?.par_score} />
+      )}
       {run.game_type === MARCH_MADNESS && run.rules_config.bracket ? (
         <BracketView run={run} users={users} currentUserId={currentUser?.id} />
       ) : run.game_type === METHOD_ACTOR && run.rules_config.filmography ? (
@@ -306,6 +311,8 @@ export default function RunDetailPage() {
         <AuteurTrack run={run} />
       ) : run.game_type === REGIONAL_DEEP_DIVE && run.rules_config.expedition ? (
         <ExpeditionBoard run={run} />
+      ) : run.game_type === "grid_crawler" && run.rules_config.grid ? (
+        <GridBoard run={run} />
       ) : run.game_type === RT_SPLIT ? (
         <SplitBoard run={run} users={users} />
       ) : run.game_type === MEET_IN_THE_MIDDLE && run.steps.length > 0 ? (

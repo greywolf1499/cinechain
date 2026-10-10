@@ -63,6 +63,39 @@ export interface RulesConfig {
 	fog?: "off" | "fog" | "abyss";
 	periscope_charges?: number;
 	revealed_depths?: number[];
+	grid?: {
+		size?: number;
+		layout?: string;
+		cells?: Array<{
+			id: string;
+			label?: string;
+			emoji?: string;
+			hidden?: boolean;
+			difficulty?: number;
+			query?: Record<string, unknown>;
+		}>;
+	};
+	grid_seed?: number;
+	grid_revealed?: string[];
+	link?: string;
+	size?: number;
+	layout?: string;
+	victory?: string;
+	universe?: string;
+	waypoints?: number[];
+	waypoint_movie_ids?: number[];
+	legs?: Array<{
+		from: number;
+		to: number;
+		par?: number | null;
+		distance?: number | null;
+		reached_at_step?: number | null;
+		path?: number[];
+	}>;
+	current_leg?: number;
+	infiltration_par?: number;
+	hop_limit?: number;
+	target_list_id?: string;
 	daily?: boolean;
 	curses?: boolean;
 	relics?: { skip_curse: number };
@@ -897,6 +930,7 @@ export interface RunStats {
 	countries: string[];
 	decades: number[];
 	keystone_actors: KeystoneActor[];
+	par_score?: number | null;
 }
 
 // --- discovery (schemas/discovery.py, Phase 13) ---
@@ -958,6 +992,9 @@ export interface DiscoveryCandidate {
 	tug_territory?: "team_a" | "team_b" | "neutral" | null;
 	tug_territory_evidence?: Record<string, boolean | null>;
 	tug_link?: Record<string, unknown> | null;
+	grid_cells?: string[];
+	grid_jump_cells?: string[];
+	target_distance?: number | null;
 }
 
 /** POST /movies/{id}/narrative-era: a film's setting year. */

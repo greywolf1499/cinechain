@@ -75,6 +75,10 @@ def _max_same_actor_links(steps: Sequence[RunStep]) -> int:
     return max(counts.values(), default=0)
 
 
+def _max_hops(steps: Sequence[RunStep]) -> int:
+    return max(len(_watched(steps)) - 1, 0)
+
+
 # type -> (metric, human label used in the outcome reason)
 WIN_CONDITIONS: dict[str, tuple[Callable[[Sequence[RunStep]], int], str]] = {
     "decades_spanned": (_decades_spanned, "decades spanned"),
@@ -85,6 +89,7 @@ FAIL_CONDITIONS: dict[str, tuple[Callable[[Sequence[RunStep]], int], str]] = {
     "max_wildcards_used": (_wildcards_used, "wildcards used"),
     "max_repeats_used": (_repeats_used, "repeat penalties incurred"),
     "max_same_actor_links": (_max_same_actor_links, "links through the same actor"),
+    "max_hops": (_max_hops, "hops"),
 }
 
 

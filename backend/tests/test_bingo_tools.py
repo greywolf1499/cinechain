@@ -278,6 +278,35 @@ def test_squares_for_an_empty_watchlist_have_no_matches(client):
     assert all(s["matches"] == [] and s["unknown"] == 0 for s in squares.values())
 
 
+def test_grid_board_reuses_tool_generator_and_stamps_its_server_query(client, db_engine, monkeypatch):
+    seed(db_engine)
+    from app.api import routes_tools
+
+    calls = []
+
+    def generated_board(session, user_id, *, seed):
+        calls.append((user_id, seed))
+        return {
+            "cells": [
+                {
+                    "id": "0:0",
+                    "label": "Classic",
+                    "query": {"facet": "release_year", "op": "lt", "value": 1970},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(routes_tools, "tool_board", generated_board)
+    board = client.get("/api/tools/bingo/grid")
+    assert board.status_code == 200, board.text
+    square = board.json()["squares"][0]
+    assert square["id"] == "0:0" and square["matches"] == [1]
+    stamp = client.post("/api/tools/bingo/stamp", json={"square_id": "0:0", "movie_id": 1})
+    assert stamp.status_code == 200 and stamp.json()["valid"] is True
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+
+
 def test_stamp_is_validated_against_the_server_square(client, db_engine):
     seed(db_engine)
     ok = client.post("/api/tools/bingo/stamp", json={"square_id": "classic", "movie_id": 1})

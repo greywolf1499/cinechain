@@ -47,10 +47,11 @@ export default function RunStatsSection() {
         />
       ) : stats ? (
         <div className="flex flex-col gap-6">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className={`grid grid-cols-1 gap-3 ${stats.par_score != null ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
             <StatCard label="Hops Traveled" value={stats.total_hops} />
             <StatCard label="Countries Visited" value={stats.countries.length} />
             <StatCard label="Decades Spanned" value={stats.decades.length} />
+            {stats.par_score != null && <StatCard label="Connect the Canon score" value={stats.par_score} />}
           </div>
 
           <Section title="Origin Countries">

@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.db import get_session
 from app.engines import chaos, rabbit_hole
 from app.engines.base import RunSetupError
+from app.engines.connect_canon import CONNECT_CANON, ConnectCanonEngine
 from app.engines.modifier_registry import ModifierSpec
 from app.engines.registry import ENGINE_REGISTRY, get_engine
 from app.engines.rulebook import RuleSection, glossary, render
@@ -128,6 +129,7 @@ class BridgeRequest(BaseModel):
     game_type: str = "cinechain"
     from_movie_id: int
     to_movie_id: int
+    run_id: str | None = None
 
 
 def _modifier_schema(spec: ModifierSpec) -> dict[str, Any]:
@@ -495,11 +497,20 @@ ANTI_CHEAT_LOCKED = {
 
 
 def _anti_cheat_response(
-    session: Session, user: User, from_id: int, to_id: int
+    session: Session, user: User, from_id: int, to_id: int, run_id: str | None = None
 ) -> JSONResponse | None:
     """403 when this pair is today's Daily Puzzle and the user hasn't solved or forfeited it."""
     if daily_puzzle.is_locked(session, user.id, from_id, to_id):
         return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content=ANTI_CHEAT_LOCKED)
+    if run_id:
+        run = session.get(Run, run_id)
+        if (
+            run is not None
+            and session.get(RunParticipant, (run_id, user.id)) is not None
+            and run.game_type == CONNECT_CANON
+            and ConnectCanonEngine.bridge_locked(run.rules_config, from_id, to_id)
+        ):
+            return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content=ANTI_CHEAT_LOCKED)
     return None
 
 
@@ -511,7 +522,7 @@ async def bridge_fast(
     current_user: User = Depends(get_current_user),
 ) -> dict | Response:
     if locked := _anti_cheat_response(
-        session, current_user, payload.from_movie_id, payload.to_movie_id
+        session, current_user, payload.from_movie_id, payload.to_movie_id, payload.run_id
     ):
         return locked
     engine = get_engine(payload.game_type, session, tmdb)
@@ -866,7 +877,7 @@ async def bridge_stream(
     tmdb: TMDBClient = Depends(get_tmdb_client),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    if locked := _anti_cheat_response(session, current_user, from_movie_id, to_movie_id):
+    if locked := _anti_cheat_response(session, current_user, from_movie_id, to_movie_id, run_id):
         return locked
     engine = get_engine(game_type, session, tmdb)
     excluded_movie_ids, cast_limit, min_runtime = _run_solve_context(session, run_id, current_user)

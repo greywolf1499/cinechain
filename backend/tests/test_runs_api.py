@@ -32,6 +32,7 @@ def test_every_engine_publishes_its_queue_policy(client):
         "rt_split",
         "roulette",
         "decade_sieve",
+        "grid_crawler",
     }
     assert set(engines) == set(ENGINE_REGISTRY)
     for game_type, engine in engines.items():
@@ -39,6 +40,20 @@ def test_every_engine_publishes_its_queue_policy(client):
             "none" if game_type == "march_madness" else "slot" if game_type in slot else "frontier"
         )
         assert engine["queue_policy"] == expected
+
+
+def test_grid_table_mode_requires_multiple_participants(client):
+    _register_and_login(client, "grid-owner")
+    response = client.post(
+        "/api/runs",
+        json={
+            "name": "Table Grid",
+            "game_type": "grid_crawler",
+            "rules_config": {"table_mode": True},
+        },
+    )
+    assert response.status_code == 422
+    assert "at least two participants" in response.text
 
 
 @pytest.mark.parametrize("policy", ["slot", "frontier"])

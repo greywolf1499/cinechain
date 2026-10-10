@@ -23,6 +23,19 @@ export function generateBoard(
   preferFillable: boolean,
   random: () => number = Math.random,
 ): string[] {
+  const gridSquares = squares.length === BOARD_SIZE * BOARD_SIZE
+    && squares.every((square) => /^\d+:\d+$/.test(square.id));
+  if (gridSquares) {
+    const ids = [...squares]
+      .sort((a, b) => {
+        const [aRow, aCol] = a.id.split(":").map(Number);
+        const [bRow, bCol] = b.id.split(":").map(Number);
+        return aRow - bRow || aCol - bCol;
+      })
+      .map((square) => square.id);
+    ids[FREE_INDEX] = FREE_SQUARE;
+    return ids;
+  }
   const needed = BOARD_SIZE * BOARD_SIZE - 1;
   const shuffled = shuffle(squares, random);
   let chosen: BingoSquare[];

@@ -75,6 +75,9 @@ class DiscoveryCandidate(BaseModel):
     tug_territory_evidence: dict[str, bool | None] = {}
     tug_link: dict[str, object] | None = None
     tug_portal_available: bool = False
+    grid_cells: list[str] = []
+    grid_jump_cells: list[str] = []
+    target_distance: int | None = None
 
     @computed_field
     @property

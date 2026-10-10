@@ -71,6 +71,15 @@ SERVER_OWNED_RULES = (
     "bracket_commentary",
     "bracket_tape",
     "vibe_state",
+    "grid",
+    "grid_seed",
+    "grid_revealed",
+    "waypoints",
+    "legs",
+    "current_leg",
+    "infiltration_par",
+    "target_list_id",
+    "hop_limit",
     "custom_bounties",
 )
 

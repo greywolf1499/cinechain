@@ -30,8 +30,8 @@ from app.models.run import (
     Run,
     RunStep,
 )
-from app.schemas.engine import BridgeNode, SharedActorConnection
-from app.services import cache_repo, pathfinder
+from app.schemas.engine import SharedActorConnection
+from app.services import cache_repo, goal_graph
 
 MEET_IN_THE_MIDDLE = "meet_in_the_middle"
 SIDE_HEAD = "head"
@@ -191,48 +191,56 @@ class MeetInTheMiddleEngine(CineChainEngine):
         bidirectional BFS that avoids every film already in the run."""
         if head_movie_id == tail_movie_id:
             return TunnelDistance(hops=0, searched_depth=0)
-        hops: int | None = None
-        path_movie_ids: list[int] = []
-        connections: list[SharedActorConnection] = []
-        searched_depth = 0
-        message: str | None = None
-        async for event in pathfinder.solve_bridge_bipartite(
+        excluded = set(excluded_movie_ids) - {head_movie_id, tail_movie_id}
+        result = goal_graph.search(
             self.session,
-            self.tmdb,
+            [head_movie_id],
+            [tail_movie_id],
+            policy="shared_cast",
+            max_depth=max_depth,
+            max_seconds=float(max_seconds),
+            cast_limit=cast_limit,
+            excluded_movie_ids=excluded,
+        )
+        if result.distance is not None:
+            return TunnelDistance(
+                hops=result.distance,
+                searched_depth=result.distance,
+                path_movie_ids=result.path_movie_ids,
+                connections=result.connections,
+            )
+        agen = self.solve_bridge(
             head_movie_id,
             tail_movie_id,
             max_depth=max_depth,
             cast_limit=cast_limit,
-            excluded_movie_ids=excluded_movie_ids,
+            excluded_movie_ids=excluded,
             max_duration_seconds=max_seconds,
-        ):
-            if event["type"] == "result":
-                hops = event["hops"]
-                path_movie_ids = [
-                    node.movie_id if isinstance(node, BridgeNode) else node["movie_id"]
-                    for node in event["path"]
-                ]
-                connections = [
-                    connection
-                    if isinstance(connection, SharedActorConnection)
-                    else SharedActorConnection.model_validate(connection)
-                    for connection in event["connections"]
-                ]
-                searched_depth = hops
-            elif event["type"] == "timeout":
-                searched_depth = event.get("depth_reached", searched_depth)
-                message = (
-                    event.get("message") or "The search timed out - the ends may still be close."
-                )
-            elif event["type"] == "exhausted":
-                searched_depth = event.get("depth_reached", max_depth)
-                message = f"No route within {searched_depth} hops yet."
-            elif event["type"] == "error":
-                message = event.get("message", "The search failed.")
+        )
+        try:
+            async for event in agen:
+                if event["type"] == "result":
+                    path = event.get("path") or []
+                    path_movie_ids = [
+                        node.get("movie_id") if isinstance(node, dict) else getattr(node, "movie_id", None)
+                        for node in path
+                    ]
+                    return TunnelDistance(
+                        hops=event.get("hops"),
+                        searched_depth=event.get("hops") or result.searched_depth,
+                        path_movie_ids=[movie_id for movie_id in path_movie_ids if movie_id is not None],
+                        connections=event.get("connections") or [],
+                    )
+                if event["type"] in {"exhausted", "timeout", "error"}:
+                    break
+        finally:
+            await agen.aclose()
         return TunnelDistance(
-            hops=hops,
-            searched_depth=searched_depth,
-            message=message,
-            path_movie_ids=path_movie_ids,
-            connections=connections,
+            hops=None,
+            searched_depth=result.searched_depth,
+            message=(
+                "The search timed out - the ends may still be close."
+                if result.timed_out
+                else f"No route within {result.searched_depth or max_depth} hops yet."
+            ),
         )

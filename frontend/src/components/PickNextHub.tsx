@@ -642,7 +642,13 @@ function DiscoveryGrid({
     onClose();
   }
 
-  async function handleAdd(candidate: DiscoveryCandidate, watched: boolean, useTugPortal = false) {
+  async function handleAdd(
+    candidate: DiscoveryCandidate,
+    watched: boolean,
+    useTugPortal = false,
+    gridCell?: string,
+    gridJump = false,
+  ) {
     if (Object.values(candidate.overlay_ok ?? {}).some((ok) => ok === false)) {
       openCandidate(candidate);
       return;
@@ -658,12 +664,16 @@ function DiscoveryGrid({
         status: watched ? "watched" : "planned",
         watched_at: watched ? new Date().toISOString() : null,
         ...(useTugPortal ? { use_tug_portal: true } : {}),
-        transition_metadata: connection
-          ? connectionMetadata(connection, {
+        transition_metadata: {
+          ...(connection
+            ? connectionMetadata(connection, {
               from: connection.character_in_frontier,
               to: connection.character_in_candidate,
             })
-          : null,
+            : {}),
+          ...(gridCell ? { grid_cell: gridCell } : {}),
+          ...(gridJump ? { grid_jump: true } : {}),
+        },
       });
       onClose();
     } finally {
@@ -708,8 +718,8 @@ function DiscoveryGrid({
         full: offered.length >= FORK_OFFER_SIZE,
         onToggle: () => toggleOffered(resolved),
       } : undefined}
-      onQueue={() => handleAdd(resolved, false)}
-      onLogWatched={() => handleAdd(resolved, true)}
+      onQueue={(gridCell, gridJump) => handleAdd(resolved, false, false, gridCell, gridJump)}
+      onLogWatched={(gridCell, gridJump) => handleAdd(resolved, true, false, gridCell, gridJump)}
       onOpenDetails={() => openCandidate(resolved)}
     />;
   }
@@ -1273,8 +1283,8 @@ function CandidateCard({
   unknownFilterData?: boolean;
   /** Blind Fork selection state; replaces the log buttons while offering. */
   fork?: { selected: boolean; full: boolean; onToggle: () => void };
-  onQueue: () => void;
-  onLogWatched: () => void;
+  onQueue: (gridCell?: string, gridJump?: boolean) => void;
+  onLogWatched: (gridCell?: string, gridJump?: boolean) => void;
   onOpenDetails: () => void;
   glossary: Record<string, string>;
 }) {
@@ -1283,6 +1293,10 @@ function CandidateCard({
     .filter((name): name is string => !!name);
   const isLockedDuplicate = candidate.already_in_run && !allowRepeats;
   const [revealed, setRevealed] = useState(false);
+  const [selectedGridCell, setSelectedGridCell] = useState(
+    candidate.grid_cells?.[0] ?? candidate.grid_jump_cells?.[0] ?? "",
+  );
+  const selectedGridJump = candidate.grid_jump_cells?.includes(selectedGridCell) ?? false;
   const masked = roulette && !revealed;
   // The tagline (or, failing that, the plot) is fetched lazily - only while roulette is on.
   const { movie: detail } = useMovieDetail(candidate.movie_id, roulette);
@@ -1296,6 +1310,27 @@ function CandidateCard({
       )}
     >
       <div className="flex flex-col gap-2">
+        {gameType === "grid_crawler" &&
+          ((candidate.grid_cells?.length ?? 0) + (candidate.grid_jump_cells?.length ?? 0) > 1) && (
+          <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+            Claim cell
+            <select
+              value={selectedGridCell}
+              onChange={(event) => setSelectedGridCell(event.target.value)}
+              className="min-w-0 flex-1 rounded border border-app-border bg-app-bg px-2 py-1 text-zinc-200"
+            >
+              {[...(candidate.grid_cells ?? []), ...(candidate.grid_jump_cells ?? [])].map((cell) => {
+                const [row, col] = cell.split(":").map(Number);
+                return (
+                  <option key={cell} value={cell}>
+                    Row {row + 1}, column {col + 1}
+                    {candidate.grid_jump_cells?.includes(cell) ? " (Jump)" : ""}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        )}
         <div
           className="relative overflow-hidden rounded-md text-left transition-opacity hover:opacity-85"
         >
@@ -1474,8 +1509,8 @@ function CandidateCard({
           <div className="flex gap-1.5">
             <button
               type="button"
-              disabled={pending}
-              onClick={onQueue}
+              disabled={pending || (gameType === "grid_crawler" && selectedGridJump)}
+              onClick={() => onQueue(gameType === "grid_crawler" ? selectedGridCell : undefined, false)}
               className="flex flex-1 items-center justify-center gap-1 rounded-md border border-app-border px-2 py-1.5 text-[10px] font-medium text-zinc-300 transition-colors hover:bg-app-surface-hover disabled:opacity-60"
             >
               {pending && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -1484,7 +1519,12 @@ function CandidateCard({
             <button
               type="button"
               disabled={pending}
-              onClick={onLogWatched}
+              onClick={() =>
+                onLogWatched(
+                  gameType === "grid_crawler" ? selectedGridCell : undefined,
+                  gameType === "grid_crawler" && selectedGridJump,
+                )
+              }
               className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-[10px] font-semibold text-zinc-950 transition-colors hover:bg-accent-strong disabled:opacity-60"
             >
               {pending && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -1513,6 +1553,28 @@ function MechanicBadge({
   candidate: DiscoveryCandidate;
   gameType: string;
 }) {
+  if (candidate.target_distance != null) {
+    return (
+      <span
+        title="Estimated cached hops to the current target"
+        className="w-fit rounded-full bg-sky-950 px-2 py-0.5 text-[10px] font-semibold text-sky-300"
+      >
+        🎯 {candidate.target_distance} hop{candidate.target_distance === 1 ? "" : "s"} away
+      </span>
+    );
+  }
+  const gridChoiceCount = (candidate.grid_cells?.length ?? 0) + (candidate.grid_jump_cells?.length ?? 0);
+  if (gameType === "grid_crawler" && gridChoiceCount) {
+    return (
+      <span
+        title="Adjacent claimable cells and wildcard Jump destinations"
+        className="w-fit rounded-full bg-indigo-950 px-2 py-0.5 text-[10px] font-semibold text-indigo-300"
+      >
+        🧩 {gridChoiceCount} cell{gridChoiceCount === 1 ? "" : "s"}
+        {(candidate.grid_jump_cells?.length ?? 0) > 0 ? " · Jump" : ""}
+      </span>
+    );
+  }
   if (gameType === HISTORICAL_TIME_TRAVEL && candidate.narrative_year != null) {
     return (
       <div className="flex flex-col items-start gap-1">

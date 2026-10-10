@@ -61,6 +61,27 @@ export const GAME_MODE_STYLES: Record<string, GameModeStyle> = {
     ring: "border-cyan-400 shadow-[0_0_0_1px_rgba(34,211,238,0.6),0_8px_30px_-8px_rgba(34,211,238,0.35)]",
     text: "text-cyan-300",
   },
+  grid_crawler: {
+    icon: Dices,
+    category: "Rule Chains",
+    bubble: "bg-indigo-500/15 text-indigo-300",
+    ring: "border-indigo-400 shadow-[0_0_0_1px_rgba(129,140,248,0.6),0_8px_30px_-8px_rgba(129,140,248,0.35)]",
+    text: "text-indigo-300",
+  },
+  connect_canon: {
+    icon: Landmark,
+    category: "Cast Chains",
+    bubble: "bg-emerald-500/15 text-emerald-300",
+    ring: "border-emerald-400 shadow-[0_0_0_1px_rgba(52,211,153,0.6),0_8px_30px_-8px_rgba(52,211,153,0.35)]",
+    text: "text-emerald-300",
+  },
+  canon_infiltration: {
+    icon: Compass,
+    category: "Cast Chains",
+    bubble: "bg-orange-500/15 text-orange-300",
+    ring: "border-orange-400 shadow-[0_0_0_1px_rgba(251,146,60,0.6),0_8px_30px_-8px_rgba(251,146,60,0.35)]",
+    text: "text-orange-300",
+  },
   genre_pendulum: {
     icon: Drama,
     category: "Rule Chains",
@@ -195,6 +216,9 @@ export const LEGACY_MODE_COPY: Record<string, { tagline: string; tags: string[];
   cinechain: { tagline: "Six Degrees of Kevin Bacon", tags: ["Shared cast"] },
   auteur_relay: { tagline: "Actor, director, actor, director...", tags: ["Shared cast", "Shared director"] },
   meet_in_the_middle: { tagline: "Two partners, one tunnel", tags: ["Shared cast", "Co-op", "Two seeds"] },
+  grid_crawler: { tagline: "Claim adjacent facet cells", tags: ["Board", "Adjacency", "Facet rules"] },
+  connect_canon: { tagline: "Hit every canon waypoint", tags: ["Shared cast", "Waypoints", "Par"] },
+  canon_infiltration: { tagline: "Reach the canon before hop limit", tags: ["Shared cast", "Target set", "Hop budget"] },
   genre_pendulum: { tagline: "The genre swings as you go", tags: ["Any film", "Genre cycle", "Genre overlap"] },
   crew_craft: { tagline: "Follow the craft, not just the cast", tags: ["Cast or crew", "Composer", "Cinematographer", "Writer", "Director"] },
   tug_of_war: { tagline: "Pull the rope your way", tags: ["Shared cast", "Two teams", "Era or geography"] },
@@ -268,8 +292,11 @@ export const TRACKER_MODES = new Set([
 /** Does this run link films through shared cast/directors? Drives the Pick Next layout. */
 export function usesCastLinks(
   gameType: string,
-  rules: Pick<RulesConfig, "require_cast_link" | "modifiers"> | null | undefined,
+  rules: Pick<RulesConfig, "require_cast_link" | "modifiers" | "link"> | null | undefined,
 ): boolean {
+  if (gameType === "grid_crawler") {
+    return !!rules?.link && rules.link !== "none";
+  }
   if (STANDALONE_MODES.has(gameType)) {
     const nested = rules?.modifiers?.find((entry) => entry.key === "require_cast_link");
     return nested ? nested.params.enabled !== false : !!rules?.require_cast_link;

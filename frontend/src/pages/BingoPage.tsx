@@ -45,7 +45,7 @@ export default function BingoPage() {
     async function load() {
       try {
         const [defs, first] = await Promise.all([
-          api.get<BingoSquares>("/tools/bingo/squares"),
+          api.get<BingoSquares>("/tools/bingo/grid").catch(() => api.get<BingoSquares>("/tools/bingo/squares")),
           api.get<BingoWatchlist>("/tools/bingo/watchlist"),
         ]);
         let data = first;
@@ -61,7 +61,9 @@ export default function BingoPage() {
           setFilms(data.films);
           setPending(data.pending);
           if (data.pending >= before) break; // no progress (TMDB down, nothing fetchable)
-          const refreshed = await api.get<BingoSquares>("/tools/bingo/squares");
+          const refreshed = await api
+            .get<BingoSquares>("/tools/bingo/grid")
+            .catch(() => api.get<BingoSquares>("/tools/bingo/squares"));
           if (cancelled) return;
           setSquares(refreshed.squares);
         }

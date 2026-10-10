@@ -16,6 +16,9 @@ from app.api.routes_tasks import TaskOut
 from app.db import get_session
 from app.engines import chaos, rabbit_hole
 from app.engines.base import BaseChallengeEngine, RunSetupError
+from app.engines.canon_infiltration import CanonInfiltrationEngine
+from app.engines.connect_canon import CONNECT_CANON, ConnectCanonEngine
+from app.engines.grid_crawler import actor_claim_turn_allowed
 from app.engines.meet_in_middle import (
     MEET_IN_THE_MIDDLE,
     SIDE_HEAD,
@@ -553,6 +556,11 @@ SERVER_OWNED_METADATA = (
     "tug_link",
     "tug_portal",
     "tug_portals_before",
+    "grid_cell",
+    "grid_jump",
+    "wildcard_used",
+    "waypoint_reached",
+    "infiltrated",
     "seed",
     "life_lost",
     "relic_awarded",
@@ -689,6 +697,13 @@ async def _enforce_run_rules(
     violation not covered by `payload.force`.
     """
     rules = _run_rules(run)
+    if run.game_type == "grid_crawler" and (payload.transition_metadata or {}).get("grid_jump"):
+        if payload.status != "watched":
+            raise HTTPException(422, detail="A Jump wildcard can only be used on a watched claim")
+        budget = int(rules.get("wildcards_budget", 0))
+        if budget == 0:
+            raise HTTPException(409, detail="No Jump wildcards remain")
+        rules["_grid_jump"] = True
     force = payload.force
     extra_metadata: dict = {}
     linked_metadata: dict | None = None
@@ -803,6 +818,13 @@ async def _enforce_run_rules(
     else:
         previous = _last_step(session, run.id)
     engine_class = ENGINE_REGISTRY.get(run.game_type)
+    if run.game_type == "grid_crawler" and rules.get("table_mode") is True:
+        history = _play_history(session, run.id)
+        if (
+            payload.status == "watched"
+            and not actor_claim_turn_allowed(history, user.id)
+        ):
+            raise HTTPException(409, detail="Grid claims must alternate between participants")
     if previous is None:
         # The very first film has no inbound link; ignore any client-claimed one so it
         # can't dictate an alternating mode's next hop.
@@ -813,7 +835,19 @@ async def _enforce_run_rules(
                 for k, v in claimed.items()
                 if k not in ("connection_type", "director_id", "director_name")
             } or None
-    if previous is None and engine_class is not None:
+    if previous is None and run.game_type == "grid_crawler":
+        engine = get_engine(run.game_type, session, tmdb)
+        result = await engine.validate_next_step(
+            movie.tmdb_id, movie.tmdb_id, rules=rules, history=[]
+        )
+        if not result.valid:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.model_dump())
+        requested_cell = (payload.transition_metadata or {}).get("grid_cell")
+        claimable = (result.mechanic or {}).get("grid_claimable_cells") or []
+        if requested_cell is not None and requested_cell not in claimable:
+            raise HTTPException(409, detail="Choose one of the currently claimable grid cells")
+        linked_metadata = engine.link_metadata(result, payload.transition_metadata)
+    elif previous is None and engine_class is not None:
         # Nothing to link from, but run-scoped film rules (canon list, decade)
         # still apply to the very first film.
         if run.game_type == RT_SPLIT and payload.no_contest:
@@ -888,6 +922,14 @@ async def _enforce_run_rules(
                     status_code=status.HTTP_409_CONFLICT, detail=result.model_dump()
                 )
             broke_a_rule = True
+        requested_cell = (payload.transition_metadata or {}).get("grid_cell")
+        claimable = (result.mechanic or {}).get("grid_claimable_cells") or []
+        if (
+            run.game_type == "grid_crawler"
+            and requested_cell is not None
+            and requested_cell not in claimable
+        ):
+            raise HTTPException(409, detail="Choose one of the currently claimable grid cells")
         linked_metadata = engine.link_metadata(result, payload.transition_metadata)
         if (
             skipping
@@ -1096,6 +1138,12 @@ async def create_run(
         rules_config["fog"] = submitted_rules["fog"]
     if "table_mode" in rules_config and not isinstance(rules_config["table_mode"], bool):
         raise HTTPException(422, detail="table_mode must be a boolean")
+    if (
+        payload.game_type == "grid_crawler"
+        and rules_config.get("table_mode") is True
+        and len(participant_ids) < 2
+    ):
+        raise HTTPException(422, detail="Table Mode Grid Crawler needs at least two participants")
     engine_class = ENGINE_REGISTRY.get(payload.game_type)
     if engine_class is not None:
         engine = engine_class(session, tmdb)
@@ -1143,12 +1191,18 @@ async def create_run(
             await cache_repo.get_movie(session, tmdb, payload.seed_movie_id, require_detail=True)
             engine.setup_seed_movie_id = payload.seed_movie_id
             feasibility.invalidate(session)
+        if isinstance(engine, CanonInfiltrationEngine) and payload.seed_movie_id is not None:
+            await cache_repo.get_movie(session, tmdb, payload.seed_movie_id, require_detail=True)
+            engine.setup_seed_movie_id = payload.seed_movie_id
         try:
             rules_config = await engine.prepare_run(rules_config, current_user.id)
         except RunSetupError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         overlay_seed_history = []
-        for seed_id in (payload.seed_movie_id, payload.tail_seed_movie_id):
+        seed_movie_ids = [payload.seed_movie_id, payload.tail_seed_movie_id]
+        if payload.game_type == CONNECT_CANON:
+            seed_movie_ids.append(int(rules_config["waypoints"][0]))
+        for seed_id in seed_movie_ids:
             if seed_id is None:
                 continue
             seed = await engine.validate_candidate(seed_id, rules_config)
@@ -1203,6 +1257,8 @@ async def create_run(
     session.commit()
 
     seeds = [(payload.seed_movie_id, SIDE_HEAD), (payload.tail_seed_movie_id, SIDE_TAIL)]
+    if payload.game_type == CONNECT_CANON:
+        seeds.append((int(rules_config["waypoints"][0]), SIDE_HEAD))
     for seed_id, side in seeds:
         if seed_id is None:
             continue
@@ -1534,19 +1590,38 @@ async def _check_slot_watch(session: Session, tmdb: TMDBClient, run: Run, step: 
         return
     history = _play_history(session, run.id)
     previous = history[-1] if history else None
+    rules = _run_rules(run)
+    if (
+        run.game_type == "grid_crawler"
+        and rules.get("table_mode") is True
+        and not actor_claim_turn_allowed(history, _step_actor_id(step))
+    ):
+        raise HTTPException(409, detail="Grid claims must alternate between participants")
     result = (
-        await engine.validate_candidate(step.movie_id, _run_rules(run))
+        await engine.validate_next_step(
+            step.movie_id,
+            step.movie_id,
+            rules=rules,
+            history=[],
+        )
+        if run.game_type == "grid_crawler" and previous is None
+        else await engine.validate_candidate(step.movie_id, rules)
         if previous is None
         else await engine.validate_next_step(
             previous.movie_id,
             step.movie_id,
-            rules=_run_rules(run),
+            rules=rules,
             previous_transition=previous.transition_metadata,
             history=history,
         )
     )
     if not result.valid:
         raise HTTPException(409, detail=result.model_dump())
+    if run.game_type == "grid_crawler":
+        selected_cell = (step.transition_metadata or {}).get("grid_cell")
+        claimable = (result.mechanic or {}).get("grid_claimable_cells") or []
+        if selected_cell not in claimable:
+            raise HTTPException(409, detail="The queued Grid Crawler cell is no longer claimable")
 
 
 async def _log_step(
@@ -1594,6 +1669,31 @@ async def _log_step(
     extra_metadata, linked_metadata = await _enforce_run_rules(
         session, tmdb, run, movie, payload, actor, fork_team
     )
+    if linked_metadata:
+        if (
+            run.game_type == CONNECT_CANON
+            and linked_metadata.get("waypoint_reached") is True
+        ):
+            extra_metadata["waypoint_reached"] = True
+        if (
+            run.game_type == CanonInfiltrationEngine.game_type
+            and linked_metadata.get("infiltrated") is True
+        ):
+            extra_metadata["infiltrated"] = True
+    if run.game_type == "grid_crawler" and linked_metadata:
+        grid_cell = linked_metadata.get("grid_cell")
+        if isinstance(grid_cell, str):
+            extra_metadata["grid_cell"] = grid_cell
+        if linked_metadata.get("grid_jump"):
+            current_rules = dict(run.rules_config or {})
+            budget = int(current_rules.get("wildcards_budget", 0))
+            if budget == 0:
+                raise HTTPException(409, detail="No Jump wildcards remain")
+            if budget > 0:
+                current_rules["wildcards_budget"] = budget - 1
+            run.rules_config = current_rules
+            extra_metadata["grid_jump"] = True
+            extra_metadata["wildcard_used"] = True
     if (run.rules_config or {}).get("table_mode") is True:
         extra_metadata["acting_participant_id"] = actor.id
     extra_metadata.update(settlement.transition_metadata or {})
@@ -1811,6 +1911,11 @@ def _remove_step(session: Session, tmdb: TMDBClient, run: Run, step: RunStep) ->
             rules.get("wildcards_budget", 0) + metadata["overlay_wildcard_spent"]
         )
         run.rules_config = rules
+    if metadata.get("grid_jump"):
+        budget = rules_before_revoke.get("wildcards_budget", 0)
+        if budget >= 0:
+            rules["wildcards_budget"] = budget + 1
+            run.rules_config = rules
     board = bounties.active_bounties(rules)
     for change in reversed(metadata.get("bounty_expiry_changes") or []):
         board = [b for b in board if b != change["replacement"]]
@@ -3220,7 +3325,10 @@ async def get_run_stats(
         ).all()
     )
     engine = get_engine(run.game_type, session, tmdb)
-    return await engine.compute_stats(steps)
+    stats = await engine.compute_stats(steps)
+    if run.game_type == CONNECT_CANON:
+        stats.par_score = ConnectCanonEngine.par_score(run, steps)
+    return stats
 
 
 @router.get("/{run_id}/discover", response_model=list[DiscoveryCandidate] | DiscoveryEnvelope)
@@ -3243,6 +3351,7 @@ async def discover_next_movies(
     session: Session = Depends(get_session),
     run: Run = Depends(run_participant_guard),
     tmdb: TMDBClient = Depends(get_tmdb_client),
+    current_user: User = Depends(get_current_user),
 ) -> list[DiscoveryCandidate] | DiscoveryEnvelope:
     """Unified "Pick Next" pool: every top-billed cast member's filmography,
     pooled into one set of candidates (Phase 13). Movies already logged in
@@ -3252,6 +3361,9 @@ async def discover_next_movies(
     """
     engine = get_engine(run.game_type, session, tmdb)
     rules = _run_rules(run)
+    discovery_rules = dict(rules)
+    if run.game_type == "grid_crawler":
+        discovery_rules["_grid_discovery_user_id"] = current_user.id
     if include_off_tier and not isinstance(engine, RabbitHoleEngine):
         raise HTTPException(
             status_code=422, detail="Off-tier discovery is only supported by Rabbit Hole."
@@ -3266,7 +3378,7 @@ async def discover_next_movies(
             frontier_movie_id=frontier_movie_id,
             mode=mode,
             cast_limit=rules.get("max_cast_order"),
-            rules=rules,
+            rules=discovery_rules,
             previous_transition=(
                 previous.transition_metadata
                 if previous is not None and previous.movie_id == frontier_movie_id

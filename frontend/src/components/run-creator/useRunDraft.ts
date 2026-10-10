@@ -22,6 +22,7 @@ export interface RunDraft {
   tableMode: boolean;
   seedMovie: MovieSummary | null;
   tailSeedMovie: MovieSummary | null;
+  waypointMovies: [MovieSummary | null, MovieSummary | null, MovieSummary | null];
   rules: RulesConfig;
   canonListId: string;
   targetDecade: number;
@@ -53,6 +54,7 @@ export function initialDraft(): RunDraft {
     tableMode: false,
     seedMovie: null,
     tailSeedMovie: null,
+    waypointMovies: [null, null, null],
     rules: { preset: "loading", allow_repeats: "strict", no_consecutive_actor: false,
       max_cast_order: 15, min_runtime: 0, wildcards_budget: 0 },
     canonListId: "",
@@ -85,6 +87,7 @@ function reducer(state: RunDraft, action: DraftAction): RunDraft {
       rules: initialDraft().rules,
       seedMovie: null,
       tailSeedMovie: null,
+      waypointMovies: [null, null, null],
     };
   }
   if (["canonListId", "targetDecade", "diveListId", "diveCountry", "diveDecade", "rawText", "rawMode"].some(
@@ -129,6 +132,8 @@ export function useRunDraft(
   const isAuteur = draft.gameType === AUTEUR_MARATHON;
   const isDive = draft.gameType === REGIONAL_DEEP_DIVE;
   const isSplit = draft.gameType === RT_SPLIT;
+  const isConnectCanon = draft.gameType === "connect_canon";
+  const isCanonInfiltration = draft.gameType === "canon_infiltration";
   const canBounty = !NO_BOUNTY_MODES.has(draft.gameType);
   const islandLists = (curatedLists ?? []).filter((list) => list.is_enabled && list.total_items > 0);
   const castLinked = usesCastLinks(draft.gameType, draft.rules);
@@ -151,6 +156,14 @@ export function useRunDraft(
     ...clearModifiers(draft.rules),
     ...modifierPayload(engine, draft.rules),
     ...(needsCanonList ? { allowed_curated_list_id: draft.canonListId } : {}),
+    ...(isConnectCanon
+      ? {
+          waypoint_movie_ids: draft.waypointMovies.flatMap((movie) =>
+            movie ? [movie.tmdb_id] : [],
+          ),
+        }
+      : {}),
+    ...(isCanonInfiltration ? { target_list_id: draft.canonListId } : {}),
     ...(needsDecade ? { target_decade: draft.targetDecade } : {}),
     ...(draft.gameType === TUG_OF_WAR
       ? {
@@ -171,7 +184,8 @@ export function useRunDraft(
   };
   const slices = useCuratedSlices(isDive ? draft.diveListId : undefined);
   const seedSettingsReady = (
-    !needsCanonList || !!effectiveRules.allowed_curated_list_id
+    (!needsCanonList || !!effectiveRules.allowed_curated_list_id) &&
+    (!isCanonInfiltration || !!effectiveRules.target_list_id)
   ) && (
     !isDive || (!!effectiveRules.curated_list_id && (
       !!effectiveRules.target_country || effectiveRules.target_decade !== undefined
@@ -189,6 +203,8 @@ export function useRunDraft(
   const sameSeeds = isTunnel && !!draft.seedMovie && draft.seedMovie.tmdb_id === draft.tailSeedMovie?.tmdb_id;
   const missingMode =
     (needsCanonList && !draft.canonListId) ||
+    (isConnectCanon && draft.waypointMovies.some((movie) => movie === null)) ||
+    (isCanonInfiltration && (!draft.canonListId || !draft.seedMovie)) ||
     (isTunnel && (!draft.seedMovie || !draft.tailSeedMovie)) ||
     (isBracket && draft.bracketFilms.length !== BRACKET_SIZE) ||
     (isMethodActor && !draft.actor) ||
@@ -200,6 +216,11 @@ export function useRunDraft(
     if (!engine) messages.push("Wait for game modes to load.");
     if (!draft.name.trim()) messages.push("Enter a run name.");
     if (needsCanonList && !draft.canonListId) messages.push("Choose a canon list.");
+    if (isConnectCanon && draft.waypointMovies.some((movie) => movie === null)) {
+      messages.push("Choose three canon waypoints.");
+    }
+    if (isCanonInfiltration && !draft.canonListId) messages.push("Choose a target canon list.");
+    if (isCanonInfiltration && !draft.seedMovie) messages.push("Choose a B-movie seed.");
     if (isTunnel && !draft.seedMovie) messages.push("Choose Partner A's starting film.");
     if (isTunnel && !draft.tailSeedMovie) messages.push("Choose Partner B's starting film.");
     if (sameSeeds) messages.push("Partners need different starting films.");

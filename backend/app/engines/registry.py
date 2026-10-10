@@ -4,10 +4,13 @@ from sqlmodel import Session
 from app.engines.algorithms import AestheticGradientEngine, SemanticTropeEngine
 from app.engines.auteur_marathon import AuteurMarathonEngine
 from app.engines.base import BaseChallengeEngine
+from app.engines.canon_infiltration import CanonInfiltrationEngine
 from app.engines.canon_island import CanonIslandEngine
 from app.engines.cinechain import CineChainEngine
+from app.engines.connect_canon import ConnectCanonEngine
 from app.engines.crew_craft import CrewCraftEngine
 from app.engines.genre_pendulum import GenrePendulumEngine
+from app.engines.grid_crawler import GridCrawlerEngine
 from app.engines.historical_time_travel import HistoricalTimeTravelEngine
 from app.engines.march_madness import MarchMadnessEngine
 from app.engines.meet_in_middle import MeetInTheMiddleEngine
@@ -25,6 +28,9 @@ ENGINE_REGISTRY: dict[str, type[BaseChallengeEngine]] = {
     for engine in (
         CineChainEngine,
         CanonIslandEngine,
+        GridCrawlerEngine,
+        ConnectCanonEngine,
+        CanonInfiltrationEngine,
         CrewCraftEngine,
         GenrePendulumEngine,
         MeetInTheMiddleEngine,

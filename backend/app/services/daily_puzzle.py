@@ -38,7 +38,7 @@ from app.models.run import DEFAULT_RULES_CONFIG, Run, RunParticipant, RunStep
 from app.schemas.engine import SharedActorConnection
 from app.schemas.movies import MovieSummary
 from app.schemas.puzzles import AttemptState, PuzzleHop
-from app.services import cache_repo, security
+from app.services import cache_repo, goal_graph, security
 from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient, TMDBError
 from app.services.tmdb_backoff import DeadlineReached
@@ -267,17 +267,36 @@ async def _build_pair(session: Session, tmdb: TMDBClient, day: date) -> DailyPuz
     )
     if len(pool) < 2:
         raise PuzzleUnavailable("Not enough popular films are cached yet to build a puzzle")
-    pool_set = set(pool)
     for start_id in rng.sample(pool, min(MAX_START_ATTEMPTS, len(pool))):
-        reached = explore(session, start_id, MAX_PAR_HOPS, cast_limit)
-        targets = sorted(
-            movie_id
-            for movie_id, info in reached.items()
-            if movie_id in pool_set and MIN_PAR_HOPS <= info.hops <= MAX_PAR_HOPS
-        )
+        targets = []
+        for target_id in pool:
+            if target_id == start_id:
+                continue
+            result = goal_graph.search(
+                session,
+                [start_id],
+                [target_id],
+                policy="shared_cast",
+                max_depth=MAX_PAR_HOPS,
+                max_seconds=0.6,
+                cast_limit=cast_limit,
+            )
+            if result.distance is not None and MIN_PAR_HOPS <= result.distance <= MAX_PAR_HOPS:
+                targets.append(target_id)
         rng.shuffle(targets)
         for target_id in targets[:MAX_TARGETS_PER_START]:
-            route = route_to(reached, target_id)
+            route_result = goal_graph.search(
+                session,
+                [start_id],
+                [target_id],
+                policy="shared_cast",
+                max_depth=MAX_PAR_HOPS,
+                max_seconds=2.0,
+                cast_limit=cast_limit,
+            )
+            route = route_result.path_movie_ids
+            if len(route) < 2:
+                continue
             links = await _verified_route(session, tmdb, route)
             if links is None:
                 continue
@@ -422,13 +441,20 @@ def start_attempt(session: Session, puzzle: DailyPuzzle, user_id: str) -> DailyP
 def _grade_chain(session: Session, puzzle: DailyPuzzle, chain: Sequence[dict]) -> list[str]:
     """Green when a hop got closer to the target (by the cached graph), yellow when it didn't."""
     cast_limit = get_settings().pathfinder_cast_limit
-    reach = explore(session, puzzle.target_movie_id, len(chain) + puzzle.par_hops, cast_limit)
-    unknown = 10_000
     distance = [puzzle.par_hops]
     grades: list[str] = []
     for index, entry in enumerate(chain):
         movie_id = entry["movie_id"]
-        step_distance = reach[movie_id].hops if movie_id in reach else unknown
+        result = goal_graph.search(
+            session,
+            [movie_id],
+            [puzzle.target_movie_id],
+            policy="shared_cast",
+            max_depth=len(chain) + puzzle.par_hops,
+            max_seconds=0.3,
+            cast_limit=cast_limit,
+        )
+        step_distance = result.distance if result.distance is not None else 10_000
         last = index == len(chain) - 1
         grades.append(GREEN if last or step_distance < distance[-1] else YELLOW)
         distance.append(step_distance)

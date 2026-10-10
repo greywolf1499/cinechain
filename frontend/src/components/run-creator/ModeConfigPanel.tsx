@@ -11,6 +11,7 @@ import { ModeConfigProps } from "./mode-config/types";
 import TugConfig from "./mode-config/TugConfig";
 import SplitConfig from "./mode-config/SplitConfig";
 import CanonListConfig from "./mode-config/CanonListConfig";
+import { CanonInfiltrationConfig, ConnectCanonConfig } from "./mode-config/CanonJourneyConfig";
 import DecadeConfig from "./mode-config/DecadeConfig";
 import BracketConfig from "./mode-config/BracketConfig";
 import { DirectorConfig, MethodActorConfig } from "./mode-config/ActorConfig";
@@ -23,6 +24,8 @@ const MODE_CONFIG: Record<string, ComponentType<ModeConfigProps>> = {
   [TUG_OF_WAR]: TugConfig,
   [RT_SPLIT]: SplitConfig,
   canon_island: CanonListConfig,
+  connect_canon: ConnectCanonConfig,
+  canon_infiltration: CanonInfiltrationConfig,
   decade_sieve: DecadeConfig,
   [MARCH_MADNESS]: BracketConfig,
   [METHOD_ACTOR]: MethodActorConfig,

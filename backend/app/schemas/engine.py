@@ -243,6 +243,7 @@ class RunStats(BaseModel):
     countries: list[str]
     decades: list[int]
     keystone_actors: list[KeystoneActor]
+    par_score: int | None = None
 
 
 class PitchRequest(BaseModel):

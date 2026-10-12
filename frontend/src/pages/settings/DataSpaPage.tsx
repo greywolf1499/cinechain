@@ -6,7 +6,7 @@ import TaskProgressBar from "../../components/TaskProgressBar";
 import { SettingsCard, inputClass } from "../../components/settings/shared";
 import { useCacheHealth } from "../../lib/queries";
 import { api } from "../../lib/api";
-import { TASK_TITLES, describeProgress, taskPausedReason } from "../../lib/tasks";
+import { TASK_TITLES, describeProgress, taskPausedReason, taskStoppedReason } from "../../lib/tasks";
 import { useTrackedTask } from "../../lib/useTrackedTask";
 import { useAuthStore } from "../../store/authStore";
 import type { CoverageCount, IntegrationConfig, SpaTreatment } from "../../types/api";
@@ -66,6 +66,7 @@ function TreatmentButton({ treatment, label, batchCap, primary = false }: {
   const run = useTrackedTask({ dedupeKey: `spa:${treatment}` });
   const active = run.task && (run.task.status === "pending" || run.task.status === "running") ? run.task : null;
   const paused = run.task ? taskPausedReason(run.task) : null;
+  const stopped = run.task ? taskStoppedReason(run.task) : null;
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <button
@@ -90,6 +91,7 @@ function TreatmentButton({ treatment, label, batchCap, primary = false }: {
       {paused && !active && (
         <p role="status" className="text-xs text-amber-300">{label} paused: {paused}. Run it again after the budget resets to resume.</p>
       )}
+      {stopped && !active && <p role="status" className="text-xs text-amber-300">{stopped}</p>}
       {run.error && <p role="alert" className="text-xs text-red-300">{label}: {run.error}</p>}
     </div>
   );

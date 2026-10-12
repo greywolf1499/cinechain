@@ -101,7 +101,12 @@ async def test_trope_spa_scrapes_when_enabled_and_checkpoints_facets(spa_engine,
     calls = []
 
     class FixtureScraper:
-        def __init__(self, check_cancelled=None):
+        pages_fetched = 1
+
+        def __init__(self, check_cancelled=None, max_pages=150):
+            pass
+
+        def close(self):
             pass
 
         def sync_movie(self, film, *, enabled):
@@ -142,6 +147,119 @@ async def test_trope_spa_scrapes_when_enabled_and_checkpoints_facets(spa_engine,
         ).one()
         assert evidence.value_text == "heist"
         assert evidence.confidence == 0.91
+
+
+@pytest.mark.parametrize("stop", ["page_cap_reached", "rate_limited_or_challenge"])
+async def test_trope_batch_stop_completes_and_preserves_pending_film(
+    spa_engine,
+    monkeypatch,
+    tmp_path,
+    stop,
+):
+    with Session(spa_engine) as session:
+        for movie_id in (1, 2, 3):
+            movie(
+                session,
+                movie_id,
+                title=f"Heist {movie_id}",
+                release_date="2000-01-01",
+                overview="A crew plans a heist.",
+                genre_ids=[80],
+            )
+    real_client = tvtropes.TVTropesClient
+    clients = []
+    calls = []
+
+    def request(url, headers):
+        calls.append(url)
+        if "Heist1" in url:
+            return tvtropes.Response(
+                200, {}, '<h1>Heist 1 (2000)</h1><li><a href="/Main/Heist">Heist</a></li>'
+            )
+        return tvtropes.Response(403, {}, "Attention Required!")
+
+    def make_client(**kwargs):
+        assert kwargs["max_pages"] == 6000
+        client = real_client(
+            tmp_path,
+            request,
+            min_interval=0,
+            max_pages=1 if stop == "page_cap_reached" else 6000,
+            check_cancelled=kwargs["check_cancelled"],
+        )
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(tvtropes, "enabled", lambda _: True)
+    monkeypatch.setattr(tvtropes, "TVTropesClient", make_client)
+    task_id, _ = submit(spa_engine, "tropes", batch_cap=2000)
+    task = await execute(spa_engine, task_id)
+    assert task.status == "completed"
+    assert task.progress_data["result"]["stopped_reason"] == stop
+    assert task.progress_data["result"]["remaining"] == 2
+    assert task.progress_data["result"]["pages_fetched"] == len(calls)
+    with Session(spa_engine) as session:
+        assert session.get(MovieFacetStatus, (1, "spa:tropes")).status == "ok"
+        assert session.get(MovieFacetStatus, (2, "spa:tropes")) is None
+
+
+async def test_trope_404_marks_unavailable_and_next_spa_does_not_fetch(
+    spa_engine,
+    monkeypatch,
+    tmp_path,
+):
+    with Session(spa_engine) as session:
+        movie(session, 1, title="Missing Film", release_date="2000-01-01")
+    calls = []
+    real_client = tvtropes.TVTropesClient
+
+    def request(url, headers):
+        calls.append(url)
+        return tvtropes.Response(404, {}, "")
+
+    monkeypatch.setattr(tvtropes, "enabled", lambda _: True)
+    monkeypatch.setattr(
+        tvtropes,
+        "TVTropesClient",
+        lambda **kwargs: real_client(
+            tmp_path,
+            request,
+            min_interval=0,
+            **kwargs,
+        ),
+    )
+    task_id, _ = submit(spa_engine, "tropes")
+    assert (await execute(spa_engine, task_id)).status == "completed"
+    with Session(spa_engine) as session:
+        assert session.get(MovieFacetStatus, (1, "tropes")).status == "unavailable"
+        assert session.get(MovieFacetStatus, (1, "spa:tropes")).status == "unavailable"
+    task_id, _ = submit(spa_engine, "tropes")
+    assert (await execute(spa_engine, task_id)).status == "completed"
+    assert len(calls) == 2
+
+
+async def test_trope_breaker_does_not_abort_later_fix_all_stages(spa_engine, monkeypatch, tmp_path):
+    with Session(spa_engine) as session:
+        movie(session, 1, title="Heist", release_date="2000-01-01")
+    real_client = tvtropes.TVTropesClient
+    monkeypatch.setattr(data_spa, "TREATMENTS", ("tropes", "facets"))
+    monkeypatch.setattr(tvtropes, "enabled", lambda _: True)
+    monkeypatch.setattr(
+        tvtropes,
+        "TVTropesClient",
+        lambda **kwargs: real_client(
+            tmp_path,
+            lambda *_: tvtropes.Response(429, {}, ""),
+            min_interval=0,
+            **kwargs,
+        ),
+    )
+    task_id, _ = submit(spa_engine, "fix_all")
+    task = await execute(spa_engine, task_id)
+    assert task.status == "completed"
+    assert task.progress_data["result"]["stopped_reason"] == "rate_limited_or_challenge"
+    with Session(spa_engine) as session:
+        assert session.get(MovieFacetStatus, (1, "lexical")).status == "ok"
 
 
 def test_atomic_budget_and_day(spa_engine):

@@ -135,6 +135,7 @@ export default function ChainLink({
         {leap != null && castLinked && <LeapChip leap={leap} className="shrink-0" />}
         {previousMovieId !== undefined && (
           <PitchButton
+            runId={step.run_id}
             previousMovieId={previousMovieId}
             candidateMovieId={step.movie_id}
             linkLabel={actorName}

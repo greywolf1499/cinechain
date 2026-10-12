@@ -638,22 +638,34 @@ async def pitch_transition(
     tmdb: TMDBClient = Depends(get_tmdb_client),
     _user: User = Depends(get_current_user),
 ) -> PitchResult:
-    """A one-sentence cinephile pitch for why `candidate` follows `previous`."""
-    config = _llm_config(session)
+    """Generic cast-link pitch; run-scoped callers use the run endpoint."""
+    config = llm.load_config(session)
     try:
-        previous = await cache_repo.get_movie(session, tmdb, payload.previous_movie_id)
-        candidate = await cache_repo.get_movie(session, tmdb, payload.candidate_movie_id)
+        previous = await cache_repo.get_movie(
+            session, tmdb, payload.previous_movie_id, require_detail=True
+        )
+        candidate = await cache_repo.get_movie(
+            session, tmdb, payload.candidate_movie_id, require_detail=True
+        )
     except (TMDBError, DeadlineReached) as exc:
         raise _tmdb_unavailable(exc) from exc
     try:
-        text = await llm.pitch(
-            config, previous, candidate, payload.link_label, critic=payload.style == "critic"
-        )
+        from app.engines.mutators import candidate_from_row
+
+        engine = get_engine("cinechain", session, tmdb)
+        context = engine.describe_link(session, previous, candidate, candidate_from_row(candidate))
+        result = await llm.link_pitch(config, context, critic=payload.style == "critic")
     except llm.LlmUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
-    return PitchResult(pitch=text)
+    return PitchResult(
+        pitch=f"{result.value.bridge} {result.value.candidate_hook}",
+        bridge=result.value.bridge,
+        candidate_hook=result.value.candidate_hook,
+        candidate_movie_id=candidate.tmdb_id,
+        source=result.source,
+    )
 
 
 @router.post("/engine/teasers", response_model=TeaserResult)

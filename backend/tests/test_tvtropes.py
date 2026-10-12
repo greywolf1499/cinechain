@@ -1,6 +1,9 @@
 """Fixture-only tests for the opt-in TVTropes link-list client."""
 
+import runpy
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,7 +15,6 @@ from app.services import embeddings, llm, movie_features, tvtropes
 
 @pytest.fixture(autouse=True)
 def reset_tvtropes_process_state(monkeypatch):
-    monkeypatch.setattr(tvtropes, "_robots_cache", None)
     monkeypatch.setattr(tvtropes, "_last_request", 0.0)
 
 
@@ -40,6 +42,35 @@ def test_disabled_client_does_not_make_requests(tmp_path):
         client.sync_movie(movie(), enabled=False)
 
     assert requests == []
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_one_shot_wrapper_closes_client_on_success_and_error(tmp_path, monkeypatch, enabled):
+    client = tvtropes.TVTropesClient(tmp_path, lambda *_: response(404), min_interval=0)
+    closed = []
+    monkeypatch.setattr(client, "close", lambda: closed.append(True))
+    monkeypatch.setattr(tvtropes, "TVTropesClient", lambda **_kwargs: client)
+    if enabled:
+        assert tvtropes.fetch_movie_tropes(movie(), enabled=True).tropes == ()
+    else:
+        with pytest.raises(tvtropes.TVTropesDisabled):
+            tvtropes.fetch_movie_tropes(movie(), enabled=False)
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("flag", ["-h", "--help"])
+def test_poc_help_never_opens_a_network_session(monkeypatch, capsys, flag):
+    script = Path(__file__).resolve().parents[2] / "scripts" / "tvtropes_scraper.py"
+    monkeypatch.setattr(sys, "argv", [str(script), flag])
+    monkeypatch.setattr(
+        tvtropes.curl_requests,
+        "Session",
+        lambda **_kwargs: pytest.fail("CLI help must not create a network session"),
+    )
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(str(script), run_name="__main__")
+    assert result.value.code == 0
+    assert "usage:" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -94,27 +125,13 @@ def test_find_subpages_limits_results_to_same_secure_host():
     ]
 
 
-def test_robots_disallow_is_honored_before_any_work_page_request(tmp_path):
-    requests = []
-
-    def get(url, headers):
-        requests.append(url)
-        return response(200, "User-agent: *\nDisallow: /\n")
-
-    client = tvtropes.TVTropesClient(tmp_path, get, min_interval=0)
-    with pytest.raises(tvtropes.RobotsDisallowed):
-        client.sync_movie(movie(), enabled=True)
-
-    assert requests == [f"{tvtropes.BASE_URL}/robots.txt"]
-
-
-def test_robots_uses_the_same_chrome_session_as_work_requests(tmp_path, monkeypatch):
+def test_reuses_one_chrome_session_without_preflight(tmp_path, monkeypatch):
     calls = []
 
     class FixtureSession:
         def get(self, url, **kwargs):
             calls.append((url, kwargs))
-            return response(200, "User-agent: *\nAllow: /Film/\nDisallow: /Main/\n")
+            return response(404)
 
     def session(*, impersonate):
         assert impersonate == "chrome"
@@ -122,9 +139,8 @@ def test_robots_uses_the_same_chrome_session_as_work_requests(tmp_path, monkeypa
 
     monkeypatch.setattr(tvtropes.curl_requests, "Session", session)
     client = tvtropes.TVTropesClient(tmp_path, min_interval=0)
-    assert client._robots_allowed(f"{tvtropes.BASE_URL}/Film/HeistOne")
-    assert not client._robots_allowed(f"{tvtropes.BASE_URL}/Main/Heist")
-    assert len(calls) == 1 and calls[0][0].endswith("/robots.txt")
+    client.sync_movie(movie(), enabled=True)
+    assert len(calls) == 2 and all("/Film/" in url for url, _ in calls)
     assert calls[0][1]["headers"]["User-Agent"] == tvtropes.USER_AGENT
 
 
@@ -133,16 +149,15 @@ def test_challenge_stops_the_batch_immediately(tmp_path):
 
     def get(url, headers):
         requests.append(url)
-        if url.endswith("/robots.txt"):
-            return response(200, "User-agent: *\nAllow: /\n")
         return response(200, "<title>Just a moment...</title><div id='cf-challenge'>")
 
     client = tvtropes.TVTropesClient(tmp_path, get, min_interval=0)
-    with pytest.raises(tvtropes.CloudflareBlock):
-        client.sync_movie(movie(), enabled=True)
+    result = client.sync_movie(movie(), enabled=True)
+    assert result.stopped_reason == "rate_limited_or_challenge"
+    client.sync_movie(movie(tmdb_id=43), enabled=True)
 
-    assert len(requests) == 2
-    assert requests[-1].endswith("/Film/HeistOne2000")
+    assert len(requests) == 1
+    assert requests[-1].endswith("/Film/HeistOne")
 
 
 def test_work_resolution_extracts_only_local_links_and_maps_camel_case(tmp_path):
@@ -158,12 +173,6 @@ def test_work_resolution_extracts_only_local_links_and_maps_camel_case(tmp_path)
 
     def get(url, headers):
         requests.append(url)
-        if url.endswith("/robots.txt"):
-            return response(200, "User-agent: *\nAllow: /\n")
-        if url.endswith("/Film/HeistOne2000"):
-            return response(404)
-        if url.endswith("/Film/HeistOne") and requests.count(url) == 1:
-            return response(200, "<h1>Heist One (2000)</h1>")
         if url.endswith("/Film/HeistOne"):
             return response(200, work_page, {"ETag": '"work-v1"'})
         raise AssertionError(f"Unexpected fixture request: {url}")
@@ -177,7 +186,7 @@ def test_work_resolution_extracts_only_local_links_and_maps_camel_case(tmp_path)
         ("AlienInvasion", "alien-invasion"),
     ]
     assert all("evil.example" not in link.url for link in result.tropes)
-    assert client.pages_fetched == 4
+    assert client.pages_fetched == 1
 
 
 def test_sync_crawls_split_trope_subpages_and_caches_descriptions(tmp_path):
@@ -197,12 +206,6 @@ def test_sync_crawls_split_trope_subpages_and_caches_descriptions(tmp_path):
 
     def get(url, headers):
         requests.append(url)
-        if url.endswith("/robots.txt"):
-            return response(200, "User-agent: *\nAllow: /\n")
-        if url.endswith("/Film/HeistOne2000"):
-            return response(404)
-        if url == work_url and requests.count(url) == 1:
-            return response(200, "<h1>Heist One (2000)</h1>")
         if url == work_url:
             return response(200, main_page)
         if url.endswith("/Film/HeistOneTropesAtoD"):
@@ -227,8 +230,6 @@ def test_expired_cache_revalidates_with_etag_without_storing_html(tmp_path):
 
     def get(url, headers):
         requests.append((url, headers))
-        if url.endswith("/robots.txt"):
-            return response(200, "User-agent: *\nAllow: /\n")
         if len([entry for entry in requests if entry[0] == url]) == 1:
             return response(200, page, {"ETag": '"work-v1"'})
         return response(304)
@@ -257,6 +258,106 @@ def test_expired_cache_revalidates_with_etag_without_storing_html(tmp_path):
         datetime.fromisoformat(tvtropes._read_cache(tmp_path / "42.json")["fetched_at"]).tzinfo
         == UTC
     )
+
+
+def test_404_negative_cache_survives_new_client_and_has_no_network_delay(tmp_path):
+    calls = []
+
+    def get(url, headers):
+        calls.append(url)
+        return response(404)
+
+    client = tvtropes.TVTropesClient(tmp_path, get, min_interval=0)
+    result = client.sync_movie(movie(), enabled=True)
+    assert result.work_url is None and len(calls) == 2
+    assert calls[0].endswith("HeistOne") and calls[1].endswith("HeistOne2000")
+    next_client = tvtropes.TVTropesClient(
+        tmp_path,
+        get,
+        sleep=lambda _: pytest.fail("Cache hits must not sleep"),
+    )
+    assert next_client.sync_movie(movie(), enabled=True).cached
+    assert next_client.pages_fetched == 0 and len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        (404, ""),
+        (200, "<h1>Disambiguation</h1>"),
+        (200, "<h1>Heist One (1990)</h1>"),
+    ],
+)
+def test_year_probe_only_after_miss_or_ambiguity(tmp_path, base):
+    calls = []
+
+    def request(url, headers):
+        calls.append(url)
+        if url.endswith("2000"):
+            return response(200, '<h1>Heist One</h1><div id="main-article">A 2000 film.</div>')
+        return response(*base)
+
+    client = tvtropes.TVTropesClient(tmp_path, request, min_interval=0)
+    result = client.sync_movie(movie(), enabled=True)
+    assert result.work_url.endswith("2000") and client.pages_fetched == 2
+    assert calls[0].endswith("HeistOne")
+
+
+@pytest.mark.parametrize(
+    "status,text",
+    [
+        (403, ""),
+        (429, ""),
+        (200, "Just a moment..."),
+        (200, "cf-browser-verification"),
+        (200, "Attention Required!"),
+    ],
+)
+def test_all_backpressure_signals_trip_batch_breaker(tmp_path, status, text):
+    client = tvtropes.TVTropesClient(
+        tmp_path,
+        lambda *_: response(status, text),
+        min_interval=0,
+    )
+    assert client.sync_movie(movie(), enabled=True).stopped_reason == "rate_limited_or_challenge"
+    assert (
+        client.sync_movie(movie(tmdb_id=43), enabled=True).stopped_reason
+        == "rate_limited_or_challenge"
+    )
+    assert client.pages_fetched == 1
+
+
+def test_page_cap_returns_partial_evidence_without_negative_caching(tmp_path):
+    html = (
+        '<h1>Heist One (2000)</h1><div id="main-article"><ul><li>'
+        '<a href="/Main/Heist">Heist</a></li></ul>'
+        '<a href="/Film/HeistOneTropesAtoD">Tropes A to D</a></div>'
+    )
+    client = tvtropes.TVTropesClient(
+        tmp_path,
+        lambda *_: response(200, html),
+        min_interval=0,
+        max_pages=1,
+    )
+    result = client.sync_movie(movie(), enabled=True)
+    assert result.stopped_reason == "page_cap_reached"
+    assert client.pages_fetched == 1 and result.tropes[0].mapped_slug == "heist"
+    assert not (tmp_path / "42.json").exists()
+
+
+def test_subpage_crawl_is_capped_at_six(tmp_path):
+    html = (
+        '<h1>Heist One (2000)</h1><div id="main-article">'
+        + "".join(f'<a href="/Film/HeistOneTropes{i}ToZ">Tropes {i} to Z</a>' for i in range(10))
+        + "</div>"
+    )
+    client = tvtropes.TVTropesClient(
+        tmp_path,
+        lambda *_: response(200, html),
+        min_interval=0,
+    )
+    assert client.sync_movie(movie(), enabled=True).stopped_reason is None
+    assert client.pages_fetched == 7
 
 
 @pytest.mark.anyio

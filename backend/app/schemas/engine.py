@@ -257,6 +257,10 @@ class PitchRequest(BaseModel):
 
 class PitchResult(BaseModel):
     pitch: str
+    bridge: str | None = None
+    candidate_hook: str | None = None
+    candidate_movie_id: int | None = None
+    source: Literal["ai", "template"] | None = None
 
 
 class TeaserRequest(BaseModel):

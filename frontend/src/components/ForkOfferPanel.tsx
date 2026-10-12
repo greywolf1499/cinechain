@@ -113,7 +113,7 @@ function PartnerOffer({
     try {
       const results = await Promise.all(
         fork.movie_ids.map(async (movieId) => {
-          const result = await api.post<PitchResult>("/engine/pitch", {
+          const result = await api.post<PitchResult>(`/runs/${runId}/pitch`, {
             previous_movie_id: frontier.movie_id,
             candidate_movie_id: movieId,
             link_label: (fork.links?.[String(movieId)]?.actor_name as string | undefined) ?? null,

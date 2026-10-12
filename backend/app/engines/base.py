@@ -33,6 +33,7 @@ from app.schemas.engine import (
     SuggestionFilters,
     ValidationResult,
 )
+from app.schemas.link import LinkContext
 from app.services import bounties, cache_repo, feasibility
 from app.services.movie_filters import is_reality_eligible
 from app.services.tmdb import TMDBClient, TMDBError
@@ -127,6 +128,21 @@ class BaseChallengeEngine(ABC):
         self.discovery_diagnostics = DiscoveryDiagnostics()
         self.discovery_reason: str | None = None
         self._discovery_options: dict[str, Any] = {}
+
+    def describe_link(
+        self,
+        session: Session,
+        prev_movie: CachedMovie,
+        next_movie: CachedMovie,
+        candidate_meta: DiscoveryCandidate,
+        rules: dict | None = None,
+        history: Sequence[RunStep] | None = None,
+    ) -> LinkContext:
+        from app.services.link_context import describe
+
+        return describe(
+            self, session, prev_movie, next_movie, candidate_meta, rules or {}, history or []
+        )
 
     @classmethod
     def rulebook_values(cls, rules: dict | None) -> dict[str, Any]:

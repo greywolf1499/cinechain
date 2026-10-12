@@ -2,6 +2,42 @@
 
 Notable changes to CineChain are recorded here.
 
+## [4.0.3] - 2026-10-12
+
+### Resilient Trope Batches & Mode-Aware Link Pitches
+
+- **TV Tropes batches stop gracefully:** Page budgets and Cloudflare/403/429
+  backpressure finish tasks with saved progress, network-page counts, stop
+  reasons and remaining-film counts. An interrupted trope stage does not
+  prevent later Fix all stages from running.
+- **Smarter, paced fetching:** One Chrome session serves each batch with
+  1–2.2 second jitter on network requests. Page budgets scale to
+  `max(150, batch size × 3)`; cache hits cost neither pages nor delay. Resolve
+  the plain title first, probe title/year only on a miss or ambiguity, and
+  crawl at most six trope subpages per film.
+- **Negative caching:** Missing work pages are cached for 90 days and recorded
+  as unavailable, while optional Qwen extraction can still supply evidence.
+  Partial scrapes retain prior evidence and do not negative-cache blocked films.
+  Mapped film-page tags continue to pass the Genre Gate directly.
+- **Explicit opt-in policy:** Removed runtime robots preflights. Settings now
+  describe the transport and limits accurately; operators must verify the
+  site's terms before enabling. Challenges still stop fetching; no challenge
+  bypass is implemented; automated regressions use local fixtures.
+- **Why this link, for this game:** Run-scoped explanations use server-owned
+  rules and cached cast/crew roles, genre/year/tone contrasts, shared themes,
+  plot similarity, Tug pull effects, Rabbit Hole tier compliance, attribute
+  transitions, grid claims and bounded target-distance progress.
+- **Useful with AI off:** A grounded bridge hook is followed by the selected
+  candidate's explicitly attributed premise, rather than a raw synopsis dump.
+  With AI enabled, structured two-part generation rejects swapped frontier
+  synopses, unsupported numbers and malformed output, falling back to film facts.
+- **Correct candidate identity:** Pitch popovers reset when the film pair, run
+  or rules change and verify the returned candidate id. Pick Next and timeline
+  pitches remain available with the LLM off. Fogged target distances stay hidden.
+- Tracked the standalone TV Tropes proof-of-concept script, with network-free
+  CLI help and explicit transport cleanup. No migrations,
+  dependencies, models or background daemons were added.
+
 ## [4.0.2] - 2026-10-12
 
 ### Cache Recovery & Semantic Discovery

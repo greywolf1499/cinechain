@@ -26,6 +26,7 @@ from app.engines.meet_in_middle import (
     MeetInTheMiddleEngine,
     split_sides,
 )
+from app.engines.mutators import candidate_from_row
 from app.engines.rabbit_hole import (
     LIVES_KEY,
     TIER_OVERRIDE_KEY,
@@ -84,6 +85,8 @@ from app.schemas.discovery import (
 )
 from app.schemas.engine import (
     ConstraintInfo,
+    PitchRequest,
+    PitchResult,
     RunStats,
     Suggestion,
     SuggestionFilters,
@@ -3512,6 +3515,49 @@ async def discover_next_movies(
 class RunPrepareRequest(BaseModel):
     treatment: Literal["details", "people", "ratings", "embeddings", "facets", "fix_all"] = (
         "fix_all"
+    )
+
+
+@router.post("/{run_id}/pitch", response_model=PitchResult)
+async def pitch_run_link(
+    payload: PitchRequest,
+    session: Session = Depends(get_session),
+    tmdb: TMDBClient = Depends(get_tmdb_client),
+    run: Run = Depends(run_participant_guard),
+) -> PitchResult:
+    from app.services import llm
+
+    history = _play_history(session, run.id)
+    positions = [
+        index for index, step in enumerate(history) if step.movie_id == payload.previous_movie_id
+    ]
+    if not positions:
+        raise HTTPException(422, detail="The previous film is not a playable step in this run.")
+    history = history[: positions[-1] + 1]
+    previous = await cache_repo.get_movie(
+        session, tmdb, payload.previous_movie_id, require_detail=True
+    )
+    candidate = await cache_repo.get_movie(
+        session, tmdb, payload.candidate_movie_id, require_detail=True
+    )
+    engine = get_engine(run.game_type, session, tmdb)
+    context = engine.describe_link(
+        session,
+        previous,
+        candidate,
+        candidate_from_row(candidate),
+        _run_rules(run),
+        history,
+    )
+    result = await llm.link_pitch(
+        llm.load_config(session), context, critic=payload.style == "critic"
+    )
+    return PitchResult(
+        pitch=f"{result.value.bridge} {result.value.candidate_hook}",
+        bridge=result.value.bridge,
+        candidate_hook=result.value.candidate_hook,
+        candidate_movie_id=candidate.tmdb_id,
+        source=result.source,
     )
 
 

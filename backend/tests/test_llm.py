@@ -408,9 +408,15 @@ def test_status_reflects_the_setting(client):
     assert client.get("/api/engine/llm/status").json() == {"enabled": True, "provider": "ollama"}
 
 
-def test_pitch_is_refused_while_the_model_is_off(client):
-    resp = client.post("/api/engine/pitch", json={"previous_movie_id": 1, "candidate_movie_id": 2})
-    assert resp.status_code == 409 and "off" in resp.json()["detail"]
+def test_pitch_uses_film_facts_while_the_model_is_off(client):
+    with respx.mock:
+        mock_movies()
+        resp = client.post(
+            "/api/engine/pitch", json={"previous_movie_id": 1, "candidate_movie_id": 2}
+        )
+    assert resp.status_code == 200 and resp.json()["source"] == "template"
+    assert "cabbie" in resp.json()["candidate_hook"]
+    assert "detective" not in resp.json()["candidate_hook"]
 
 
 def test_pitch_endpoint_grounds_the_prompt_and_caches(client):
@@ -418,18 +424,20 @@ def test_pitch_endpoint_grounds_the_prompt_and_caches(client):
     with respx.mock:
         mock_movies()
         chat = respx.post(OLLAMA_CHAT).mock(
-            return_value=ollama_reply('{"text":"Two LA nights, one stolen heartbeat."}')
+            return_value=ollama_reply(
+                '{"bridge":"Collateral follows Heat across the 1995 release-year bridge.",'
+                '"candidate_hook":"In Collateral, a cabbie is forced to drive a hitman across the city."}'
+            )
         )
         payload = {"previous_movie_id": 1, "candidate_movie_id": 2, "link_label": "Jamie Foxx"}
         first = client.post("/api/engine/pitch", json=payload)
         second = client.post("/api/engine/pitch", json=payload)
 
-    assert first.status_code == 200 and first.json() == {
-        "pitch": "Two LA nights, one stolen heartbeat."
-    }
+    assert first.status_code == 200 and first.json()["source"] == "ai"
     assert second.json() == first.json() and chat.call_count == 1  # cached
     prompt = json.loads(chat.calls[0].request.content)["messages"][1]["content"]
-    assert "Heat (1995)" in prompt and "Collateral (1995)" in prompt and "Jamie Foxx" in prompt
+    assert "Heat" in prompt and "Collateral" in prompt and "1995" in prompt
+    assert "Jamie Foxx" not in prompt  # A client label is not verified cast evidence.
 
 
 def test_critic_style_uses_the_veto_advice_prompt_and_its_own_cache(client):
@@ -437,7 +445,10 @@ def test_critic_style_uses_the_veto_advice_prompt_and_its_own_cache(client):
     with respx.mock:
         mock_movies()
         chat = respx.post(OLLAMA_CHAT).mock(
-            return_value=ollama_reply('{"text":"Brace for a three-hour slog."}')
+            return_value=ollama_reply(
+                '{"bridge":"Collateral follows Heat across the 1995 release-year bridge.",'
+                '"candidate_hook":"In Collateral, a cabbie is forced to drive a hitman across the city."}'
+            )
         )
         base = {"previous_movie_id": 1, "candidate_movie_id": 2}
         critic = client.post("/api/engine/pitch", json={**base, "style": "critic"})
@@ -446,7 +457,7 @@ def test_critic_style_uses_the_veto_advice_prompt_and_its_own_cache(client):
     assert critic.status_code == 200 and plain.status_code == 200
     assert chat.call_count == 2  # the critic answer is not served for a plain pitch
     system = json.loads(chat.calls[0].request.content)["messages"][0]["content"]
-    assert "exhausting" in system
+    assert "tactical risk" in system
 
 
 def test_pitch_failure_uses_a_deterministic_fallback(client):

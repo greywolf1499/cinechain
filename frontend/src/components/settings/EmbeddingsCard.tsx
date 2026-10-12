@@ -262,18 +262,11 @@ function TVTropesSection({
         <h3 className="text-sm font-medium text-zinc-300">TV Tropes evidence</h3>
         <p className="mt-1 text-xs leading-relaxed text-zinc-500">
           Optional trope links and their short list descriptions are cached locally for 90 days;
-          raw page HTML is discarded and nothing is used for model training. Requests use an
-          identifying CineChain user agent, are spaced by at least eight seconds, and only visit
-          pages permitted by the site&apos;s{" "}
-          <a
-            href="https://tvtropes.org/robots.txt"
-            target="_blank"
-            rel="noreferrer"
-            className="underline"
-          >
-            robots policy
-          </a>{" "}
-          . Cloudflare challenges and rate limits stop the current batch. This is an opt-in
+          raw page HTML is discarded and nothing is used for model training. Requests use
+          a shared Chrome session with 1–2.2 second jittered pacing on network requests.
+          Cached pages need no delay. Page budgets scale with the film batch; challenges and
+          rate limits finish the batch gracefully without further requests. No robots preflight
+          is performed; verify the site&apos;s terms before enabling. This is an opt-in
           personal, non-commercial cache.
         </p>
       </div>

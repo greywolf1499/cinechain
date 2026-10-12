@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
+from contextlib import asynccontextmanager
 from datetime import UTC, timedelta
 from functools import partial
 from typing import Any
@@ -200,8 +201,6 @@ def _submit(
         raise ValueError("Unknown spa treatment")
     if not 1 <= batch_cap <= 2000:
         raise ValueError("batch_cap must be between 1 and 2000")
-    if treatment == "tropes":
-        batch_cap = min(batch_cap, tvtropes.MAX_PAGES_PER_BATCH)
     scope = f"run:{run_id}:" if run_id else ""
     if movie_ids is not None and run_id is None:
         scope = (
@@ -238,6 +237,7 @@ def _submit(
                 "cursor": 0,
                 "processed": 0,
             }
+        data["batch_cap"] = batch_cap
         task.progress_data = {**(task.progress_data or {}), **data}
         session.add(task)
         session.commit()
@@ -319,33 +319,40 @@ async def _treat(
         cache_repo.CacheRepo(session).upsert_ratings(movie.tmdb_id, lookup.ratings)
     elif treatment == "tropes":
         if tvtropes.enabled(session):
-            try:
-                scraped = await anyio.to_thread.run_sync(
-                    partial(
-                        tvtropes_client.sync_movie,
-                        movie,
-                        enabled=True,
-                    )
-                )
-                ctx.check_cancelled(force=True)
-                evidence = await movie_features.validate_tvtropes(
-                    session,
+            scraped = await anyio.to_thread.run_sync(
+                partial(
+                    tvtropes_client.sync_movie,
                     movie,
-                    ((trope.slug, trope.mapped_slug) for trope in scraped.tropes),
-                    llm.load_config(session),
+                    enabled=True,
                 )
+            )
+            ctx.check_cancelled(force=True)
+            evidence = await movie_features.validate_tvtropes(
+                session,
+                movie,
+                ((trope.slug, trope.mapped_slug) for trope in scraped.tropes),
+                llm.load_config(session),
+            )
+            source_urls = {trope.mapped_slug or trope.slug: trope.url for trope in scraped.tropes}
+            if scraped.stopped_reason:
+                previous = session.exec(
+                    select(MovieFacet).where(
+                        MovieFacet.movie_id == movie.tmdb_id,
+                        MovieFacet.facet_id == "trope",
+                        MovieFacet.source == "tvtropes",
+                    )
+                ).all()
+                evidence = {row.value_text: row.confidence for row in previous} | evidence
                 source_urls = {
-                    trope.mapped_slug or trope.slug: trope.url for trope in scraped.tropes
-                }
-                trope_facets.replace_source(
-                    session, movie.tmdb_id, "tvtropes", evidence, source_urls
-                )
-                movie.tvtropes_work_url = scraped.work_url
-                session.add(movie)
-            except tvtropes.RobotsDisallowed as exc:
-                logger.info("TVTropes scrape skipped by robots policy: %s", exc)
-            except tvtropes.CloudflareBlock:
-                raise
+                    row.value_text: row.source_url for row in previous if row.source_url is not None
+                } | source_urls
+            trope_facets.replace_source(session, movie.tmdb_id, "tvtropes", evidence, source_urls)
+            if scraped.stopped_reason:
+                session.commit()
+                ctx.set("stopped_reason", scraped.stopped_reason)
+                return "stopped"
+            movie.tvtropes_work_url = scraped.work_url
+            session.add(movie)
         ctx.check_cancelled(force=True)
         await movie_features.ensure_tropes(session, [movie])
         known = session.exec(
@@ -355,7 +362,17 @@ async def _treat(
                 col(MovieFacet.confidence).is_not(None),
             )
         ).first()
-        return "ok" if known is not None else "unavailable"
+        status = "ok" if known is not None else "unavailable"
+        session.merge(
+            MovieFacetStatus(
+                movie_id=movie.tmdb_id,
+                family="tropes",
+                version=1,
+                status=status,
+                computed_at=utcnow(),
+            )
+        )
+        return status
     elif treatment == "facets":
         store.refresh(session, [movie.tmdb_id], check_cancelled=ctx.check_cancelled)
     session.refresh(movie)
@@ -395,18 +412,27 @@ async def _embed(
     return outcomes
 
 
+@asynccontextmanager
+async def _trope_batch(ctx: task_runner.TaskContext):
+    client = tvtropes.TVTropesClient(
+        check_cancelled=lambda: ctx.check_cancelled(force=True),
+        max_pages=max(150, ctx._data.get("batch_cap", len(ctx._data["worklist"])) * 3),
+    )
+    try:
+        yield client
+    finally:
+        client.close()
+
+
 async def _run(ctx: task_runner.TaskContext) -> dict[str, Any]:
     # A request's clients cannot outlive its scope; use the same cache clients/DB overrides
     # with an ephemeral HTTP transport for this task only.
-    async with httpx.AsyncClient() as http:
+    async with httpx.AsyncClient() as http, _trope_batch(ctx) as trope_client:
         tmdb, omdb = TMDBClient(http), OMDbClient(http)
         with ctx.session() as session:
             overrides = settings_repo.get_overrides(session)
         tmdb.set_overrides(overrides)
         omdb.set_overrides(overrides)
-        trope_client = tvtropes.TVTropesClient(
-            check_cancelled=lambda: ctx.check_cancelled(force=True)
-        )
         worklist = ctx._data["worklist"]
         treatments = ctx._data["treatments"]
         while ctx._data["stage"] < len(treatments):
@@ -442,14 +468,15 @@ async def _run(ctx: task_runner.TaskContext) -> dict[str, Any]:
                                 except (
                                     task_runner.TaskCancelled,
                                     provider_budgets.BudgetExhausted,
-                                    tvtropes.CloudflareBlock,
-                                    tvtropes.BatchPageLimit,
                                 ):
                                     raise
                                 except Exception as exc:  # noqa: BLE001 - persist retryable per-film failures
                                     session.rollback()
                                     status = "error"
                                     ctx._data["last_error"] = str(exc)
+                                if status == "stopped":
+                                    ctx.set("remaining", len(worklist) - cursor)
+                                    break
                                 outcomes.append((movie.tmdb_id, status))
                     except provider_budgets.ProviderLimitReachedError:
                         session.rollback()
@@ -461,11 +488,19 @@ async def _run(ctx: task_runner.TaskContext) -> dict[str, Any]:
                         reason = provider_budgets.paused_reason(session, "omdb")
                         return _pause_ratings(ctx, reason or "omdb_budget")
                     ctx.check_cancelled(force=True)
+                    if ctx._data.get("stopped_reason") and treatment == "tropes":
+                        _checkpoint(ctx, session, outcomes, treatment, cursor)
+                        break
                     _checkpoint(ctx, session, outcomes, treatment, cursor + len(ids))
             ctx.set("stage", ctx._data["stage"] + 1)
             ctx.set("cursor", 0)
             ctx.flush()
-    return {"processed": ctx._data["processed"]}
+    return {
+        "processed": ctx._data["processed"],
+        "pages_fetched": trope_client.pages_fetched,
+        "stopped_reason": ctx._data.get("stopped_reason"),
+        "remaining": ctx._data.get("remaining", 0),
+    }
 
 
 def _pause_ratings(ctx: task_runner.TaskContext, reason: str) -> dict[str, Any]:

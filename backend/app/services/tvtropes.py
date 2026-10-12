@@ -1,9 +1,10 @@
-"""Polite, opt-in TVTropes trope-link ingestion with fail-closed robots handling."""
+"""Opt-in, paced TVTropes link ingestion with batch-local backpressure."""
 
 from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import threading
 import time
@@ -12,7 +13,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse, urlunparse
-from urllib.robotparser import RobotFileParser
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
@@ -26,18 +26,14 @@ from app.services import settings_repo
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://tvtropes.org"
-USER_AGENT = "CineChain/1.0 (+https://github.com/greywolf1499/cinechain)"
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 CACHE_TTL = timedelta(days=90)
-ROBOTS_TTL = timedelta(hours=1)
-MIN_REQUEST_INTERVAL = 8.0
 MAX_PAGES_PER_BATCH = 150
 _request_lock = threading.Lock()
 _last_request = 0.0
-_robots_cache: tuple[float, RobotFileParser] | None = None
-
-
-class RobotsDisallowed(RuntimeError):
-    """The website's current robots policy does not permit this request."""
 
 
 class CloudflareBlock(RuntimeError):
@@ -49,7 +45,7 @@ class TVTropesDisabled(RuntimeError):
 
 
 class BatchPageLimit(RuntimeError):
-    """The 150-page TVTropes batch budget has been consumed."""
+    """Internal control flow: the configured network-page budget is consumed."""
 
 
 @dataclass(frozen=True)
@@ -66,6 +62,7 @@ class ScrapeResult:
     work_url: str | None
     tropes: tuple[TropeLink, ...]
     cached: bool = False
+    stopped_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -127,9 +124,15 @@ def camel_case_slug(value: str) -> str:
 def _year_matches(html: str, expected_year: int) -> bool:
     soup = BeautifulSoup(html, "html.parser")
     header = soup.find(["h1", "title"])
-    text = header.get_text(" ", strip=True) if header else soup.get_text(" ", strip=True)[:500]
+    article = soup.find("div", id="main-article") or soup.find("div", class_="article-content")
+    text = " ".join(
+        (
+            header.get_text(" ", strip=True) if header else "",
+            (article or soup).get_text(" ", strip=True)[:800],
+        )
+    )
     years = [int(value) for value in re.findall(r"\b(18\d{2}|19\d{2}|20\d{2})\b", text)]
-    return any(abs(year - expected_year) <= 1 for year in years)
+    return expected_year in years
 
 
 def find_subpages(soup: BeautifulSoup, base_url: str) -> list[str]:
@@ -236,7 +239,8 @@ class TVTropesClient:
         cache_dir: Path | None = None,
         request=None,
         *,
-        min_interval: float = MIN_REQUEST_INTERVAL,
+        min_interval: float | None = None,
+        max_pages: int = MAX_PAGES_PER_BATCH,
         now=time.time,
         sleep=time.sleep,
         check_cancelled: Callable[[], None] | None = None,
@@ -249,8 +253,15 @@ class TVTropesClient:
         self.sleep = sleep
         self.check_cancelled = check_cancelled
         self.pages_fetched = 0
-        self._robots: RobotFileParser | None = None
-        self._robots_loaded = 0.0
+        self.max_pages = max_pages
+        self.stopped_reason: str | None = None
+        self._resolved_pages: dict[str, Response] = {}
+        self._partial_pages: list[dict] = []
+        self._partial_url: str | None = None
+
+    def close(self) -> None:
+        if self._session is not None:
+            self._session.close()
 
     def _request(self, url: str, headers: dict[str, str]) -> Response:
         if self._session is None:
@@ -267,25 +278,30 @@ class TVTropesClient:
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.netloc.lower() != urlparse(BASE_URL).netloc:
             raise ValueError("TVTropes client refuses non-TV Tropes URLs")
-        if self.pages_fetched >= MAX_PAGES_PER_BATCH:
+        if self.pages_fetched >= self.max_pages:
             raise BatchPageLimit("TVTropes batch page cap reached")
         if self.check_cancelled is not None:
             self.check_cancelled()
         with _request_lock:
-            wait = self.min_interval - (self.now() - _last_request)
+            interval = (
+                self.min_interval if self.min_interval is not None else random.uniform(1.0, 2.2)
+            )
+            wait = interval - (self.now() - _last_request)
             if wait > 0:
                 self.sleep(wait)
-            response = self.request(
-                url,
-                {
-                    "User-Agent": USER_AGENT,
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    **(headers or {}),
-                },
-            )
-            _last_request = self.now()
-        self.pages_fetched += 1
+            self.pages_fetched += 1
+            try:
+                response = self.request(
+                    url,
+                    {
+                        "User-Agent": USER_AGENT,
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        **(headers or {}),
+                    },
+                )
+            finally:
+                _last_request = self.now()
         return response
 
     def _fetch(self, url: str, headers: dict[str, str] | None = None) -> Response:
@@ -295,33 +311,6 @@ class TVTropesClient:
         if 300 <= response.status_code < 400 and response.status_code != 304:
             raise RuntimeError("Unexpected redirect from TVTropes; refusing to follow it")
         return response
-
-    def _robots_allowed(self, url: str) -> bool:
-        global _robots_cache
-        current = self.now()
-        robots = self._robots
-        if robots is None or current - self._robots_loaded > ROBOTS_TTL.total_seconds():
-            if _robots_cache is None or current - _robots_cache[0] > ROBOTS_TTL.total_seconds():
-                response = self._send(f"{BASE_URL}/robots.txt")
-                if response.status_code in (403, 429) or _is_challenge(response.text):
-                    raise CloudflareBlock(
-                        f"TVTropes blocked the batch while checking robots.txt (HTTP {response.status_code})"
-                    )
-                if response.status_code != 200:
-                    raise RobotsDisallowed("Could not verify TVTropes robots.txt; failing closed")
-                parser = RobotFileParser()
-                parser.set_url(f"{BASE_URL}/robots.txt")
-                parser.parse(response.text.splitlines())
-                _robots_cache = (current, parser)
-            robots = _robots_cache[1]
-            self._robots = robots
-            self._robots_loaded = current
-        return robots.can_fetch(USER_AGENT, url)
-
-    def _allowed_fetch(self, url: str, headers: dict[str, str] | None = None) -> Response:
-        if not self._robots_allowed(url):
-            raise RobotsDisallowed(f"TVTropes robots.txt disallows {url}")
-        return self._fetch(url, headers)
 
     def _work_candidates(self, movie: CachedMovie) -> list[str]:
         if not movie.title.strip():
@@ -333,9 +322,7 @@ class TVTropesClient:
         )
         candidates = [normalize_url(movie.title)]
         if year is not None:
-            candidates.insert(0, normalize_url(movie.title, year=year))
-        search = f"{BASE_URL}/pmwiki/search_result.php?q={quote(movie.title)}"
-        candidates.append(search)
+            candidates.append(normalize_url(movie.title, year=year))
         return candidates
 
     def _resolve_work_url(self, movie: CachedMovie) -> str | None:
@@ -344,30 +331,50 @@ class TVTropesClient:
             if movie.release_date and movie.release_date[:4].isdigit()
             else None
         )
-        if year is None:
-            return None
         for url in self._work_candidates(movie):
-            response = self._allowed_fetch(url)
+            response = self._fetch(url)
             if response.status_code == 404:
                 continue
             if response.status_code != 200:
                 raise RuntimeError(f"TVTropes returned HTTP {response.status_code}")
-            if url.endswith("search_result.php?q=" + quote(movie.title)):
-                soup = BeautifulSoup(response.text, "html.parser")
-                candidates = []
-                for link in soup.select("a[href*='/Film/']"):
-                    candidate = urljoin(BASE_URL, str(link.get("href")))
-                    if urlparse(candidate).netloc == urlparse(BASE_URL).netloc:
-                        candidates.append(candidate)
-                for candidate in dict.fromkeys(candidates):
-                    page = self._allowed_fetch(candidate)
-                    if page.status_code == 200 and _year_matches(page.text, year):
-                        return candidate
-            elif _year_matches(response.text, year):
+            soup = BeautifulSoup(response.text, "html.parser")
+            heading = soup.find("h1") or soup.find("title")
+            article = soup.find("div", id="main-article")
+            disambiguation = (
+                "disambiguation"
+                in " ".join(
+                    (
+                        heading.get_text(" ", strip=True) if heading else "",
+                        article.get_text(" ", strip=True)[:300] if article else "",
+                    )
+                ).lower()
+            )
+            if not disambiguation and (year is None or _year_matches(response.text, year)):
+                self._resolved_pages[url] = response
                 return url
         return None
 
     def sync_movie(self, movie: CachedMovie, *, enabled: bool) -> ScrapeResult:
+        if self.stopped_reason:
+            return ScrapeResult(None, (), stopped_reason=self.stopped_reason)
+        self._partial_pages = []
+        self._partial_url = None
+        try:
+            return self._sync_movie(movie, enabled=enabled)
+        except (BatchPageLimit, CloudflareBlock) as exc:
+            self.stopped_reason = (
+                "page_cap_reached"
+                if isinstance(exc, BatchPageLimit)
+                else "rate_limited_or_challenge"
+            )
+            logger.info("TVTropes batch stopped after %s pages: %s", self.pages_fetched, exc)
+            return ScrapeResult(
+                self._partial_url,
+                _flatten_page_tropes(self._partial_pages),
+                stopped_reason=self.stopped_reason,
+            )
+
+    def _sync_movie(self, movie: CachedMovie, *, enabled: bool) -> ScrapeResult:
         if not enabled:
             raise TVTropesDisabled("TVTropes ingestion requires explicit opt-in")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -404,14 +411,17 @@ class TVTropesClient:
                 "tropes": data.get("tropes", []),
             }
         main_page, main_html = self._fetch_page(work_url, old_pages.get(work_url))
+        self._partial_url = work_url
+        self._partial_pages = [main_page]
         if main_html is None:
             subpage_urls = [url for url in old_pages if url != work_url]
         else:
             subpage_urls = find_subpages(BeautifulSoup(main_html, "html.parser"), work_url)
         pages = [main_page]
-        for subpage_url in subpage_urls:
+        for subpage_url in subpage_urls[:6]:
             page, _ = self._fetch_page(subpage_url, old_pages.get(subpage_url))
             pages.append(page)
+            self._partial_pages.append(page)
         links = _flatten_page_tropes(pages)
         data = {
             "fetched_at": now.isoformat(),
@@ -431,7 +441,7 @@ class TVTropesClient:
             headers["If-None-Match"] = previous["etag"]
         if previous and previous.get("last_modified"):
             headers["If-Modified-Since"] = previous["last_modified"]
-        response = self._allowed_fetch(url, headers)
+        response = self._resolved_pages.pop(url, None) or self._fetch(url, headers)
         if response.status_code == 304 and previous is not None:
             return previous, None
         if response.status_code == 404:
@@ -492,4 +502,8 @@ def fetch_movie_tropes(
     check_cancelled: Callable[[], None] | None = None,
 ) -> ScrapeResult:
     """Use the default cache/client; caller must run this blocking operation in a worker thread."""
-    return TVTropesClient(check_cancelled=check_cancelled).sync_movie(movie, enabled=enabled)
+    client = TVTropesClient(check_cancelled=check_cancelled)
+    try:
+        return client.sync_movie(movie, enabled=enabled)
+    finally:
+        client.close()

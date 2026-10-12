@@ -798,6 +798,10 @@ export interface LlmStatus {
 
 export interface PitchResult {
 	pitch: string;
+	bridge?: string | null;
+	candidate_hook?: string | null;
+	candidate_movie_id?: number | null;
+	source?: "ai" | "template" | null;
 }
 
 export interface TeaserResult {

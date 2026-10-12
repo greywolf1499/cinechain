@@ -695,6 +695,8 @@ function DiscoveryGrid({
   function renderCandidate(candidate: DiscoveryCandidate) {
     const resolved = resolveCandidate(candidate);
     return <CandidateCard
+      runId={runId}
+      pitchContextKey={JSON.stringify(rulesConfig)}
       glossary={rulebook?.glossary ?? {}}
       key={resolved.movie_id}
       roulette={roulette}
@@ -1241,6 +1243,8 @@ function TugDecisionTriad({ candidates, runId, rules, frontierMovieId, allowRepe
 }
 
 function CandidateCard({
+  runId,
+  pitchContextKey,
   roulette = false,
   candidate,
   genres,
@@ -1262,6 +1266,8 @@ function CandidateCard({
   onOpenDetails,
   glossary,
 }: {
+  runId: string;
+  pitchContextKey: string;
   /** Tagline Roulette: poster and title stay masked behind the tagline until revealed. */
   roulette?: boolean;
   candidate: DiscoveryCandidate;
@@ -1456,6 +1462,8 @@ function CandidateCard({
         />
         {!masked && (
           <PitchButton
+            runId={runId}
+            contextKey={pitchContextKey}
             previousMovieId={frontierMovieId}
             candidateMovieId={candidate.movie_id}
             linkLabel={candidate.connections[0]?.actor_name}

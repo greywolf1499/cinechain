@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import threading
 from pathlib import Path
@@ -21,6 +22,7 @@ AROUSAL_THRESHOLD = 0.1
 _cache_lock = threading.Lock()
 _centroids: dict[str, dict[str, np.ndarray]] = {}
 _async_locks: dict[tuple[int, str], asyncio.Lock] = {}
+logger = logging.getLogger(__name__)
 
 
 def centroid_cache_path(config_dir: Path, fingerprint: str) -> Path:
@@ -62,25 +64,10 @@ async def _load_or_embed_centroids(
     from app.config import get_settings
 
     path = centroid_cache_path(get_settings().config_dir, fingerprint)
-    if path.is_file():
-        try:
-            with np.load(path, allow_pickle=False) as archive:
-                if (
-                    str(archive["fingerprint"].item()) == fingerprint
-                    and int(archive["version"].item()) == ANCHOR_VERSION
-                ):
-                    loaded = {name: archive[name].astype(np.float32) for name in ANCHORS}
-                    if all(
-                        value.ndim == 1
-                        and value.size > 0
-                        and np.all(np.isfinite(value))
-                        and np.linalg.norm(value) > 0
-                        for value in loaded.values()
-                    ):
-                        _centroids[fingerprint] = loaded
-                        return fingerprint, loaded
-        except (OSError, KeyError, ValueError):
-            pass
+    loaded = _read_centroids(path, fingerprint)
+    if loaded is not None:
+        _centroids[fingerprint] = loaded
+        return fingerprint, loaded
     texts = [text for group in ANCHORS.values() for text in group]
     result = await embeddings.embed_batch(config, texts)
     if result.fingerprint != fingerprint:
@@ -109,6 +96,44 @@ async def _load_or_embed_centroids(
     with _cache_lock:
         _centroids[fingerprint] = centroids
     return fingerprint, centroids
+
+
+def _read_centroids(path: Path, fingerprint: str) -> dict[str, np.ndarray] | None:
+    if path.is_file():
+        try:
+            with np.load(path, allow_pickle=False) as archive:
+                if (
+                    str(archive["fingerprint"].item()) == fingerprint
+                    and int(archive["version"].item()) == ANCHOR_VERSION
+                ):
+                    loaded = {name: archive[name].astype(np.float32) for name in ANCHORS}
+                    if all(
+                        value.ndim == 1
+                        and value.size > 0
+                        and np.all(np.isfinite(value))
+                        and np.linalg.norm(value) > 0
+                        for value in loaded.values()
+                    ):
+                        return loaded
+        except (OSError, KeyError, ValueError) as exc:
+            logger.warning("Could not read cached semantic anchors: %s", exc)
+    return None
+
+
+def cached_projection(movie: CachedMovie) -> dict[str, Any]:
+    """Read a movie's compatible anchor projection without model work or cache-wide scans."""
+    from app.config import get_settings
+
+    fingerprint = embeddings.row_fingerprint(movie.overview_embedding_model)
+    vector = embeddings.decode_embedding(movie.overview_embedding)
+    if vector is None:
+        return {}
+    centroids = _centroids.get(fingerprint)
+    if centroids is None:
+        centroids = _read_centroids(
+            centroid_cache_path(get_settings().config_dir, fingerprint), fingerprint
+        )
+    return project_vector(vector, centroids, fingerprint) if centroids is not None else {}
 
 
 def _projection(

@@ -36,6 +36,7 @@ from sqlmodel import Session
 
 from app.config import get_settings
 from app.models.cache import CachedMovie
+from app.schemas.link import LinkContext, LinkFilm, LinkPitch
 from app.services import settings_repo
 from app.utils.dates import parse_release_year
 
@@ -521,38 +522,131 @@ async def pitch(
     candidate: CachedMovie,
     link: str | None = None,
     critic: bool = False,
+    *,
+    context: LinkContext | None = None,
 ) -> str:
-    """Why `candidate` is a great next film after `previous`, in one cinephile sentence - or,
-    with `critic`, why it might be an exhausting hop (Blind Fork veto advice)."""
-    kind = "critic" if critic else "pitch"
-    key = f"{config.fingerprint}|{kind}|{previous.tmdb_id}|{candidate.tmdb_id}|{link or ''}"
-    if key in _cache:
-        return _cache[key]
-    system = CRITIC_SYSTEM if critic else PITCH_SYSTEM
-
-    class Sentence(BaseModel):
-        text: str
-
-    facts = {
-        "previous": _blurb(previous),
-        "next": _blurb(candidate),
-        "connection": link,
-    }
-    fallback = Sentence(
-        text=(
-            f"{candidate.title} follows {previous.title} through a "
-            f"{'challenging' if critic else 'fresh'} change of tone."
-        )
+    """Text-only compatibility wrapper around the grounded two-part pitch."""
+    context = context or LinkContext(
+        mode="cinechain",
+        mode_name="CineChain",
+        mode_goal="Follow a verified cast link.",
+        previous=LinkFilm(
+            movie_id=previous.tmdb_id,
+            title=previous.title,
+            year=parse_release_year(previous.release_date),
+            plot=previous.overview,
+        ),
+        candidate=LinkFilm(
+            movie_id=candidate.tmdb_id,
+            title=candidate.title,
+            year=parse_release_year(candidate.release_date),
+            plot=candidate.overview,
+        ),
+        unknowns=[
+            f"Suggested connection {link} is unverified" if link else "Cast evidence is unverified"
+        ],
     )
+    result = await link_pitch(config, context, critic=critic)
+    return f"{result.value.bridge} {result.value.candidate_hook}"
+
+
+def link_pitch_template(context: LinkContext) -> LinkPitch:
+    previous, candidate = context.previous, context.candidate
+    evidence = "; ".join(context.rule_payoffs + context.bridge_facts)
+    if context.unknowns:
+        evidence += ("; " if evidence else "") + "; ".join(context.unknowns)
+    bridge = (
+        f"{candidate.title} follows {previous.title} in {context.mode_name}"
+        + (f" through {evidence}" if evidence else f": {context.mode_goal.rstrip('.')}")
+        + "."
+    )
+    plot = (candidate.plot or "").strip()
+    premise = re.split(r"(?<=[.!?])\s+", plot, maxsplit=1)[0].rstrip(".!?")
+    premise = re.sub(r"^(A|An|The)\b", lambda match: match[0].lower(), premise)
+    year = f" ({candidate.year})" if candidate.year is not None else ""
+    hook = (
+        f"In {candidate.title}{year}, {premise}."
+        if premise
+        else f"{candidate.title}{year} has no cached plot premise yet."
+    )
+    return LinkPitch(bridge=bridge, candidate_hook=hook)
+
+
+async def link_pitch(
+    config: LlmConfig,
+    context: LinkContext,
+    *,
+    critic: bool = False,
+) -> StructuredResult[LinkPitch]:
+    fallback = link_pitch_template(context)
+    if not config.enabled:
+        return StructuredResult(value=fallback, source="template")
+    facts = context.model_dump(mode="json")
+    key = f"{config.fingerprint}|link-v403|{critic}|{json.dumps(facts, sort_keys=True)}"
+    if key in _cache:
+        return StructuredResult(value=LinkPitch.model_validate_json(_cache[key]), source="ai")
+    system = (
+        "Write a witty, insightful two-sentence link pitch using only supplied facts. "
+        "The bridge field is sentence 1: explicitly connect both movie titles through the "
+        "active mode, verified people/themes/rules and contrast; distinguish unknown evidence. "
+        "The candidate_hook field is sentence 2: name the candidate and hook ONLY its plot "
+        "premise, never the previous film's synopsis. Do not invent people, roles or payoffs."
+    )
+    if critic:
+        system += " Emphasize the grounded tactical risk or tonal challenge, not a recommendation."
+    allowed_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", json.dumps(facts)))
+    candidate_numbers = set(
+        re.findall(r"\b\d+(?:\.\d+)?\b", json.dumps(context.candidate.model_dump(mode="json")))
+    )
+    candidate_words = set(re.findall(r"[a-z]{4,}", (context.candidate.plot or "").lower()))
+    previous_only = (
+        set(re.findall(r"[a-z]{4,}", (context.previous.plot or "").lower()))
+        - candidate_words
+        - set(re.findall(r"[a-z]{4,}", context.candidate.title.lower()))
+    )
+
+    def grounded(value: LinkPitch) -> bool:
+        if value == fallback:
+            return True
+        bridge, hook = value.bridge.casefold(), value.candidate_hook.casefold()
+        words = set(re.findall(r"[a-z]{4,}", hook))
+        evidence_words = set(
+            re.findall(r"[a-z]{4,}", " ".join(context.rule_payoffs + context.bridge_facts).lower())
+        )
+        return (
+            context.previous.title.casefold() in bridge
+            and context.candidate.title.casefold() in bridge
+            and context.candidate.title.casefold() in hook
+            and (not evidence_words or bool(evidence_words & set(re.findall(r"[a-z]{4,}", bridge))))
+            and (
+                not candidate_words or len(words & candidate_words) >= min(3, len(candidate_words))
+            )
+            and not (words & previous_only)
+            and set(re.findall(r"\b\d+(?:\.\d+)?\b", bridge + hook)) <= allowed_numbers
+            and set(re.findall(r"\b\d+(?:\.\d+)?\b", hook)) <= candidate_numbers
+            and not re.search(
+                r"[.!?]\s+\w",
+                value.bridge.replace(context.previous.title, "").replace(
+                    context.candidate.title, ""
+                ),
+            )
+            and not re.search(
+                r"[.!?]\s+\w", value.candidate_hook.replace(context.candidate.title, "")
+            )
+            and len((bridge + hook).split()) <= 160
+        )
+
     result = await generate_structured(
         config,
-        system + " Return JSON with a single text field containing that sentence.",
+        system,
         facts,
-        Sentence,
+        LinkPitch,
         fallback=fallback,
-        validator=lambda value: 0 < len(value.text.split()) <= 30,
+        validator=grounded,
     )
-    return _remember(key, result.value.text) if result.source == "ai" else result.value.text
+    if result.source == "ai":
+        _remember(key, result.value.model_dump_json())
+    return result
 
 
 def mask_title(text: str, title: str) -> str:

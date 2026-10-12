@@ -130,7 +130,7 @@ wheels = [
 
 [[package]]
 name = "cinechain"
-version = "4.0.2"
+version = "4.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },

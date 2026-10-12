@@ -70,6 +70,17 @@ export function taskPausedReason(task: SystemTask<unknown>): string | null {
 	return PAUSE_REASONS[paused] ?? `a provider budget was reached (${paused})`;
 }
 
+export function taskStoppedReason(task: SystemTask<unknown>): string | null {
+	if (task.status !== "completed") return null;
+	const result = task.progress_data?.result;
+	if (!result || typeof result !== "object" || !("stopped_reason" in result)) return null;
+	const reason = result.stopped_reason;
+	if (reason !== "page_cap_reached" && reason !== "rate_limited_or_challenge") return null;
+	const remaining = "remaining" in result && typeof result.remaining === "number" ? result.remaining : null;
+	const pages = "pages_fetched" in result && typeof result.pages_fetched === "number" ? result.pages_fetched : null;
+	return `${reason === "page_cap_reached" ? "TV Tropes page budget reached" : "TV Tropes challenge or rate limit"}${pages === null ? "" : ` after ${pages} network pages`}${remaining === null ? "" : `; ${remaining} films remaining`}. Progress saved. ${reason === "page_cap_reached" ? "Run another batch to continue." : "Try another batch later."}`;
+}
+
 export const TASKS_KEY = ["tasks"] as const;
 const HISTORY_LIMIT = 100;
 
@@ -103,13 +114,14 @@ export function TaskStreamProvider({ children }: { children: ReactNode }) {
 		if (isFinished(task) && (previous === "pending" || previous === "running" || started && !previous)) {
 			const title = task.progress_data?.label ?? TASK_TITLES[task.name] ?? task.name;
 			const paused = taskPausedReason(task);
+			const stopped = taskStoppedReason(task);
 			setToasts((queue) => [...queue, paused ? {
 				type: "error",
 				message: `${title} paused: ${paused}. Run it again after the budget resets to resume where it stopped.`,
 				duration: 8000,
 			} : {
 				type: task.status === "completed" ? "success" : "error",
-				message: task.status === "completed" ? `${title} completed.` :
+				message: task.status === "completed" ? `${title} completed.${stopped ? ` ${stopped}` : ""}` :
 					`${title}: ${task.progress_data?.error?.message ?? task.error ?? "Failed."}`,
 			}]);
 			void queryClient.invalidateQueries({ queryKey: ["curated"] });

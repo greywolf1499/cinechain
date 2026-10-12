@@ -3532,18 +3532,25 @@ async def prepare_run_pool(
         raise HTTPException(422, detail="Log or queue a frontier film before preparing this run.")
     engine = get_engine(run.game_type, session, tmdb)
     try:
-        candidates = await engine.discover_with_modifiers(
-            frontier.movie_id,
-            cast_limit=_run_rules(run).get("max_cast_order"),
-            rules=_run_rules(run),
-            previous_transition=frontier.transition_metadata,
-            history=_play_history(session, run.id),
-        )
+        from app.engines.algorithms import SemanticTropeEngine
+
+        if isinstance(engine, SemanticTropeEngine):
+            ids = await engine.preparation_movie_ids(frontier.movie_id)
+        else:
+            candidates = await engine.discover_with_modifiers(
+                frontier.movie_id,
+                cast_limit=_run_rules(run).get("max_cast_order"),
+                rules=_run_rules(run),
+                previous_transition=frontier.transition_metadata,
+                history=_play_history(session, run.id),
+            )
+            ids = list(
+                dict.fromkeys(
+                    [frontier.movie_id, *(candidate.movie_id for candidate in candidates)]
+                )
+            )[:200]
     except NotImplementedError:
         raise HTTPException(422, detail="This mode has no discovery pool to prepare.") from None
-    ids = list(
-        dict.fromkeys([frontier.movie_id, *(candidate.movie_id for candidate in candidates)])
-    )[:200]
     task = data_spa.submit(
         background_tasks,
         session,

@@ -3,7 +3,6 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 from bs4 import BeautifulSoup
 
@@ -107,6 +106,26 @@ def test_robots_disallow_is_honored_before_any_work_page_request(tmp_path):
         client.sync_movie(movie(), enabled=True)
 
     assert requests == [f"{tvtropes.BASE_URL}/robots.txt"]
+
+
+def test_robots_uses_the_same_chrome_session_as_work_requests(tmp_path, monkeypatch):
+    calls = []
+
+    class FixtureSession:
+        def get(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return response(200, "User-agent: *\nAllow: /Film/\nDisallow: /Main/\n")
+
+    def session(*, impersonate):
+        assert impersonate == "chrome"
+        return FixtureSession()
+
+    monkeypatch.setattr(tvtropes.curl_requests, "Session", session)
+    client = tvtropes.TVTropesClient(tmp_path, min_interval=0)
+    assert client._robots_allowed(f"{tvtropes.BASE_URL}/Film/HeistOne")
+    assert not client._robots_allowed(f"{tvtropes.BASE_URL}/Main/Heist")
+    assert len(calls) == 1 and calls[0][0].endswith("/robots.txt")
+    assert calls[0][1]["headers"]["User-Agent"] == tvtropes.USER_AGENT
 
 
 def test_challenge_stops_the_batch_immediately(tmp_path):
@@ -241,16 +260,13 @@ def test_expired_cache_revalidates_with_etag_without_storing_html(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_scraped_trope_validation_uses_normalized_floor_and_genre_gate(monkeypatch):
+async def test_scraped_work_evidence_uses_genre_gate_without_embedding_floor(monkeypatch):
     fingerprint = embeddings.LOCAL_FINGERPRINT
     config = SimpleNamespace(fingerprint=fingerprint, local_fingerprint=fingerprint)
     monkeypatch.setattr(embeddings, "load_config", lambda _session: config)
-    overview = np.array([1.0, 0.0], dtype=np.float32)
-    concept = np.array([0.85, np.sqrt(1 - 0.85**2)], dtype=np.float32)
 
     async def embed_batch(_config, texts):
-        assert len(texts) == 2
-        return embeddings.EmbeddingBatch([overview, concept], fingerprint)
+        raise AssertionError("Verified work-page evidence should not need a model")
 
     monkeypatch.setattr(embeddings, "embed_batch", embed_batch)
     film = movie(overview="A crew plans a heist.", genre_ids=[80])
@@ -266,6 +282,6 @@ async def test_scraped_trope_validation_uses_normalized_floor_and_genre_gate(mon
         llm.LlmConfig(),
     )
 
-    assert result["heist"] >= movie_features.TROPE_CONFIDENCE_THRESHOLD
+    assert result["heist"] == 1.0
     assert result["unmapped-story-page"] is None
     assert "cyberpunk" not in result

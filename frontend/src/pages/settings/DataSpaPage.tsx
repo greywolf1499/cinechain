@@ -22,13 +22,13 @@ const TREATMENTS: { key: Exclude<SpaTreatment, "fix_all">; label: string; hint: 
   { key: "facets", label: "Film facets", hint: "Typed facts used by filters and rules" },
 ];
 
-function percent({ known, total }: CoverageCount): number | null {
-  return total > 0 ? Math.round((known / total) * 100) : null;
+function percent({ known, checked, total }: CoverageCount): number | null {
+  return total > 0 ? Math.round(((checked ?? known) / total) * 100) : null;
 }
 
 function CoverageBar({ label, count, hint }: { label: string; count: CoverageCount; hint?: string }) {
   const pct = percent(count);
-  const text = pct === null ? "no films cached" : `${count.known.toLocaleString()} of ${count.total.toLocaleString()} (${pct}%)`;
+  const text = pct === null ? "no films cached" : `${(count.checked ?? count.known).toLocaleString()} of ${count.total.toLocaleString()} checked (${pct}%)`;
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
@@ -50,6 +50,9 @@ function CoverageBar({ label, count, hint }: { label: string; count: CoverageCou
         />
       </div>
       {hint && <p className="text-[11px] text-zinc-500">{hint}</p>}
+      {count.unavailable !== undefined && (
+        <p className="text-[11px] text-zinc-500">{count.known.toLocaleString()} populated · {count.unavailable.toLocaleString()} checked, source unavailable</p>
+      )}
     </div>
   );
 }

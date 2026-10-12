@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from typing import ClassVar
 
 from sqlalchemy import or_
-from sqlmodel import col, select
+from sqlmodel import col, func, select
 
 from app.engines.cinechain import CineChainEngine
 from app.engines.mutators import (
@@ -326,7 +326,7 @@ class SemanticTropeEngine(FeatureEngine):
         ["A measured weak match with no shared trope blocks the hop.", "{fail_goal}"],
         [
             "Broad themes give more onward routes than a single narrow premise.",
-            "Shared themes need matching genres and a plot fit of at least {trope_threshold}%.",
+            "AI themes need matching genres and a plot fit of at least {trope_threshold}%.",
             "Check the theme and plot. Suggested tags can be wrong.",
         ],
         ["seed"],
@@ -382,7 +382,22 @@ class SemanticTropeEngine(FeatureEngine):
         )
 
     async def prepare(self, movies: list[CachedMovie]) -> None:
-        await movie_features.ensure_embeddings(self.session, movies)
+        config = embeddings.load_config(self.session)
+        left = getattr(self, "_features_left", POOL_FEATURE_BUDGET)
+        pending = [
+            movie
+            for movie in movies
+            if (movie.overview or "").strip()
+            and (
+                movie.overview_embedding is None
+                or embeddings.row_fingerprint(movie.overview_embedding_model) != config.fingerprint
+            )
+        ][:left]
+        self._features_left = left - len(pending)
+        if pending and not getattr(self, "_embedding_unavailable", False):
+            self._embedding_unavailable = not await movie_features.ensure_embeddings(
+                self.session, pending
+            )
         known = trope_facets.evidence_for(self.session, [movie.tmdb_id for movie in movies])
         await self.prepare_tropes(
             [
@@ -437,9 +452,7 @@ class SemanticTropeEngine(FeatureEngine):
         if self.cast_link_required(rules):
             return await super().widen_pool(frontier, rules, history, rung)
         row = await self._load(frontier, hydrate=True)
-        if embeddings.decode_embedding(row.overview_embedding) is None:
-            self.discovery_reason = "Download the embedding model in Settings > AI & Embeddings"
-            return []
+        await self.prepare([row])
         if rung == 1:
             stubs = await self.tmdb.get_related_movies(frontier, page=2)
         elif rung == 2:
@@ -468,8 +481,10 @@ class SemanticTropeEngine(FeatureEngine):
                 for movie_id in matches
                 if (movie := self.session.get(CachedMovie, movie_id)) is not None
             ]
-            await self.prepare(cached[:POOL_FEATURE_BUDGET])
-            return self._scored_candidates(row, cached, best_first="high")
+            candidates = [candidate_from_row(movie) for movie in cached[:POOL_FEATURE_BUDGET]]
+            hydrated = await self._hydrate_pool(candidates)
+            await self.prepare([*hydrated.values()][:POOL_FEATURE_BUDGET])
+            return self._discovery_matches(row, list(hydrated.values()))
         films = await cache_repo.store_stubs(self.session, stubs)
         candidates = [
             candidate_from_row(film)
@@ -480,7 +495,46 @@ class SemanticTropeEngine(FeatureEngine):
         await self.prepare([*hydrated.values()][:POOL_FEATURE_BUDGET])
         if getattr(self, "_verified_tropes", {}).get(row.tmdb_id):
             await self.prepare_tropes([*hydrated.values()][:POOL_TROPE_BUDGET])
-        return self._scored_candidates(row, list(hydrated.values()), best_first="high")
+        return self._discovery_matches(row, list(hydrated.values()))
+
+    def _discovery_matches(
+        self, frontier: CachedMovie, rows: list[CachedMovie]
+    ) -> list[DiscoveryCandidate]:
+        candidates = self._scored_candidates(frontier, rows, best_first="high")
+        if candidates:
+            return candidates
+        fallback = []
+        for row in rows:
+            if (
+                row.tmdb_id == frontier.tmdb_id
+                or not is_reality_eligible(row)
+                or self.measure(frontier, row) is not None
+                or not set(frontier.genre_ids or []).intersection(row.genre_ids or [])
+            ):
+                continue
+            candidate = candidate_from_row(row)
+            self.annotate(candidate, row, None)
+            candidate.constraint_unverified = True
+            fallback.append(candidate)
+        if fallback:
+            self.discovery_reason = (
+                "Plot evidence is unavailable. Showing shared-genre suggestions; "
+                "prepare this run to verify plot matches."
+            )
+        return sorted(fallback, key=lambda c: -(c.popularity or 0.0))[:RULE_POOL_SIZE]
+
+    async def preparation_movie_ids(self, frontier_id: int) -> list[int]:
+        """Bootstrap from provider recommendations, not from a filtered empty pool."""
+        frontier = await cache_repo.get_movie(self.session, self.tmdb, frontier_id, refresh=True)
+        await self.prepare([frontier])
+        await self.prepare_tropes([frontier])
+        related = await cache_repo.get_related_movies(self.session, self.tmdb, frontier_id)
+        candidates = [candidate_from_row(row) for row in related[:POOL_FEATURE_BUDGET]]
+        hydrated = await self._hydrate_pool(candidates)
+        rows = list(hydrated.values())[:POOL_FEATURE_BUDGET]
+        await self.prepare(rows)
+        await self.prepare_tropes(rows[:POOL_TROPE_BUDGET])
+        return list(dict.fromkeys([frontier_id, *(row.tmdb_id for row in related)]))[:200]
 
     async def validate_primary(
         self,
@@ -547,7 +601,7 @@ class SemanticTropeEngine(FeatureEngine):
     ) -> list[DiscoveryCandidate]:
         """Films that match the plot or share a trope, closest plot first (films whose plot
         can't be measured but share a trope still qualify)."""
-        scored: list[tuple[float, DiscoveryCandidate]] = []
+        scored: list[tuple[float, CachedMovie]] = []
         for row in rows:
             if row.tmdb_id == frontier.tmdb_id or not is_reality_eligible(row):
                 continue
@@ -557,12 +611,15 @@ class SemanticTropeEngine(FeatureEngine):
                 continue
             if metric is not None and self.violation(frontier, row, metric):
                 continue
-            candidate = candidate_from_row(row)
-            self.annotate(candidate, row, metric)
             rank = metric if metric is not None else SEMANTIC_SIMILARITY_THRESHOLD
-            scored.append((-rank, candidate))
+            scored.append((-rank, row))
         scored.sort(key=lambda pair: (pair[0], -(pair[1].popularity or 0.0)))
-        return [candidate for _, candidate in scored[:RULE_POOL_SIZE]]
+        candidates = []
+        for _, row in scored[:RULE_POOL_SIZE]:
+            candidate = candidate_from_row(row)
+            self.annotate(candidate, row, self.measure(frontier, row))
+            candidates.append(candidate)
+        return candidates
 
     async def discover_rule_candidates(
         self,
@@ -572,11 +629,6 @@ class SemanticTropeEngine(FeatureEngine):
     ) -> list[DiscoveryCandidate]:
         await self.prepare([frontier])
         await self.prepare_tropes([frontier])
-        if embeddings.decode_embedding(
-            frontier.overview_embedding
-        ) is None and not self._verified_tropes.get(frontier.tmdb_id):
-            self.discovery_reason = "Download the embedding model in Settings > AI & Embeddings"
-            return []
         pool: dict[int, CachedMovie] = {}
 
         # Films already embedded (by the same model as the frontier) from earlier play.
@@ -604,6 +656,27 @@ class SemanticTropeEngine(FeatureEngine):
         ranked = sorted(rows.values(), key=lambda r: -(r.popularity or 0.0))
         await self.prepare(ranked[:POOL_FEATURE_BUDGET])
         pool.update(rows)
+
+        # Recommendations get first use of the shared feature budget.
+        stale = self.session.exec(
+            select(CachedMovie)
+            .where(
+                CachedMovie.tmdb_id != frontier.tmdb_id,
+                col(CachedMovie.overview).is_not(None),
+                CachedMovie.overview != "",
+                or_(
+                    col(CachedMovie.overview_embedding).is_(None),
+                    func.coalesce(
+                        CachedMovie.overview_embedding_model, embeddings.LOCAL_FINGERPRINT
+                    )
+                    != fingerprint,
+                ),
+            )
+            .order_by(col(CachedMovie.popularity).desc(), CachedMovie.tmdb_id)
+            .limit(POOL_FEATURE_BUDGET)
+        ).all()
+        await self.prepare(list(stale))
+        pool.update({row.tmdb_id: row for row in stale})
 
         # Films sharing one of the frontier's tropes qualify even without a close plot match.
         if self._verified_tropes.get(frontier.tmdb_id):
@@ -633,7 +706,7 @@ class SemanticTropeEngine(FeatureEngine):
                 key=lambda r: -(r.popularity or 0.0),
             )
             await self.prepare_tropes(by_popularity[:POOL_TROPE_BUDGET])
-        return self._scored_candidates(frontier, list(pool.values()), best_first="high")
+        return self._discovery_matches(frontier, list(pool.values()))
 
     async def describe_constraint(
         self,

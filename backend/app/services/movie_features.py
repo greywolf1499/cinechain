@@ -66,56 +66,17 @@ async def validate_tvtropes(
     candidates: Iterable[tuple[str, str | None]],
     judge_config: llm.LlmConfig,
 ) -> dict[str, float | None]:
-    """Validate mapped TVTropes links; retain unmapped identifiers as untrusted evidence."""
+    """Trust mapped links from a resolved work page, subject to the mandatory genre gate.
+
+    Confidence here is source evidence, not plot-to-short-definition cosine.
+    Unknown taxonomy links remain untrusted; AI proposals still use the semantic guard.
+    """
     result: dict[str, float | None] = {}
-    mapped: list[tuple[str, str]] = []
     for source_slug, mapped_slug in candidates:
         if mapped_slug is None:
             result[source_slug] = None
         elif trope_facets.genre_allowed(mapped_slug, movie.genre_ids):
-            mapped.append((source_slug, mapped_slug))
-    if not mapped or not movie.genre_ids or not (movie.overview or "").strip():
-        return result
-
-    for start in range(0, len(mapped), TROPE_VERIFY_BATCH_SIZE):
-        batch = mapped[start : start + TROPE_VERIFY_BATCH_SIZE]
-        texts = [(movie.overview or "").strip(), *[TROPE_DESCRIPTIONS[tag] for _, tag in batch]]
-        try:
-            config = embeddings.load_config(session)
-            embedded = await embeddings.embed_batch(config, texts)
-            if (
-                embedded.fingerprint not in {config.fingerprint, config.local_fingerprint}
-                or len(embedded.vectors) != len(texts)
-                or any(
-                    vector.ndim != 1
-                    or vector.size == 0
-                    or not np.all(np.isfinite(vector))
-                    or np.linalg.norm(vector) == 0
-                    for vector in embedded.vectors
-                )
-            ):
-                raise embeddings.EmbeddingUnavailable("Invalid TVTropes validation embeddings")
-        except embeddings.EmbeddingUnavailable:
-            if not judge_config.enabled:
-                raise
-            embedded = None
-        for index, (source_slug, mapped_slug) in enumerate(batch, start=1):
-            confidence = 0.0
-            if embedded is not None:
-                overview, concept = embedded.vectors[0], embedded.vectors[index]
-                if overview.shape != concept.shape:
-                    raise embeddings.EmbeddingUnavailable(
-                        "TVTropes validation vectors have incompatible dimensions"
-                    )
-                confidence = embeddings.normalize_similarity(
-                    embeddings.cosine_similarity(overview, concept), embedded.fingerprint
-                )
-            if confidence >= TROPE_CONFIDENCE_THRESHOLD:
-                result[mapped_slug] = confidence
-            elif judge_config.enabled and await llm.judge_trope(
-                movie.overview or "", TROPE_DESCRIPTIONS[mapped_slug], judge_config
-            ):
-                result[mapped_slug] = TROPE_CONFIDENCE_THRESHOLD
+            result[mapped_slug] = 1.0
     return result
 
 

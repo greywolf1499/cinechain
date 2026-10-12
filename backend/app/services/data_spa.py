@@ -36,9 +36,10 @@ from app.services import (
     tvtropes,
 )
 from app.services.tmdb import TMDBClient, TMDBNotFoundError
+from app.utils.countries import parse_countries
 from app.utils.ids import utcnow
 
-TREATMENTS = ("details", "people", "ratings", "embeddings", "tropes", "facets")
+TREATMENTS = ("details", "people", "embeddings", "facets", "ratings", "tropes")
 # Literal task names so the frontend title guard can resolve every submitted name statically.
 TASK_NAMES = {
     "details": "spa_details",
@@ -67,7 +68,7 @@ def _version(treatment: str, session: Session) -> int:
 def _known(session: Session, movie: CachedMovie, treatment: str) -> bool:
     if treatment == "details":
         return (
-            movie.origin_country is not None
+            bool(parse_countries(movie.origin_country))
             and movie.tagline is not None
             and movie.overview is not None
             and bool(movie.runtime)
@@ -104,6 +105,8 @@ def _known(session: Session, movie: CachedMovie, treatment: str) -> bool:
 def _eligible(session: Session, movie: CachedMovie, treatment: str) -> bool:
     if _known(session, movie, treatment):
         return False
+    if treatment == "facets":
+        return True
     outcome = session.get(MovieFacetStatus, (movie.tmdb_id, f"spa:{treatment}"))
     if outcome is None or outcome.version != _version(treatment, session):
         return True
@@ -134,7 +137,17 @@ def _worklist(
     )
     coverage = _coverage_conditions(session)
     eligibility = []
+    attempted = []
     for treatment in treatments:
+        attempted.append(
+            exists(
+                select(MovieFacetStatus.movie_id).where(
+                    MovieFacetStatus.movie_id == CachedMovie.tmdb_id,
+                    MovieFacetStatus.family == f"spa:{treatment}",
+                    MovieFacetStatus.version == _version(treatment, session),
+                )
+            )
+        )
         cooldown = exists(
             select(MovieFacetStatus.movie_id).where(
                 MovieFacetStatus.movie_id == CachedMovie.tmdb_id,
@@ -144,11 +157,12 @@ def _worklist(
                 MovieFacetStatus.computed_at > (utcnow() - COOLDOWN).replace(tzinfo=None),
             )
         )
-        eligibility.append(~coverage[treatment] & ~cooldown)
+        eligibility.append(~coverage[treatment] & (~cooldown if treatment != "facets" else True))
     query = (
         select(CachedMovie.tmdb_id)
         .where(or_(*eligibility))
         .order_by(
+            case((or_(*attempted), 1), else_=0),
             case((active, 0), (canon, 1), (watchlist, 2), else_=3),
             col(CachedMovie.popularity).desc(),
             CachedMovie.tmdb_id,
@@ -285,6 +299,9 @@ async def _treat(
         await cache_repo.get_movie_directors(session, tmdb, movie.tmdb_id)
         ctx.check_cancelled(force=True)
         await cache_repo.get_movie_crew(session, tmdb, movie.tmdb_id)
+        store.unlock_treatments(session, [movie.tmdb_id], ["facets"])
+        store.invalidate(session, [movie.tmdb_id], ["production", "reception"])
+        store.refresh(session, [movie.tmdb_id])
     elif treatment == "ratings":
         if not omdb.enabled:
             raise RuntimeError("Configure OMDb in Settings to repair ratings")
@@ -472,7 +489,9 @@ def _coverage_conditions(session: Session) -> dict[str, Any]:
     fingerprint = embeddings.load_config(session).fingerprint
     conditions = {
         "details": (func.coalesce(CachedMovie.runtime, 0) > 0)
-        & col(CachedMovie.origin_country).is_not(None)
+        & func.replace(func.coalesce(CachedMovie.origin_country, ""), " ", "").not_in(
+            ("", "[]", "null")
+        )
         & col(CachedMovie.tagline).is_not(None)
         & col(CachedMovie.overview).is_not(None),
         "people": col(CachedMovie.cast_fetched_at).is_not(None)
@@ -548,8 +567,25 @@ def health(session: Session) -> dict[str, Any]:
     return {
         "total_movies": total,
         "coverage": {
-            key: {"known": count(value), "total": total} for key, value in conditions.items()
+            key: _coverage_count(session, key, value, total, count)
+            for key, value in conditions.items()
         },
         "families": families,
         "budgets": budgets,
     }
+
+
+def _coverage_count(
+    session: Session, treatment: str, condition, total: int, count
+) -> dict[str, int]:
+    unavailable = exists(
+        select(MovieFacetStatus.movie_id).where(
+            MovieFacetStatus.movie_id == CachedMovie.tmdb_id,
+            MovieFacetStatus.family == f"spa:{treatment}",
+            MovieFacetStatus.version == _version(treatment, session),
+            MovieFacetStatus.status == "unavailable",
+        )
+    )
+    ok = count(condition)
+    missing = count(~condition & unavailable)
+    return {"known": ok, "ok": ok, "unavailable": missing, "checked": ok + missing, "total": total}

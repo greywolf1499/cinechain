@@ -1049,6 +1049,9 @@ export type SpaTreatment = "details" | "people" | "ratings" | "embeddings" | "fa
 
 export interface CoverageCount {
 	known: number;
+	ok?: number;
+	unavailable?: number;
+	checked?: number;
 	total: number;
 }
 

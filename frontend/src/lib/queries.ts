@@ -508,11 +508,12 @@ export function useDiscoverDiagnostics(
 	});
 }
 
-/** Data Spa coverage, families and provider budgets. Refreshed by Spa task completion. */
+/** Coverage also polls while the page is open, so long batches show live movement. */
 export function useCacheHealth() {
 	return useQuery({
 		queryKey: queryKeys.cacheHealth,
 		queryFn: () => api.get<CacheHealth>("/system/cache/health"),
+		refetchInterval: 15_000,
 	});
 }
 

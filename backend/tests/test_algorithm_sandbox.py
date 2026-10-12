@@ -267,6 +267,185 @@ def run_steps(client, run_id):
     return client.get(f"/api/runs/{run_id}").json()["steps"]
 
 
+async def test_semantic_reembeds_cached_old_vectors_without_tropes(db_engine, fake_model):
+    from app.engines.algorithms import SemanticTropeEngine
+    from app.services.tmdb import TMDBClient
+
+    with Session(db_engine) as session:
+        session.add_all(
+            [
+                CachedMovie(
+                    tmdb_id=1,
+                    title="Seed",
+                    release_date="2000-01-01",
+                    overview="heist",
+                    origin_country='["US"]',
+                    overview_embedding=embeddings.encode_embedding(VECTORS["heist"]),
+                    overview_embedding_model=embeddings.LOCAL_FINGERPRINT,
+                ),
+                CachedMovie(
+                    tmdb_id=2,
+                    title="Match",
+                    release_date="2000-01-01",
+                    overview="heist-ish",
+                    origin_country='["US"]',
+                    overview_embedding=embeddings.encode_embedding(VECTORS["heist-ish"]),
+                    overview_embedding_model="local_onnx:old-model",
+                ),
+            ]
+        )
+        session.commit()
+        with respx.mock:
+            for kind in ("recommendations", "similar"):
+                respx.get(f"{TMDB_BASE}/movie/1/{kind}").mock(
+                    return_value=httpx.Response(200, json={"results": []})
+                )
+            async with httpx.AsyncClient() as http:
+                engine = SemanticTropeEngine(session, TMDBClient(http))
+                pool = await engine.discover_candidates(1, rules={})
+        assert [candidate.movie_id for candidate in pool] == [2]
+        assert pool[0].semantic_score > 0.5 and pool[0].tropes == []
+
+
+async def test_semantic_large_cache_only_annotates_the_returned_pool(db_engine, monkeypatch):
+    from app.engines.algorithms import SemanticTropeEngine
+    from app.engines.mutators import RULE_POOL_SIZE
+    from app.services.tmdb import TMDBClient
+
+    vector = embeddings.encode_embedding(VECTORS["heist"])
+    frontier = CachedMovie(tmdb_id=0, title="Seed", overview_embedding=vector)
+    rows = [
+        CachedMovie(
+            tmdb_id=i,
+            title=f"Film {i}",
+            release_date="2000-01-01",
+            popularity=i,
+            overview_embedding=vector,
+        )
+        for i in range(1, 36766)
+    ]
+    calls = []
+    with Session(db_engine) as session:
+        async with httpx.AsyncClient() as http:
+            engine = SemanticTropeEngine(session, TMDBClient(http))
+            monkeypatch.setattr(
+                engine, "annotate", lambda candidate, row, metric: calls.append(row.tmdb_id)
+            )
+            pool = engine._scored_candidates(frontier, rows, "high")
+    assert len(pool) == len(calls) == RULE_POOL_SIZE
+    assert pool[0].movie_id == 36765
+
+
+async def test_semantic_feature_budget_is_shared_across_preparation_calls(db_engine, monkeypatch):
+    from app.engines.algorithms import POOL_FEATURE_BUDGET, SemanticTropeEngine
+    from app.services import movie_features
+    from app.services.tmdb import TMDBClient
+
+    calls = []
+
+    async def embed(session, movies):
+        calls.extend(movie.tmdb_id for movie in movies)
+        return True
+
+    monkeypatch.setattr(movie_features, "ensure_embeddings", embed)
+    rows = [CachedMovie(tmdb_id=i, title=f"Film {i}", overview="heist") for i in range(200)]
+    with Session(db_engine) as session:
+        async with httpx.AsyncClient() as http:
+            engine = SemanticTropeEngine(session, TMDBClient(http))
+            await engine.prepare(rows[:100])
+            await engine.prepare(rows[100:])
+    assert len(calls) == POOL_FEATURE_BUDGET
+
+
+async def test_prepare_semantic_cold_seed_bootstraps_recommendations(client, db_engine, fake_model):
+    run_id = create_run(client, "semantic_trope")
+    films = {
+        1: {"title": "Seed", "overview": "heist", "cast": [], "genre_ids": [80]},
+        2: {"title": "Match", "overview": "heist-ish", "cast": [], "genre_ids": [80]},
+    }
+    with respx.mock:
+        mock_universe(films)
+        assert log(client, run_id, 1).status_code == 201
+        with Session(db_engine) as session:
+            seed = session.get(CachedMovie, 1)
+            seed.overview = None
+            seed.overview_embedding = None
+            seed.overview_embedding_model = None
+            session.add(seed)
+            session.commit()
+        for kind in ("recommendations", "similar"):
+            respx.get(f"{TMDB_BASE}/movie/1/{kind}").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "id": 2,
+                                "title": "Match",
+                                "release_date": "2000-01-01",
+                                "genre_ids": [80],
+                            }
+                        ]
+                    },
+                )
+            )
+        prepared = client.post(f"/api/runs/{run_id}/prepare", json={"treatment": "embeddings"})
+        assert prepared.status_code == 200, prepared.text
+        with Session(db_engine) as session:
+            assert session.get(CachedMovie, 1).overview_embedding is not None
+            assert session.get(CachedMovie, 2).overview_embedding is not None
+        from app.engines.algorithms import SemanticTropeEngine
+        from app.services.tmdb import TMDBClient
+
+        with Session(db_engine) as session:
+            async with httpx.AsyncClient() as http:
+                engine = SemanticTropeEngine(session, TMDBClient(http))
+                pool = await engine.discover_candidates(1, rules={})
+                assert [c.movie_id for c in pool] == [2]
+
+
+async def test_search_wider_offline_model_returns_unverified_genre_matches(db_engine, monkeypatch):
+    from app.engines.algorithms import SemanticTropeEngine
+    from app.services.tmdb import TMDBClient
+
+    def unavailable(*args, **kwargs):
+        raise embeddings.EmbeddingUnavailable("Model not downloaded")
+
+    monkeypatch.setattr(embeddings, "embed_texts", unavailable)
+    with Session(db_engine) as session:
+        session.add(
+            CachedMovie(
+                tmdb_id=1, title="Seed", overview="heist", genre_ids=[80], release_date="2000-01-01"
+            )
+        )
+        session.commit()
+        with respx.mock:
+            mock_universe(
+                {2: {"title": "Match", "overview": "heist-ish", "genre_ids": [80], "cast": []}}
+            )
+            for kind in ("recommendations", "similar"):
+                respx.get(f"{TMDB_BASE}/movie/1/{kind}").mock(
+                    return_value=httpx.Response(
+                        200,
+                        json={
+                            "results": [
+                                {
+                                    "id": 2,
+                                    "title": "Match",
+                                    "release_date": "2000-01-01",
+                                    "genre_ids": [80],
+                                }
+                            ]
+                        },
+                    )
+                )
+            async with httpx.AsyncClient() as http:
+                engine = SemanticTropeEngine(session, TMDBClient(http))
+                pool = await engine.widen_pool(1, {}, [], 1)
+        assert [c.movie_id for c in pool] == [2]
+        assert pool[0].constraint_unverified and pool[0].semantic_score is None
+
+
 def test_engines_are_registered(client):
     engines = {e["game_type"]: e for e in client.get("/api/engines").json()}
     for game_type in ("aesthetic_gradient", "semantic_trope"):

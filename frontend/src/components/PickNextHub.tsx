@@ -213,7 +213,7 @@ export default function PickNextHub({
       }}
     >
       <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-2 border-b border-app-border pb-3 text-xs">
+        {stack.length > 1 && <div className="flex items-center gap-2 border-b border-app-border pb-3 text-xs">
           {stack.length > 1 && (
             <button
               type="button"
@@ -244,7 +244,7 @@ export default function PickNextHub({
               </span>
             ))}
           </div>
-        </div>
+        </div>}
 
         <div hidden={activeScreen.kind !== "grid"}>
           <DiscoveryGrid
@@ -970,7 +970,7 @@ function DiscoveryGrid({
             className="flex items-center gap-1.5 rounded-md border border-amber-400 bg-amber-400/15 px-2.5 py-2 text-sm font-medium text-amber-200"
           >
             <span aria-hidden>🍺</span>
-            Chaser: ≤ 95 min, Comedy / Animation
+            Chaser: lighter load, below-median runtime
             <X className="h-3.5 w-3.5" />
           </button>
         )}

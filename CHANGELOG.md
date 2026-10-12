@@ -2,6 +2,41 @@
 
 Notable changes to CineChain are recorded here.
 
+## [4.0.2] - 2026-10-12
+
+### Cache Recovery & Semantic Discovery
+
+- **Data Spa keeps advancing:** Unattempted films take precedence over retryable
+  failures, so high-priority problem rows cannot monopolize subsequent batches.
+  Valid detail responses with missing upstream facts retain checked/unavailable
+  checkpoints instead of becoming endless hydration work.
+- **Fresh facts unlock local repairs:** Detail, people and rating hydration
+  clears stale facet-treatment checkpoints; changed plot overviews also unlock
+  embeddings and tropes. Title-only lexical facets compute for stubs, and local
+  facet repair no longer observes a stale 30-day Spa lockout.
+- **More honest coverage:** Treatment bars distinguish populated films from
+  films checked whose source lacks data, using the same total-film denominator.
+  Coverage refreshes while the page is open so long batches show movement.
+  Requested batches up to 2,000 remain supported; Fix all repairs details,
+  people, embeddings and facets before optional ratings/trope limits can stop it.
+- **Semantic Trope Web recovers from cold and mixed caches:** Plot similarity
+  alone qualifies films without trope tags. A bounded cache slice upgrades old
+  embedding fingerprints; compatible cached vectors remain usable when the
+  model is offline. Search wider hydrates new suggestions before scoring and
+  can show explicitly unverified genre matches when plot evidence is unavailable.
+  Recommendations receive the shared feature budget first, and large caches
+  annotate only the ranked final pool rather than every potential match.
+- **Prepare this run bootstraps the frontier:** Refreshes seed/frontier details,
+  embeds its overview, extracts available tropes and prepares recommendations
+  directly, rather than relying on an already-empty filtered pool.
+- **Work-page trope evidence:** Mapped TVTropes film-page tags pass the mandatory
+  Genre Gate without an unrealistic plot-to-short-definition cosine requirement.
+  AI proposals retain their semantic guard. Robots checks continue to use the
+  same polite Chrome-impersonating session and still stop on access challenges.
+- **Cleaner controls:** Pick Next shows one title at its root; breadcrumbs remain
+  for drill-down navigation. Run setup separates Mode options from Sequence &
+  Vibe Modifiers and removes duplicate modifier add-on controls.
+
 ## [4.0.1] - 2026-10-10
 
 ### Adaptive API Circuit Breaker

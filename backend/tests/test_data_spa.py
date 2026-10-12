@@ -525,6 +525,165 @@ async def test_cap_moves_past_previously_repaired_films(spa_engine, monkeypatch)
     assert context(spa_engine, next_id)._data["worklist"] == [2]
 
 
+async def test_details_missing_upstream_facts_do_not_block_next_batch(spa_engine):
+    with Session(spa_engine) as session:
+        movie(session, 1, popularity=100)
+        movie(session, 2, popularity=1)
+    with respx.mock:
+        first = respx.get("https://api.themoviedb.org/3/movie/1").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 1,
+                    "title": "One",
+                    "runtime": None,
+                    "overview": "",
+                    "genres": [],
+                    "origin_country": [],
+                    "status": "Released",
+                },
+            )
+        )
+        second = respx.get("https://api.themoviedb.org/3/movie/2").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 2,
+                    "title": "Two",
+                    "runtime": 100,
+                    "overview": "A plot",
+                    "genres": [],
+                    "origin_country": ["US"],
+                    "status": "Released",
+                },
+            )
+        )
+        for _ in range(2):
+            task_id, _ = submit(spa_engine, "details", batch_cap=1)
+            assert (await execute(spa_engine, task_id)).status == "completed"
+        assert first.call_count == second.call_count == 1
+    with Session(spa_engine) as session:
+        report = data_spa.health(session)["coverage"]["details"]
+        assert report["ok"] == 1 and report["unavailable"] == 1 and report["checked"] == 2
+
+
+async def test_detail_hydration_unlocks_local_treatments(spa_engine):
+    with Session(spa_engine) as session:
+        movie(session, 1, title="A title")
+        for family in ("production", "reception", "spa:facets", "spa:embeddings"):
+            version = data_spa._version("embeddings", session) if family == "spa:embeddings" else 1
+            session.add(
+                MovieFacetStatus(movie_id=1, family=family, version=version, status="unavailable")
+            )
+        session.commit()
+    with respx.mock:
+        respx.get("https://api.themoviedb.org/3/movie/1").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 1,
+                    "title": "A title",
+                    "runtime": 100,
+                    "overview": "A plot",
+                    "genres": [{"id": 18}],
+                    "origin_country": ["US"],
+                    "status": "Released",
+                },
+            )
+        )
+        task_id, _ = submit(spa_engine, "details")
+        await execute(spa_engine, task_id)
+    with Session(spa_engine) as session:
+        assert session.get(MovieFacetStatus, (1, "production")).status == "ok"
+        assert session.get(MovieFacetStatus, (1, "lexical")).status == "ok"
+        assert session.get(MovieFacetStatus, (1, "spa:embeddings")) is None
+        assert data_spa._worklist(session, None, 2000, ["embeddings"]) == [1]
+
+
+def test_large_local_batches_and_unattempted_rows_take_priority(spa_engine):
+    with Session(spa_engine) as session:
+        session.add_all([CachedMovie(tmdb_id=i, title=f"Film {i}") for i in range(1, 2102)])
+        session.commit()
+        session.add(MovieFacetStatus(movie_id=1, family="spa:facets", version=1, status="error"))
+        session.commit()
+        ids = data_spa._worklist(session, None, 2000, ["facets"])
+        assert len(ids) == 2000 and 1 not in ids
+    task_id, _ = submit(spa_engine, "embeddings", batch_cap=2000)
+    assert len(context(spa_engine, task_id)._data["worklist"]) == 2000
+
+
+async def test_people_empty_valid_credits_are_checked_once(spa_engine):
+    with Session(spa_engine) as session:
+        movie(session, 1, popularity=100)
+        movie(session, 2, popularity=1)
+    with respx.mock:
+        routes = [
+            respx.get(f"https://api.themoviedb.org/3/movie/{i}/credits").mock(
+                return_value=httpx.Response(200, json={"id": i, "cast": [], "crew": []})
+            )
+            for i in (1, 2)
+        ]
+        for _ in range(2):
+            task_id, _ = submit(spa_engine, "people", batch_cap=1)
+            assert (await execute(spa_engine, task_id)).status == "completed"
+        # The clients have separate cast/director/crew caches, but future batches
+        # never re-fetch a valid empty response just because no people were returned.
+        assert all(route.call_count == 3 for route in routes)
+    with Session(spa_engine) as session:
+        assert data_spa.health(session)["coverage"]["people"]["checked"] == 2
+
+
+async def test_facets_ignores_stale_spa_lockout_and_computes_stub_titles(spa_engine):
+    with Session(spa_engine) as session:
+        movie(session, 1, title="One Two")
+        session.add(
+            MovieFacetStatus(movie_id=1, family="spa:facets", version=1, status="unavailable")
+        )
+        session.commit()
+    task_id, _ = submit(spa_engine, "facets")
+    assert context(spa_engine, task_id)._data["worklist"] == [1]
+    await execute(spa_engine, task_id)
+    with Session(spa_engine) as session:
+        assert session.get(MovieFacetStatus, (1, "lexical")).status == "ok"
+        assert (
+            session.exec(
+                select(MovieFacet).where(
+                    MovieFacet.movie_id == 1, MovieFacet.facet_id == "title_word_count"
+                )
+            )
+            .one()
+            .value_num
+            == 2
+        )
+
+
+async def test_fix_all_repairs_local_features_before_budget_pause(spa_engine, monkeypatch):
+    with Session(spa_engine) as session:
+        movie(session, 1)
+    calls = []
+
+    async def treatment(session, film, name, *_):
+        calls.append(name)
+        if name == "details":
+            film.overview = "A plot"
+            session.add(film)
+        if name == "ratings":
+            raise provider_budgets.BudgetExhausted
+        return "ok"
+
+    async def embed(session, films):
+        calls.append("embeddings")
+        assert films[0].overview == "A plot"
+        return [(films[0].tmdb_id, "ok")]
+
+    monkeypatch.setattr(data_spa, "_treat", treatment)
+    monkeypatch.setattr(data_spa, "_embed", embed)
+    task_id, _ = submit(spa_engine, "fix_all")
+    task = await execute(spa_engine, task_id)
+    assert calls == ["details", "people", "embeddings", "facets", "ratings"]
+    assert task.progress_data["result"]["paused"] == "omdb_budget"
+
+
 def test_concurrent_submission_dedupes_and_scoped_ids(spa_engine):
     with Session(spa_engine) as session:
         for i in range(1, 4):
@@ -672,21 +831,39 @@ def test_checkpoint_commit_failure_never_advances_cursor(spa_engine, monkeypatch
 
 async def test_actual_facets_health_current_versions_only(spa_engine):
     with Session(spa_engine) as session:
-        movie(session, 1, runtime=100, origin_country="[]", tagline="", overview="")
+        movie(session, 1, runtime=100, origin_country='["US"]', tagline="", overview="")
         movie(session, 2)
     task_id, _ = submit(spa_engine, "facets")
     assert (await execute(spa_engine, task_id)).status == "completed"
     with Session(spa_engine) as session:
         report = data_spa.health(session)
-        assert report["coverage"]["details"] == {"known": 1, "total": 2}
-        assert report["coverage"]["facets"] == {"known": 2, "total": 2}
+        assert report["coverage"]["details"] == {
+            "known": 1,
+            "ok": 1,
+            "unavailable": 0,
+            "checked": 1,
+            "total": 2,
+        }
+        assert report["coverage"]["facets"] == {
+            "known": 2,
+            "ok": 2,
+            "unavailable": 0,
+            "checked": 2,
+            "total": 2,
+        }
         family = next(iter(FAMILY_VERSIONS))
         status = session.get(MovieFacetStatus, (1, family))
         status.version += 1
         session.add(status)
         session.commit()
         report = data_spa.health(session)
-        assert report["coverage"]["facets"] == {"known": 1, "total": 2}
+        assert report["coverage"]["facets"] == {
+            "known": 1,
+            "ok": 1,
+            "unavailable": 0,
+            "checked": 1,
+            "total": 2,
+        }
         assert report["families"][family] == {"known": 1, "total": 2}
 
 

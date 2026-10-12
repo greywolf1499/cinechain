@@ -22,13 +22,14 @@ function applyPreset(value: RulesConfig, engine: EngineMeta, preset: Preset): Ru
 }
 
 export default function RulesetFields({
-  value, onChange, engine, castRules = true, editing = false,
+  value, onChange, engine, castRules = true, editing = false, showAddons = true,
 }: {
   value: RulesConfig;
   onChange: (rules: RulesConfig) => void;
   engine?: EngineMeta;
   castRules?: boolean;
   editing?: boolean;
+  showAddons?: boolean;
 }) {
   if (!engine) return <p role="status" className="text-xs text-zinc-400">Loading mode rules…</p>;
   const fields = engine.rule_fields.filter((field) =>
@@ -101,7 +102,7 @@ export default function RulesetFields({
         ))}
       </div>
       {active && <p className="text-xs text-zinc-400">{active.blurb}</p>}
-      {!editing && (
+      {!editing && showAddons && (
         <div className="flex flex-wrap gap-2" aria-label="Preset add-ons">
           {engine.modifiers.filter((spec) => spec.compatible && spec.scope !== "pair").map((spec) => {
             const enabled = modifierEnabled(modifierParams(spec, value));
@@ -119,7 +120,7 @@ export default function RulesetFields({
       {fields.filter((field) => field.group === "core").map(renderField)}
       {fields.some((field) => field.group === "advanced") && (
         <details>
-          <summary className="cursor-pointer text-xs text-zinc-400">Advanced rules</summary>
+          <summary className="cursor-pointer text-xs text-zinc-400">Mode options</summary>
           <div className="mt-3 flex flex-col gap-3">{fields.filter((field) => field.group === "advanced").map(renderField)}</div>
         </details>
       )}

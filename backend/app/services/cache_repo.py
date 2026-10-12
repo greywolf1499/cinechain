@@ -138,6 +138,9 @@ class CacheRepo:
         row.revenue = movie.get("revenue")
         row.collection_id = movie.get("collection_id")
         self.session.add(row)
+        facet_store.unlock_treatments(self.session, [row.tmdb_id], ["facets", "ratings"])
+        if overview_changed:
+            facet_store.unlock_treatments(self.session, [row.tmdb_id], ["embeddings", "tropes"])
         affected = set(
             self.session.exec(
                 select(CachedMovieDirector.movie_id).where(
@@ -226,6 +229,7 @@ class CacheRepo:
         self.session.add_all(rows)
         movie.directors_fetched_at = utcnow()
         self.session.add(movie)
+        facet_store.unlock_treatments(self.session, [movie_id], ["facets"])
         facet_store.invalidate(self.session, [movie_id], ["production"])
         facet_store.refresh(self.session, [movie_id], ["production"])
         self.session.commit()
@@ -313,6 +317,7 @@ class CacheRepo:
             self.session.add_all(rows)
             movie.crew_fetched_at = utcnow()
             self.session.add(movie)
+            facet_store.unlock_treatments(self.session, [movie_id], ["facets"])
             self.session.commit()
         except IntegrityError:
             # a concurrent request stored the same crew first: use theirs
@@ -494,6 +499,7 @@ class CacheRepo:
         if movie is not None:
             movie.cast_fetched_at = utcnow()
             self.session.add(movie)
+            facet_store.unlock_treatments(self.session, [movie_id], ["facets"])
 
         facet_store.invalidate(self.session, [movie_id], ["production"])
         facet_store.refresh(self.session, [movie_id], ["production"])
@@ -581,8 +587,9 @@ class CacheRepo:
         row.metacritic = ratings["metacritic"] if ratings else None
         row.fetched_at = utcnow()
         self.session.add(row)
-        facet_store.invalidate(self.session, [movie_id], ["reception"])
-        facet_store.refresh(self.session, [movie_id], ["reception"])
+        facet_store.unlock_treatments(self.session, [movie_id], ["facets"])
+        facet_store.invalidate(self.session, [movie_id], ["production", "reception"])
+        facet_store.refresh(self.session, [movie_id])
         self.session.commit()
         self.session.refresh(row)
         return row

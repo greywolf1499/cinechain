@@ -29,6 +29,13 @@ def invalidate(session: Session, movie_ids: Iterable[int], families: Iterable[st
     session.info.pop("bounty_feasibility", None)
 
 
+def unlock_treatments(
+    session: Session, movie_ids: Iterable[int], treatments: Iterable[str]
+) -> None:
+    """Source hydration supersedes earlier unavailable local-treatment checkpoints."""
+    invalidate(session, movie_ids, [f"spa:{name}" for name in treatments])
+
+
 def delete_movies(session: Session, movie_ids: Iterable[int]) -> None:
     ids = list(movie_ids)
     session.exec(delete(MovieFacet).where(col(MovieFacet.movie_id).in_(ids)))
@@ -207,7 +214,7 @@ def stored_values(
                 col(MovieFacetStatus.movie_id).in_(ids), MovieFacetStatus.status == "ok"
             )
         ).all()
-        if s.version == FAMILY_VERSIONS[s.family]
+        if s.family in FAMILY_VERSIONS and s.version == FAMILY_VERSIONS[s.family]
     }
     result: dict[int, dict[str, FacetValue]] = {
         movie_id: {f.id: None for f in wanted if (movie_id, f.family) in current}
